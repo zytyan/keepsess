@@ -32,11 +32,25 @@ Prefer `line` without newline characters for a single console command:
 Set enter="cr"/"lf"/"crlf" only when the device requires it. Some consoles treat CR and LF as
 separate Enters; CRLF can then trigger an empty-line replay. SSH devices should start with CR.
 Do not add CR/LF to line; it rejects embedded line breaks. `line` and raw `data` are exclusive.
-Use raw data for controls, tab completion, pagination (a single space), or deliberate byte sequences;
+Use key="enter"/"ctrl_c"/"ctrl_d"/"ctrl_z"/"esc"/"tab" for control keys, exclusive with
+line/data/data_escaped/enter. key=enter and line="" send SSH CR or Telnet CRLF. Use raw data for
+pagination (a single space) or deliberate byte sequences;
 raw data is never normalized or given an extra newline. JSON escapes must represent real control
-characters, e.g. data="diagnose\r"; do not send literal backslash-r.
+characters, e.g. data="diagnose\r"; do not send literal backslash-r. JSON "\u0003" is Ctrl-C;
+"\\r" and "&#13;" stay literal. JSON does not allow \xNN; no extra escape decoding occurs.
 
-Give every logical command a unique input_id and keep it if retrying that same input. Within a
+For visible escape text transported by an XML/JSON agent, prefer data_escaped. sessmcp decodes
+one explicit escape layer AFTER JSON decoding, independent of the agent's presentation format.
+Example: visible \r in the parameter is JSON {"data_escaped":"\\r"} and sends byte 0D;
+visible \x03 is JSON {"data_escaped":"\\x03"} and sends Ctrl-C. It also supports \n, \t,
+\\, escaped quotes, \uNNNN, \UNNNNNNNN and Go octal escapes. Ordinary quotes remain literal.
+To send literal backslash-r, supply visible \\r (JSON {"data_escaped":"\\\\r"}).
+Do not pre-decode repeatedly: decoding happens exactly once. Unknown/incomplete escapes reject
+before any bytes are sent; HTML entities remain literal. data_escaped is exclusive with
+line/data/key/enter. Input limits, receipts and deduplication use DECODED bytes. Auditing still
+records input text, including secrets in data_escaped, just like raw data.
+
+input_id is optional. When using it, assign one ID per logical command and keep it on retries. Within a
 session's last 128 distinct IDs, the server rejects changed input under an old ID and suppresses
 retransmission of the same input, even after an uncertain send. input_id is optional and distinct
 from JSON-RPC request id. Deduplication does not survive eviction, reconnect or process restart.
@@ -53,7 +67,10 @@ Read the receipt before deciding what to do next:
 | none | This call sent no input (read/list/connect) | input_seq refers to the latest session input |
 
 input_seq identifies the send attempt; input_bytes is its intended byte count, not a confirmed
-remote-execution count. When next_action="sess_read", call sess_read without command/line/data.
+remote-execution count. When next_action="sess_read", call sess_read without command/line/data/key.
+On busy with retry_same_input=true, wait for the active call (wait_current_call) or SSH command
+to finish, then retry the same rejected input/ID. A not_sent ID was not registered.
+Interactive running=true is advisory, not a requirement to read before sending another input.
 **An empty output or reason=wait/timeout is never evidence that a command was not executed.**
 For SSH exec, running=true means the original command is still active: poll, never resubmit.
 If reason=exit_status_missing, the SSH channel closed without exit status. Preserve and inspect
@@ -64,15 +81,22 @@ network-device commands use an interactive connection, without automatically rep
 
 wait is fixed time from invocation (default 5s), timeout is output silence, waitfor is Go RE2 regex.
 These conditions and SSH completion are OR. Set wait explicitly when 5s is too short; duration
-examples: 100ms, 30s, 1min. Calls are capped at 115s; endpoint output silence for 110s disconnects.
-Sending input does not refresh the output clock; timeout is bounded below by the current call start.
+examples: 100ms, 30s, 1min. Calls are capped at 115s; active-operation output silence for 110s disconnects.
+For an interactive call, the 110s clock starts at call start or last output, whichever is later.
+SSH exec silence protection continues between polls; reads do not reset it.
+Unused sessions default to 30min since the last operation; idle_timeout on connect changes this
+lifetime, "0" disables reclamation. Long reasoning/approval without calls does not use the 110s
+console deadline. Sending input does not refresh output silence; timeout cannot trigger before
+its duration from the current call start.
 A waitfor match is only as reliable as the pattern. Huawei-style prompts may contain ~ or * and
 change between <host>, [~host], [*host] and nested views. Match an observed full prompt, not a guessed
 mode name or arbitrary command echo. Device command names vary; use device help rather than guessing.
 Polling matches unread output, including bytes arriving between calls; input calls match new output.
+waitfor does not match tool reason/error fields; disconnects end waiting automatically.
 
 Results are incremental and share one per-session cursor. For retained history use all=true,
-tail=N, or offset=end to page. History is at most 1MiB; response output at most 64KiB. Inspect more,
+tail=N, or offset=end to page. All three run tools accept max_output_bytes: default 8192,
+maximum 65536, 0 uses default. History is at most 1MiB. Inspect more,
 truncated and retained_from. Explicit all/tail/offset do not move the default cursor.
 
 Session handles are short process-local IDs (s1, s2), never reused until restart.
@@ -92,6 +116,8 @@ Actual probe/failure timing depends on the OS. Probes do not send console input,
 completion, or refresh the 110s endpoint output-silence clock.
 
 Use sess_list to inspect connections, sess_close to release them or abort a blocked connection.
+Close returns no terminal output and normal closure is not an error; read first if output matters.
+CLI version and MCP initialize expose 0.2.0 plus build identity; check it when old behavior appears.
 Cancellation stops waiting, not the remote command. On connected=false, reconnect and inspect state
 before retrying side effects. Maximum 32 sessions and 32 tool workers. Across-session waits are
 concurrent; same-session contention returns busy. A non-reading stdout consumer causes the server

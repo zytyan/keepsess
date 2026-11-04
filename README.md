@@ -99,24 +99,75 @@ SSH 连接设置 `interactive:true`；Telnet 连接天然是交互式。Telnet �
 额外边界：
 
 - **TCP keepalive**：SSH/Telnet 默认显式启用，周期参数 15s，使用 Go 1.22 跨平台 API（Linux/Windows）；具体探测与失效判定由系统实现。TCP 探测不产生终端输入，也不刷新业务输出静默计时。
-- **端点 stdout/stderr 静默 110s**：交互会话或运行中 exec 断开并错误返回；不受更长 wait 影响。空闲的普通 SSH transport 不因未执行命令而关闭。
+- **活动操作输出静默 110s**：活动调用从调用开始或最近一次输出（取较晚者）计时；运行中 SSH exec 在调用之间继续按最近输出计时，轮询不重置。超限断开并错误返回，不受更长 wait 影响。
+- **无调用的空闲会话**：默认保留 30min，`sess_connect.idle_timeout` 可设为 `"10min"` 等时长，`"0"` 禁用回收。交互会话不会因分析或等审批时无输出 110s 被关闭。空闲回收不依据 running 标记猜测 console 命令完成。连接仍可能被远端关闭。
 - **单个 RPC 上限 115s**：即使端点持续输出，也必须返回。此时远端命令可能仍在运行，继续读取并检查状态。
 - 连接、SSH 握手/建通道、输入写入上限 **10s**；输入阶段还受本次 wait 剩余时间约束。若发送阶段超时则关闭连接，明确提示输入可能部分执行，需先检查状态再重试。
-- MCP 取消通知仅取消等待；不会自动重放或终止远端命令。可使用 sess_close 释放整个连接。
+- MCP 取消通知停止等待；发送期间取消会断开连接并报告输入状态未知，发送完成后的取消不保证终止远端命令。不会自动重放。可使用 sess_close 释放整个连接。
 
 断开时结果包含 `connected:false`、`error` 和重连提示；也可用 sess_list 检查。不会自动重连与重放具有副作用的命令。已断开的 handle 保留诊断，调用 sess_close 可释放会话配额。
 
 ## 增量、历史与反压
 
-默认返回增量输出，同会话使用一个共享游标。`all:true` 返回保留历史，`tail:100` 选择保留历史的最后 100 行；`offset` 是绝对字节偏移，可配合结果的 `end` 分页。这三种显式读取不推进默认游标。历史最多 1 MiB，单次输出最多 64 KiB；`truncated` / `retained_from` 报告已丢弃历史，`more:true` 表示还可以读取更多。all 的含义是全部**仍保留**的历史，超过响应上限需要分页。
+默认返回增量输出，同会话使用一个共享游标。`all:true` 返回保留历史，`tail:100` 选择保留历史的最后 100 行；`offset` 是绝对字节偏移，可配合结果的 `end` 分页。这三种显式读取不推进默认游标。历史最多 1 MiB，单次输出默认 8 KiB，可用 max_output_bytes 调至最多 64 KiB；`truncated` / `retained_from` 报告已丢弃历史，`more:true` 表示还可以读取更多。all 的含义是全部**仍保留**的历史，超过响应上限需要分页。
 
 单条输入默认最大 4096 字节，可通过 `sess_connect.max_input_bytes` 配置（包含 line 自动追加的 Enter，0 使用默认值，最高 1 MiB）。同会话只允许一个正在等待/发送的操作，竞争立即返回 busy，不排队。交互输入在底层 Write 完整返回后即可继续发送，不要求回显或提示符，也不因 running=true 报背压。Write 表示本地传输接受字节，不代表 TCP 发送队列已清空、对端已收到或设备执行完成；不主动查询 TCP 是否满，而由 Go Write 在需要时等待可写。TCP 缓冲满或 SSH 窗口耗尽时等待写入，超过写入期限（最多 10s，且不超过 wait）或取消则关闭连接，返回 input_state=unknown，禁止自动重放。此路径使用纯 Go 网络接口，兼容 Linux/Windows。输出积压通过 more/truncated 和 backpressure 提示，仍允许下一条输入。
 
 Session 使用短句柄 `s1`、`s2`，进程内递增且关闭后不复用；重启后须重新连接并使用新返回的句柄。句柄不是认证凭据。
 
-最多 32 会话、32 工具 worker、64 个输出帧；单个输入 JSON 帧最多 128 KiB。stdio 请求读取、远端操作与输出写入独立调度。长命令不会阻塞其他连接、ping、取消或关闭；库操作即使未响应 context，独立 RPC 看门狗也会结束响应，其 worker 配额在真正结束前不会释放。
+最多 32 会话、32 工具 worker、64 个输出帧；单个输入 JSON 帧上限 12 MiB + 128 KiB（容纳显式转义和 JSON 封装；解码后的输入仍最多 1 MiB）。stdio 请求读取、远端操作与输出写入独立调度。长命令不会阻塞其他连接、ping、取消或关闭；库操作即使未响应 context，独立 RPC 看门狗也会结束响应，其 worker 配额在真正结束前不会释放。
 
 stdio 的单流本身无法越过不读取的消费者传输数据：如果 stdout 写入阻塞 **3s**，服务结束并退出，客户端需重启服务并重连。不会无限阻塞 stdio，也不会无限创建 writer goroutine。
+
+例如，连接时把单条输入上限设为 16 KiB：
+
+```json
+{"protocol":"telnet","address":"switch.example:23","max_input_bytes":16384}
+```
+
+后续调用的 `session` 必须使用本次 `sess_connect` 实际返回的短句柄；示例中的 `s1` 只是示意。
+
+### 低开销交互（0.2.0）
+
+- `sess_close` 只返回关闭状态，不返回终端正文，也不把正常关闭当作错误；需要最后输出先调用 `sess_read`。
+- `sess_exec`、`sess_interact`、`sess_read` 均支持 `max_output_bytes`：默认 8192，最大 65536，0 使用默认值。`more=true` 时继续增量读，或用 `offset=end` 获取下一段；原始历史和偏移保持不变。`truncated` 表示历史已丢失，与有后续输出的 `more` 不同。未默认清理 ANSI 或归一化原始字节。
+- 交互会话返回 `running=true` 不要求先读再发，也不能证明命令仍在执行；正常交互不再重复 hint/next_action。同会话并发 `busy` 返回 `next_action=wait_current_call`；标准 SSH 命令未结束时则提示 `sess_read`。
+- 输入因 busy 未发送时，`retry_same_input=true` 表示等忙碌结束后可沿用相同输入和 input_id 重试；未发送的 ID 不进入去重窗口。`sent/unknown` 不能因空输出换 ID 重发。input_id 始终可选。
+- CLI `version` 和 MCP initialize 返回相同的 0.2.0+构建标识；`scripts/build.sh` 注入 Git 标识和 dirty 标记，便于确认部署版本。
+
+控制键是一等参数，与 line/data/data_escaped/enter 互斥：
+
+```json
+{"session":"s1","key":"enter","waitfor":"Password:|(?m)^<[^>\r\n]+>\s*$","wait":"10s"}
+```
+
+`key` 支持 `enter`、`ctrl_c`、`ctrl_d`、`ctrl_z`、`esc`、`tab`。Enter 与空 `line:""` 一样，SSH 发送 CR，Telnet 发送 CRLF。需要特定 Enter 时使用 line+enter 或原始 data。
+
+原始 data 只进行 JSON 解码，不进行 HTML 实体或第二层转义解析：
+
+| JSON 参数 | 实际发送 |
+|---|---|
+| `{"data":"\r"}` | 一个 CR |
+| `{"data":"\u0003"}` | 一个 Ctrl-C |
+| `{"data":"\\r"}` | 反斜杠和字母 r |
+| `{"data":"&#13;"}` | 五个普通字符 |
+
+`\xNN` 不是合法 JSON 转义，但可作为 data_escaped 的可见文本（JSON 内写成 `\\xNN`）。`waitfor` 匹配终端输出，输入调用匹配本次输入后的输出，read 匹配未读输出；它不匹配工具的 reason/error 状态。断连会自行结束等待。
+
+### 模型转义文本到执行字节
+
+中间 agent 的 XML/JSON 序列化可能影响控制字符传递，因此提供独立的 `data_escaped`，由 sessmcp 在 JSON 解码后再显式解码一次。`data` 的原样语义不变，不猜测上游做过几层转换。
+
+| 模型交给 agent 的 data_escaped 文本 | 等价 JSON 参数 | 最终字节 |
+|---|---|---|
+| `\r` | `{"data_escaped":"\\r"}` | `0D`（CR） |
+| `\x03` | `{"data_escaped":"\\x03"}` | `03`（Ctrl-C） |
+| `\u4e2d` | `{"data_escaped":"\\u4e2d"}` | `E4 B8 AD`（UTF-8 中） |
+| `\\r` | `{"data_escaped":"\\\\r"}` | `5C 72`（字面反斜杠+r） |
+
+支持 `\r \n \t \b \f \v \a`、`\\`、转义引号、`\xNN`、`\uNNNN`、`\UNNNNNNNN` 和 Go 三位八进制转义。普通引号不必再转义；HTML 实体不转换。非法/不完整转义在发送任何字节前报错，错误不回显输入内容。input_bytes、max_input_bytes 和 input_id 去重都按解码后的实际字节计算；相同 ID 下 data 与 data_escaped 生成相同字节时不会重发。
+
+`data_escaped` 与 `data/line/key/enter` 互斥，不支持隐式多轮解码。它与 raw data 一样可能包含密码等敏感内容；启用审计时这些输入文本不会自动脱敏。
 
 ## 日志
 
@@ -153,12 +204,3 @@ GOTOOLCHAIN=go1.22.1 sh scripts/build.sh
 相关协议/API：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[Go SSH](https://pkg.go.dev/golang.org/x/crypto/ssh)、[Telnet RFC 854](https://www.rfc-editor.org/rfc/rfc854)、[终端类型 RFC 1091](https://www.rfc-editor.org/rfc/rfc1091)、[窗口尺寸 RFC 1073](https://www.rfc-editor.org/rfc/rfc1073)。
 
 现场反馈排查与已验证边界见 [docs/field-report.md](docs/field-report.md)。SSH 状态语义参考 [RFC 4254 §6.10](https://www.rfc-editor.org/rfc/rfc4254.html#section-6.10)。
-
-
-例如，连接时把单条输入上限设为 16 KiB：
-
-```json
-{"protocol":"telnet","address":"switch.example:23","max_input_bytes":16384}
-```
-
-后续调用的 `session` 必须使用本次 `sess_connect` 实际返回的短句柄；示例中的 `s1` 只是示意。

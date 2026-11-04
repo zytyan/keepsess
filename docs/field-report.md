@@ -16,3 +16,11 @@
 现场复测建议：使用单独测试会话和 `serve --log /private/audit.jsonl`；记录工具参数、input_seq/input_state/input_bytes、start/end 与原始输出。先观察当前提示符，再以 line 和唯一 input_id 发出一次用户授权的命令；只用 sess_read 获取延迟输出。如需比较 CRLF，应先确认该操作在测试设备上允许重复，而不是直接对配置命令重复试验。输入审计记录包含原始参数，可能含敏感内容。
 
 input_id 是有界、进程内去重，不能提供跨连接 exactly-once，也不能控制设备对控制字符或空行的解释。没有真实设备和日志时，双警告根因仍需现场核实。
+
+## 0.2.0 后续反馈处理
+
+旧现场记录中的 32 位 session ID 和 “Previous input has produced no output yet” 属于旧版行为；新部署先通过 version/MCP initialize 核对构建。静默设备不再受回显背压限制，正常交互不重复返回强制先读提示。无活动调用时默认保留 30min，可配置 idle_timeout；活动等待和后台 SSH exec 仍有 110s 静默保护。关闭不再带出未读 console 回放内容，输入/读取工具增加单次输出预算。
+
+观察到 data="&#13;" 发出五个字符，只能证明最终参数中的实体未转成 CR，不能据此判定是模型不懂转义。模型到 agent 的 XML/JSON 等中间承载可能影响可见转义文本。新增 data_escaped 显式解码一层，并提供 key 控制键；原始 data 语义保留。测试覆盖 JSON-RPC 参数到实际 TCP 字节，但没有验证特定外部 agent 的内部序列化格式。协议边界与完整例子见 README 和 skill。
+
+本轮没有自动探测设备、自动重放登录、自动提交配置或绕过 harness 拒绝。未从原始共享 console 流中自动判断哪些字节属于历史回放，也未声称复现真实厂商设备问题。

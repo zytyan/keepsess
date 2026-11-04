@@ -14,13 +14,15 @@ import (
 )
 
 const (
-	HistoryLimit  = 1 << 20
-	ResultLimit   = 64 << 10
-	InputLimit    = 4096
-	MaxInputLimit = 1 << 20
-	IdleLimit     = 110 * time.Second
-	CallLimit     = 115 * time.Second
-	IOLimit       = 10 * time.Second
+	HistoryLimit       = 1 << 20
+	ResultLimit        = 64 << 10
+	DefaultOutputLimit = 8 << 10
+	SessionIdleLimit   = 30 * time.Minute
+	InputLimit         = 4096
+	MaxInputLimit      = 1 << 20
+	IdleLimit          = 110 * time.Second
+	CallLimit          = 115 * time.Second
+	IOLimit            = 10 * time.Second
 	// TCPKeepAlive uses the portable Go 1.22 API on Linux and Windows.
 	TCPKeepAlive = 15 * time.Second
 	MaxSessions  = 32
@@ -28,6 +30,7 @@ const (
 
 type Options struct {
 	MaxInputBytes int    `json:"max_input_bytes,omitempty"`
+	IdleTimeout   string `json:"idle_timeout,omitempty"`
 	Protocol      string `json:"protocol"`
 	Address       string `json:"address"`
 	User          string `json:"user,omitempty"`
@@ -40,40 +43,44 @@ type Options struct {
 	Interactive   bool   `json:"interactive,omitempty"`
 }
 type Request struct {
-	Line    *string `json:"line,omitempty"`
-	Enter   string  `json:"enter,omitempty"`
-	InputID string  `json:"input_id,omitempty"`
-	Session string  `json:"session"`
-	Command string  `json:"command,omitempty"`
-	Data    string  `json:"data,omitempty"`
-	Wait    string  `json:"wait,omitempty"`
-	WaitFor string  `json:"waitfor,omitempty"`
-	Timeout string  `json:"timeout,omitempty"`
-	All     bool    `json:"all,omitempty"`
-	Tail    int     `json:"tail,omitempty"`
-	Offset  *int64  `json:"offset,omitempty"`
+	DataEscaped    *string `json:"data_escaped,omitempty"`
+	Key            string  `json:"key,omitempty"`
+	MaxOutputBytes int     `json:"max_output_bytes,omitempty"`
+	Line           *string `json:"line,omitempty"`
+	Enter          string  `json:"enter,omitempty"`
+	InputID        string  `json:"input_id,omitempty"`
+	Session        string  `json:"session"`
+	Command        string  `json:"command,omitempty"`
+	Data           string  `json:"data,omitempty"`
+	Wait           string  `json:"wait,omitempty"`
+	WaitFor        string  `json:"waitfor,omitempty"`
+	Timeout        string  `json:"timeout,omitempty"`
+	All            bool    `json:"all,omitempty"`
+	Tail           int     `json:"tail,omitempty"`
+	Offset         *int64  `json:"offset,omitempty"`
 }
 type Result struct {
-	InputState   string `json:"input_state"`
-	InputSeq     uint64 `json:"input_seq"`
-	InputBytes   int    `json:"input_bytes"`
-	NextAction   string `json:"next_action,omitempty"`
-	Warning      string `json:"warning,omitempty"`
-	Session      string `json:"session"`
-	Output       string `json:"output"`
-	Reason       string `json:"reason"`
-	Connected    bool   `json:"connected"`
-	Running      bool   `json:"running"`
-	ExitCode     *int   `json:"exit_code,omitempty"`
-	Error        string `json:"error,omitempty"`
-	Hint         string `json:"hint,omitempty"`
-	Start        int64  `json:"start"`
-	End          int64  `json:"end"`
-	Total        int64  `json:"total"`
-	RetainedFrom int64  `json:"retained_from"`
-	More         bool   `json:"more"`
-	Truncated    bool   `json:"truncated"`
-	Backpressure bool   `json:"backpressure"`
+	InputState     string `json:"input_state"`
+	InputSeq       uint64 `json:"input_seq"`
+	InputBytes     int    `json:"input_bytes"`
+	NextAction     string `json:"next_action,omitempty"`
+	RetrySameInput bool   `json:"retry_same_input,omitempty"`
+	Warning        string `json:"warning,omitempty"`
+	Session        string `json:"session"`
+	Output         string `json:"output"`
+	Reason         string `json:"reason"`
+	Connected      bool   `json:"connected"`
+	Running        bool   `json:"running"`
+	ExitCode       *int   `json:"exit_code,omitempty"`
+	Error          string `json:"error,omitempty"`
+	Hint           string `json:"hint,omitempty"`
+	Start          int64  `json:"start"`
+	End            int64  `json:"end"`
+	Total          int64  `json:"total"`
+	RetainedFrom   int64  `json:"retained_from"`
+	More           bool   `json:"more"`
+	Truncated      bool   `json:"truncated"`
+	Backpressure   bool   `json:"backpressure"`
 }
 type inputRecord struct {
 	digest [32]byte
@@ -84,30 +91,32 @@ type inputRecord struct {
 const InputIDLimit = 128
 
 type Session struct {
-	protocol            string
-	inputSeq            uint64
-	inputBytes          int
-	inputs              map[string]inputRecord
-	inputOrder          []string
-	warning             string
-	exitMissing         bool
-	maxInputBytes       int
-	id                  string
-	interactive         bool
-	mu                  sync.Mutex
-	op                  sync.Mutex
-	buf                 []byte
-	base, total, cursor int64
-	last                time.Time
-	connected, running  bool
-	failure             string
-	exit                *int
-	notify              chan struct{}
-	done                chan struct{}
-	once                sync.Once
-	closer              io.Closer
-	input               io.Writer
-	exec                func(string) error
+	protocol             string
+	inputSeq             uint64
+	inputBytes           int
+	inputs               map[string]inputRecord
+	inputOrder           []string
+	warning              string
+	exitMissing          bool
+	maxInputBytes        int
+	id                   string
+	interactive          bool
+	mu                   sync.Mutex
+	op                   sync.Mutex
+	buf                  []byte
+	base, total, cursor  int64
+	last                 time.Time
+	activeSince, lastUse time.Time
+	idleTimeout          time.Duration
+	connected, running   bool
+	failure              string
+	exit                 *int
+	notify               chan struct{}
+	done                 chan struct{}
+	once                 sync.Once
+	closer               io.Closer
+	input                io.Writer
+	exec                 func(string) error
 }
 type Manager struct {
 	mu       sync.Mutex
@@ -127,6 +136,16 @@ func (m *Manager) Get(id string) (*Session, error) {
 	return s, nil
 }
 func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
+	idleTimeout := SessionIdleLimit
+	if o.IdleTimeout == "0" {
+		idleTimeout = 0
+	} else if o.IdleTimeout != "" {
+		var err error
+		idleTimeout, err = Duration(o.IdleTimeout)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	if o.MaxInputBytes < 0 || o.MaxInputBytes > MaxInputLimit {
 		return Result{}, fmt.Errorf("max_input_bytes must be 0..%d (0 uses default %d)", MaxInputLimit, InputLimit)
 	}
@@ -143,7 +162,7 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	id := fmt.Sprintf("s%d", m.nextID)
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.opening--; m.mu.Unlock() }()
-	s := &Session{protocol: o.Protocol, id: id, maxInputBytes: o.MaxInputBytes, interactive: o.Interactive || o.Protocol == "telnet", last: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	s := &Session{protocol: o.Protocol, id: id, maxInputBytes: o.MaxInputBytes, interactive: o.Interactive || o.Protocol == "telnet", last: time.Now(), lastUse: time.Now(), idleTimeout: idleTimeout, connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
 	var e error
 	switch o.Protocol {
 	case "ssh":
@@ -162,7 +181,7 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	m.mu.Unlock()
 	go s.watch()
 	r := s.snapshot(Request{}, "connected")
-	r.Hint = "Standard SSH servers: prefer exec (interactive=false); SSH exit-status returns immediately. For network-device shells use interactive=true and interact with line (SSH Enter defaults to CR), input_id, and waitfor/timeout. Empty output after a sent input means poll read, not resend."
+	r.Hint = "Use exec for server SSH; interact for device consoles. key=enter sends Enter; raw data uses JSON escapes. Empty output does not mean unsent."
 	return r, nil
 }
 func (s *Session) signal() {
@@ -211,27 +230,56 @@ func (s *Session) watch() {
 		select {
 		case <-s.done:
 			return
-		case <-t.C:
-			s.mu.Lock()
-			stale := (s.running || s.interactive) && time.Since(s.last) >= IdleLimit
-			s.mu.Unlock()
-			if stale {
-				s.disconnect("endpoint_idle: no stdout/stderr for 110s; reconnect")
-				return
-			}
+		case now := <-t.C:
+			s.expire(now)
 		}
 	}
 }
+
+// An unattended interactive console is not an active command. Its remote
+// execution state cannot be inferred from silence; only active calls use the
+// endpoint silence deadline. SSH exec keeps that protection between polls.
+func (s *Session) expire(now time.Time) {
+	s.mu.Lock()
+	last := s.last
+	if (s.interactive || !s.running) && s.activeSince.After(last) {
+		last = s.activeSince
+	}
+	active := !s.activeSince.IsZero()
+	stale := (active || (!s.interactive && s.running)) && now.Sub(last) >= IdleLimit
+	idle := !active && (s.interactive || !s.running) && s.idleTimeout > 0 && now.Sub(s.lastUse) >= s.idleTimeout
+	s.mu.Unlock()
+	if stale {
+		s.disconnect("endpoint_idle: no stdout/stderr during active operation for 110s; reconnect")
+	} else if idle {
+		// Do not reclaim a session that acquired a new operation since the check.
+		if !s.op.TryLock() {
+			return
+		}
+		defer s.op.Unlock()
+		s.mu.Lock()
+		expired := s.activeSince.IsZero() && (s.interactive || !s.running) && s.idleTimeout > 0 && now.Sub(s.lastUse) >= s.idleTimeout
+		s.mu.Unlock()
+		if expired {
+			s.disconnect("session_idle: unused session expired; reconnect")
+		}
+	}
+}
+
 func (m *Manager) Close(id string) (Result, error) {
 	s, e := m.Get(id)
 	if e != nil {
 		return Result{}, e
 	}
-	s.disconnect("closed by caller")
+	s.disconnect("")
 	m.mu.Lock()
 	delete(m.sessions, id)
 	m.mu.Unlock()
-	return s.snapshot(Request{}, "closed"), nil
+	v := s.status()
+	v.Reason = "closed"
+	v.Error = ""
+	v.Warning = ""
+	return v, nil
 }
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
@@ -291,6 +339,9 @@ func parseWait(r Request) (w waits, e error) {
 	if r.WaitFor != "" {
 		w.re, e = regexp.Compile(r.WaitFor)
 	}
+	if r.MaxOutputBytes < 0 || r.MaxOutputBytes > ResultLimit {
+		return w, fmt.Errorf("max_output_bytes must be 0..%d (0 uses default %d)", ResultLimit, DefaultOutputLimit)
+	}
 	if r.Tail < 0 || r.Tail > 100000 {
 		return w, errors.New("tail must be 0..100000")
 	}
@@ -312,16 +363,22 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 	if !s.op.TryLock() {
 		v := s.status()
 		v.Reason = "busy"
-		v.NextAction = "sess_read"
-		if r.Command != "" || r.Data != "" || r.Line != nil {
+		v.NextAction = "wait_current_call"
+		if r.Command != "" || r.Data != "" || r.Line != nil || r.DataEscaped != nil || r.Key != "" {
 			v.InputState = "not_sent"
+			v.RetrySameInput = v.Connected
 		}
 		v.Backpressure = true
 		v.Hint = "Another call owns this session; wait for it, or close the session. Do not queue commands."
 		return v, nil
 	}
 	defer s.op.Unlock()
-	if kind == "read" && (r.Command != "" || r.Data != "" || r.Line != nil || r.Enter != "" || r.InputID != "") {
+	s.mu.Lock()
+	s.activeSince = started
+	s.lastUse = started
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.activeSince = time.Time{}; s.lastUse = time.Now(); s.mu.Unlock() }()
+	if kind == "read" && (r.Command != "" || r.Data != "" || r.Line != nil || r.DataEscaped != nil || r.Key != "" || r.Enter != "" || r.InputID != "") {
 		return Result{}, errors.New("read does not accept input")
 	}
 	if kind == "exec" && s.interactive {
@@ -330,10 +387,44 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 	if kind == "interact" && !s.interactive {
 		return Result{}, errors.New("use exec on standard SSH, or reconnect with interactive=true")
 	}
-	if (kind == "exec" && (r.Data != "" || r.Line != nil || r.Enter != "")) || (kind == "interact" && r.Command != "") {
+	if (kind == "exec" && (r.Data != "" || r.Line != nil || r.DataEscaped != nil || r.Key != "" || r.Enter != "")) || (kind == "interact" && r.Command != "") {
 		return Result{}, errors.New("exec accepts command; interact accepts line or exact data")
 	}
 	input := r.Data
+	if r.DataEscaped != nil {
+		if r.Data != "" || r.Line != nil || r.Key != "" || r.Enter != "" {
+			return Result{}, errors.New("data_escaped is mutually exclusive with data, line, key and enter")
+		}
+		var err error
+		input, err = decodeInput(*r.DataEscaped)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	if r.Key != "" {
+		if r.Line != nil || r.Data != "" || r.Enter != "" {
+			return Result{}, errors.New("key is mutually exclusive with line, data and enter")
+		}
+		switch r.Key {
+		case "enter":
+			input = "\r"
+			if s.protocol == "telnet" {
+				input = "\r\n"
+			}
+		case "ctrl_c":
+			input = "\x03"
+		case "ctrl_d":
+			input = "\x04"
+		case "ctrl_z":
+			input = "\x1a"
+		case "esc":
+			input = "\x1b"
+		case "tab":
+			input = "\t"
+		default:
+			return Result{}, errors.New("key must be enter, ctrl_c, ctrl_d, ctrl_z, esc or tab")
+		}
+	}
 	if r.Line != nil {
 		if r.Data != "" {
 			return Result{}, errors.New("line and data are mutually exclusive")
@@ -397,7 +488,7 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 			operationSeq = record.seq
 			operationBytes = record.bytes
 			v := s.snapshot(r, "duplicate_input")
-			v.Hint += " This input_id was already attempted; no bytes were sent again. Inspect output and state before issuing a new logical operation."
+			v.Hint = "Input already attempted; no bytes resent."
 			return finish(v), nil
 		}
 	}
@@ -426,7 +517,9 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 	if kind == "exec" && running {
 		v := s.snapshot(r, "busy")
 		v.Backpressure = true
-		v.Hint = "Previous SSH command is still running. Use read; do not replay it."
+		v.NextAction = "sess_read"
+		v.RetrySameInput = true
+		v.Hint = "Previous SSH command running; new input not sent."
 		return finish(v), nil
 	}
 	if input != "" {
@@ -516,7 +609,7 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 			if missing {
 				reason = "exit_status_missing"
 			}
-		case now.Sub(last) >= IdleLimit:
+		case now.Sub(last) >= IdleLimit && ((!s.interactive && run) || now.Sub(started) >= IdleLimit):
 			s.disconnect("endpoint_idle: no stdout/stderr for 110s; reconnect")
 			reason = "endpoint_idle"
 		case match:
@@ -581,8 +674,12 @@ func (s *Session) snapshot(r Request, reason string) Result {
 		from = s.total
 	}
 	end := s.total
-	if end-from > ResultLimit {
-		end = from + ResultLimit
+	limit := r.MaxOutputBytes
+	if limit == 0 {
+		limit = DefaultOutputLimit
+	}
+	if end-from > int64(limit) {
+		end = from + int64(limit)
 	}
 	out := string(s.buf[from-s.base : end-s.base])
 	if !r.All && r.Tail == 0 && r.Offset == nil {
@@ -590,20 +687,19 @@ func (s *Session) snapshot(r Request, reason string) Result {
 	}
 	v := Result{InputState: "none", InputSeq: s.inputSeq, InputBytes: s.inputBytes, Warning: s.warning, Session: s.id, Output: out, Reason: reason, Connected: s.connected, Running: s.running, ExitCode: s.exit, Error: s.failure, Start: from, End: end, Total: s.total, RetainedFrom: s.base, More: end < s.total, Truncated: lost || (r.All && s.base > 0)}
 	if !s.connected {
-		v.NextAction = "reconnect_and_inspect"
-		v.Hint = "Connection closed. Call connect to create a new session; do not blindly replay commands."
+		v.NextAction = "sess_connect"
+		v.Hint = "Disconnected; reconnect and inspect before retrying input."
 	}
 	if v.More || v.Truncated {
 		v.Backpressure = true
-		v.Hint += " Output bounded: fetch more using read with offset=end (or default incremental read). Reduce remote verbosity."
+
 	}
-	if s.running && s.connected {
+	if s.running && s.connected && !s.interactive {
 		v.NextAction = "sess_read"
-		v.Hint += " Input may already be executing, even when output is empty. Poll sess_read; do not resend."
 	}
 	if s.exitMissing && s.connected {
 		v.NextAction = "inspect_output"
-		v.Hint += " SSH channel closed without exit status; success is unknown. For network devices, connect with interactive=true; do not replay automatically."
+		v.Hint = "SSH exit status missing; outcome unknown. Do not replay automatically."
 	}
 	return v
 }

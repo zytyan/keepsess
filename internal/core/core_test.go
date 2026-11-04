@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -162,7 +163,7 @@ func TestBoundedHistoryAndTail(t *testing.T) {
 	s := &Session{id: "test", connected: true, notify: make(chan struct{}, 1)}
 	_, _ = s.Write([]byte(strings.Repeat("x", HistoryLimit+100)))
 	v := s.snapshot(Request{}, "test")
-	if !v.Truncated || !v.More || len(v.Output) != ResultLimit || v.RetainedFrom != 100 {
+	if !v.Truncated || !v.More || len(v.Output) != DefaultOutputLimit || v.RetainedFrom != 100 {
 		t.Fatalf("history bounds: %+v", v.statusSummary())
 	}
 	off := v.End
@@ -343,7 +344,7 @@ func TestDelayedOutputReadAndDeduplication(t *testing.T) {
 	line := "display device"
 	r := Request{Session: id, Line: &line, Enter: "cr", InputID: "display-device-1", Wait: "20ms"}
 	v = run(t, m, "interact", r)
-	if v.Output != "" || v.InputState != "sent" || v.NextAction != "sess_read" {
+	if v.Output != "" || v.InputState != "sent" || v.NextAction != "" {
 		t.Fatalf("empty output looks unsent: %+v", v)
 	}
 	first := <-received
@@ -405,8 +406,8 @@ func TestWriteDrainAllowsNextInput(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	v := run(t, m, "interact", Request{Session: s.id, Data: "rejected"})
-	if v.Reason != "busy" || v.InputState != "not_sent" {
+	v := run(t, m, "interact", Request{Session: s.id, Data: "again", InputID: "retry-after-busy"})
+	if v.Reason != "busy" || v.InputState != "not_sent" || !v.RetrySameInput || v.NextAction != "wait_current_call" {
 		t.Fatal(v)
 	}
 	buf := make([]byte, 5)
@@ -417,7 +418,7 @@ func TestWriteDrainAllowsNextInput(t *testing.T) {
 		t.Fatal(v)
 	}
 	go func() { _, _ = io.ReadFull(b, buf) }()
-	v = run(t, m, "interact", Request{Session: s.id, Data: "again", Wait: "20ms"})
+	v = run(t, m, "interact", Request{Session: s.id, Data: "again", InputID: "retry-after-busy", Wait: "20ms"})
 	if v.InputState != "sent" || v.InputSeq != 2 || v.Backpressure {
 		t.Fatal(v)
 	}
@@ -491,5 +492,157 @@ func TestTCPFullSendBufferDeadline(t *testing.T) {
 	v = run(t, m, "interact", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), InputID: "full"})
 	if v.InputState != "duplicate" {
 		t.Fatal("uncertain write replayed", v)
+	}
+}
+
+func TestCloseDoesNotReadOutput(t *testing.T) {
+	m := manager(t)
+	s := &Session{id: "close", connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	m.sessions[s.id] = s
+	_, _ = s.Write([]byte(strings.Repeat("unread console replay", 1000)))
+	v, err := m.Close(s.id)
+	if err != nil || v.Output != "" || v.Error != "" || v.Hint != "" || v.NextAction != "" || v.Connected || v.Reason != "closed" || s.cursor != 0 {
+		t.Fatal(v, err)
+	}
+	if _, err = m.Get(s.id); err == nil {
+		t.Fatal("closed session retained")
+	}
+}
+
+func TestOutputBudgetPreservesUnreadData(t *testing.T) {
+	s := &Session{id: "output", connected: true, notify: make(chan struct{}, 1)}
+	text := strings.Repeat("0123456789", 2000)
+	_, _ = s.Write([]byte(text))
+	var got strings.Builder
+	for {
+		v := s.snapshot(Request{MaxOutputBytes: 317}, "wait")
+		if len(v.Output) > 317 || v.Truncated || v.End-v.Start != int64(len(v.Output)) {
+			t.Fatal(v)
+		}
+		got.WriteString(v.Output)
+		if !v.More {
+			break
+		}
+	}
+	if got.String() != text {
+		t.Fatal("budget lost or repeated output")
+	}
+	off := int64(10)
+	v := s.snapshot(Request{Offset: &off, MaxOutputBytes: 5}, "wait")
+	if v.Output != text[10:15] || s.cursor != int64(len(text)) {
+		t.Fatal(v)
+	}
+	for _, n := range []int{-1, ResultLimit + 1} {
+		if _, err := parseWait(Request{MaxOutputBytes: n}); err == nil {
+			t.Fatal("invalid output limit", n)
+		}
+	}
+}
+
+func TestSessionExpirationSeparatesUnusedAndActive(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name                         string
+		interactive, running, active bool
+		lastAge, callAge, useAge     time.Duration
+		idle                         time.Duration
+		disconnected                 bool
+		reason                       string
+	}{
+		{name: "console between calls", interactive: true, running: true, lastAge: 10 * time.Minute, useAge: 5 * time.Minute, idle: SessionIdleLimit},
+		{name: "unused lifetime expired", interactive: true, lastAge: time.Hour, useAge: time.Hour, idle: SessionIdleLimit, disconnected: true, reason: "session_idle"},
+		{name: "unused lifetime disabled", interactive: true, lastAge: time.Hour, useAge: time.Hour},
+		{name: "new call after long silence", interactive: true, active: true, lastAge: time.Hour, callAge: time.Second, idle: SessionIdleLimit},
+		{name: "active console silence", interactive: true, active: true, lastAge: time.Hour, callAge: IdleLimit, disconnected: true, reason: "endpoint_idle"},
+		{name: "exec between polls", running: true, lastAge: IdleLimit, disconnected: true, reason: "endpoint_idle"},
+		{name: "poll does not reset exec silence", running: true, active: true, lastAge: IdleLimit, callAge: time.Second, disconnected: true, reason: "endpoint_idle"},
+		{name: "active output resets silence", interactive: true, active: true, lastAge: time.Second, callAge: IdleLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Session{interactive: tc.interactive, running: tc.running, connected: true, last: now.Add(-tc.lastAge), lastUse: now.Add(-tc.useAge), idleTimeout: tc.idle, notify: make(chan struct{}, 1), done: make(chan struct{})}
+			if tc.active {
+				s.activeSince = now.Add(-tc.callAge)
+			}
+			s.expire(now)
+			if s.connected == tc.disconnected || !strings.Contains(s.failure, tc.reason) {
+				t.Fatalf("connected=%v failure=%s", s.connected, s.failure)
+			}
+		})
+	}
+}
+
+func TestIdleTimeoutConfiguration(t *testing.T) {
+	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
+	m := manager(t)
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{{"", SessionIdleLimit}, {"0", 0}, {"10min", 10 * time.Minute}} {
+		v, err := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr, IdleTimeout: tc.value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, _ := m.Get(v.Session)
+		if s.idleTimeout != tc.want {
+			t.Fatal(s.idleTimeout, tc.want)
+		}
+	}
+	for _, value := range []string{"-1s", "nonsense", "0s"} {
+		if _, err := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr, IdleTimeout: value}); err == nil {
+			t.Fatal("invalid idle lifetime", value)
+		}
+	}
+}
+
+func TestEscapedInputDecodesOnceAndDeduplicatesBytes(t *testing.T) {
+	m := manager(t)
+	var wire bytes.Buffer
+	s := &Session{id: "escaped", interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: &wire, maxInputBytes: 4}
+	m.sessions[s.id] = s
+	escaped := `\x03\r`
+	v := run(t, m, "interact", Request{Session: s.id, DataEscaped: &escaped, InputID: "same", Wait: "1ms"})
+	if v.InputState != "sent" || v.InputBytes != 2 || wire.String() != "\x03\r" {
+		t.Fatal(v, wire.Bytes())
+	}
+	v = run(t, m, "interact", Request{Session: s.id, Data: "\x03\r", InputID: "same"})
+	if v.InputState != "duplicate" || wire.Len() != 2 {
+		t.Fatal(v, wire.Bytes())
+	}
+	escaped = `\x41\x42\x43\x44\x45`
+	v = run(t, m, "interact", Request{Session: s.id, DataEscaped: &escaped, Wait: "1ms"})
+	if v.InputState != "not_sent" || wire.Len() != 2 {
+		t.Fatal("decoded size limit not enforced", v)
+	}
+	escaped = `\q`
+	if _, err := m.Run(context.Background(), "interact", Request{Session: s.id, DataEscaped: &escaped}); err == nil || wire.Len() != 2 {
+		t.Fatal("invalid escape sent input", err)
+	}
+	escaped = `\r`
+	for _, r := range []Request{{Session: s.id, DataEscaped: &escaped, Data: "x"}, {Session: s.id, DataEscaped: &escaped, Key: "enter"}, {Session: s.id, DataEscaped: &escaped, Enter: "cr"}} {
+		if _, err := m.Run(context.Background(), "interact", r); err == nil {
+			t.Fatal("ambiguous escaped input accepted", r)
+		}
+	}
+}
+
+func TestDecodeVisibleEscapes(t *testing.T) {
+	for _, tc := range []struct{ source, want string }{
+		{`\r\n\t\b\f\v\a`, "\r\n\t\b\f\v\a"},
+		{`\x00\xff`, string([]byte{0, 255})},
+		{`\u4e2d\U0001f600`, "中😀"},
+		{`\\r`, `\r`},
+		{`echo "a" 'b'`, `echo "a" 'b'`},
+		{`&#13;`, `&#13;`},
+		{`\003`, "\x03"},
+	} {
+		got, err := decodeInput(tc.source)
+		if err != nil || got != tc.want {
+			t.Fatalf("%q got %q want %q err=%v", tc.source, got, tc.want, err)
+		}
+	}
+	for _, source := range []string{`\`, `\x0`, `\xGG`, `\uD800`, `\U00110000`, `\q`} {
+		if _, err := decodeInput(source); err == nil {
+			t.Fatal("invalid escape accepted", source)
+		}
 	}
 }

@@ -26,3 +26,14 @@
 - SSH/Telnet 显式设置 TCP keepalive 周期参数 15s；未通过抓包验证探测时序，Windows 未运行实测。
 - Go 1.22.1 全量短测试和 race 通过；一次 race 首轮出现既有输出静默计时用例调度抖动，复跑通过，后续 keepalive 更新后的全量 race 也通过。
 - CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 构建通过。
+
+0.2.0 交互与转义更新（2026-11-04）：
+
+- 空闲会话与活动操作分开计时：默认空闲 30min，可设 idle_timeout=0；验证无活动交互连接不受 110s 限制、配置到期回收、禁用回收，以及活动调用和后台 SSH exec 继续受静默保护。空闲回收使用会话操作锁防止与新调用竞争。
+- 关闭保留大量未读输出的会话，不返回终端正文、不推进读游标、不报告正常关闭为错误；MCP 路径验证 isError=false。
+- 单次输出默认 8KiB，max_output_bytes 上限 64KiB；验证多次增量读取无丢失/重复、显式 offset 不推进默认游标、非法上限拒绝。
+- JSON-RPC 到实际 TCP 字节端到端验证 enter、Ctrl-C/D/Z、Esc、Tab、空 line、原始 CR、可见反斜杠-r、HTML 实体，以及 data_escaped 的 CR、十六进制控制字符和只解码一次行为。
+- 验证显式解码的 Unicode、任意字节、引号、八进制及非法转义；按解码后字节限制大小，并跨 data/data_escaped 使用相同 input_id 去重。错误不回显输入内容。
+- 验证 busy 未发送输入可以沿用相同 ID 重试；常规静默交互不再重复 hint 或强制 next_action=sess_read。
+- Go 1.22.1 全量 race（含 SESSMCP_LONG_TEST=1）通过：真实无输出端点仍在 120s 内经 stdio 返回错误，ping 不被阻塞。最终空闲回收并发保护更新后全量短 race 通过；go vet 与 skill 校验通过。
+- 三目标 CGO_ENABLED=0 构建通过。CLI/MCP 使用同一 0.2.0+构建标识；Windows/ARM64 仍仅验证交叉编译，未运行实测。

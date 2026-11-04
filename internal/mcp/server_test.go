@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -213,5 +214,54 @@ func TestToolSchemas(t *testing.T) {
 		if _, ok := schema["required"].([]any); !ok {
 			t.Fatalf("invalid required array: %s", b)
 		}
+	}
+}
+
+func TestControlKeysAndJSONBytes(t *testing.T) {
+	wire := make(chan string, 10)
+	// Acknowledging each input lets ReadFull enforce byte boundaries, regardless
+	// of TCP packet segmentation. No terminal echo is required.
+	sizes := []int{2, 1, 1, 1, 1, 1, 1, 2, 5, 2, 1, 1, 2}
+	addr := testutil.Listen(t, func(conn net.Conn) {
+		for _, n := range sizes {
+			b := make([]byte, n)
+			if _, err := io.ReadFull(conn, b); err != nil {
+				return
+			}
+			wire <- string(b)
+		}
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	c := harness(t)
+	c.tool(t, "connect", "sess_connect", map[string]any{"protocol": "telnet", "address": addr, "idle_timeout": "0"})
+	id := structured(t, c.receive(t, "connect", time.Second))["session"].(string)
+	for i, tc := range []struct{ key, value, want string }{
+		{"key", "enter", "\r\n"}, {"key", "ctrl_c", "\x03"}, {"key", "ctrl_d", "\x04"}, {"key", "ctrl_z", "\x1a"}, {"key", "esc", "\x1b"}, {"key", "tab", "\t"},
+		{"data", "\r", "\r"}, {"data", `\r`, `\r`}, {"data", "&#13;", "&#13;"}, {"line", "", "\r\n"}, {"data_escaped", `\r`, "\r"}, {"data_escaped", `\x03`, "\x03"}, {"data_escaped", `\\r`, `\r`},
+	} {
+		call := fmt.Sprintf("byte%d", i)
+		c.tool(t, call, "sess_interact", map[string]any{"session": id, tc.key: tc.value, "wait": "10ms"})
+		v := structured(t, c.receive(t, call, time.Second))
+		if v["input_state"] != "sent" || v["input_bytes"] != float64(len(tc.want)) || v["hint"] != nil || v["next_action"] != nil {
+			t.Fatal(v)
+		}
+		select {
+		case got := <-wire:
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing wire input")
+		}
+	}
+	c.tool(t, "invalid-key", "sess_interact", map[string]any{"session": id, "key": "enter", "line": "x"})
+	if !c.receive(t, "invalid-key", time.Second)["result"].(map[string]any)["isError"].(bool) {
+		t.Fatal("ambiguous input accepted")
+	}
+	c.tool(t, "close", "sess_close", map[string]any{"session": id})
+	v := c.receive(t, "close", time.Second)
+	result := v["result"].(map[string]any)
+	if result["isError"] != false || structured(t, v)["output"] != "" {
+		t.Fatal(v)
 	}
 }

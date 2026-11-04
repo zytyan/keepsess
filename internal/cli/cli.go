@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zytyan/sessmcp/internal/buildinfo"
 	"github.com/zytyan/sessmcp/internal/core"
 	"github.com/zytyan/sessmcp/internal/mcp"
 )
@@ -32,8 +33,11 @@ const Help = `sessmcp — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go 
 
 普通 SSH 优先 sess_exec，以 SSH 退出状态返回；交换机/路由器使用
 sess_interact 和 waitfor 正则、wait 固定时间、timeout 输出静默时间。
-等待条件任一满足即返回，默认 wait=5s，单次上限 115s，端点静默 110s 报错断开。
-默认增量输出；all/tail/offset 可读取保留历史。输出积压明确提示。
+等待条件任一满足即返回，默认 wait=5s，单次上限 115s，活动调用/SSH exec 输出静默 110s 报错断开。
+空闲会话默认保留 30min；连接参数 idle_timeout 可配置，0 禁用回收。
+默认增量输出 8KiB；max_output_bytes 可调至 64KiB，all/tail/offset 读取历史。
+sess_close 不返回终端正文；key=enter/ctrl_c 等可直接发送控制键。
+data 原样发送；data_escaped 将可见转义文本显式解码一次再发送。
 交互写完即可继续输入，不要求回显；同会话并发返回 busy，不排队。
 连接参数 max_input_bytes 配置单条输入上限（默认 4096，最高 1MiB，含 Enter）。
 session 使用 s1、s2 等进程内短句柄；TCP keepalive 默认启用，周期参数 15s。
@@ -53,7 +57,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		_, e := io.WriteString(out, Help)
 		return e
 	case "version":
-		_, e := fmt.Fprintln(out, "sessmcp 0.1.0")
+		_, e := fmt.Fprintln(out, "sessmcp "+buildinfo.String())
 		return e
 	case "mcp-skill":
 		_, e := io.WriteString(out, Skill)
