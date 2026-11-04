@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,44 +111,59 @@ func structured(t *testing.T, v map[string]any) map[string]any {
 	}
 	return s
 }
+func connectArgs(addr string) map[string]any {
+	host, port, _ := net.SplitHostPort(addr)
+	n, _ := strconv.Atoi(port)
+	return map[string]any{"protocol": "telnet", "host": host, "port": n}
+}
 func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	addr := testutil.TelnetSwitch(t)
 	c := harness(t)
 	c.send(t, "init", "initialize", map[string]any{"protocolVersion": "2025-11-25"})
-	c.receive(t, "init", time.Second)
+	v := c.receive(t, "init", time.Second)
+	if !strings.HasPrefix(v["result"].(map[string]any)["serverInfo"].(map[string]any)["version"].(string), "0.3.0+") {
+		t.Fatal(v)
+	}
 	c.send(t, "list", "tools/list", map[string]any{})
-	v := c.receive(t, "list", time.Second)
-	if len(v["result"].(map[string]any)["tools"].([]any)) != 6 {
+	v = c.receive(t, "list", time.Second)
+	if len(v["result"].(map[string]any)["tools"].([]any)) != 15 {
 		t.Fatal("tool discovery")
 	}
-	c.tool(t, "connect", "sess_connect", map[string]any{"protocol": "telnet", "address": addr})
-	s := structured(t, c.receive(t, "connect", time.Second))
-	id := s["session"].(string)
-	c.tool(t, "greeting", "sess_read", map[string]any{"session": id, "wait": "100ms"})
+	c.tool(t, "connect", "sess_connect", connectArgs(addr))
+	id := structured(t, c.receive(t, "connect", time.Second))["session"].(string)
+	c.tool(t, "config", "sess_get_config", map[string]any{"session": id})
+	conf := structured(t, c.receive(t, "config", time.Second))
+	if conf["config"].(map[string]any)["read_idle_timeout_ms"] != float64(500) {
+		t.Fatal(conf)
+	}
+	c.tool(t, "greeting", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"end_pattern": "switch> "}})
 	c.receive(t, "greeting", time.Second)
-	c.tool(t, "read", "sess_read", map[string]any{"session": id, "wait": "30s", "waitfor": "IMPOSSIBLE"})
+	c.tool(t, "read", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": 30000, "read_idle_timeout_ms": 0, "end_pattern": "IMPOSSIBLE"}})
 	c.send(t, "ping", "ping", map[string]any{})
-	start := time.Now()
 	c.receive(t, "ping", 500*time.Millisecond)
-	if time.Since(start) > 500*time.Millisecond {
-		t.Fatal("head of line blocking")
+	c.send(t, "", "notifications/cancelled", map[string]any{"requestId": "read"})
+	cancelled := structured(t, c.receive(t, "read", time.Second))
+	if cancelled["reason"] != "cancelled" || cancelled["connected"] != true {
+		t.Fatal(cancelled)
 	}
-	c.send(t, "", "notifications/cancelled", map[string]any{"requestId": "read", "reason": "test"})
-	c.receive(t, "read", time.Second)
-	c.tool(t, "command", "sess_interact", map[string]any{"session": id, "line": "show version", "input_id": "show-version-1", "waitfor": "switch> ", "wait": "1s"})
-	s = structured(t, c.receive(t, "command", 2*time.Second))
-	if !strings.Contains(s["output"].(string), "SwitchOS") {
-		t.Fatal(s)
+	c.tool(t, "command", "sess_sendline_raw", map[string]any{"session": id, "data": "show version", "config": map[string]any{"end_pattern": "switch> "}})
+	result := structured(t, c.receive(t, "command", 2*time.Second))
+	if result["reason"] != "match" || !strings.Contains(result["output"].(string), "SwitchOS") {
+		t.Fatal(result)
 	}
-	c.tool(t, "retry", "sess_interact", map[string]any{"session": id, "line": "show version", "input_id": "show-version-1"})
-	retry := structured(t, c.receive(t, "retry", time.Second))
-	if retry["input_state"] != "duplicate" || retry["input_seq"] != s["input_seq"] {
-		t.Fatal("MCP retransmitted input", retry)
-	}
-	c.tool(t, "invalid", "sess_interact", map[string]any{"session": id, "data": "x", "extra": "wrong"})
-	v = c.receive(t, "invalid", time.Second)
-	if !v["result"].(map[string]any)["isError"].(bool) {
+	c.tool(t, "invalid", "sess_send_raw", map[string]any{"session": id, "data": "x", "input_id": "removed"})
+	if !c.receive(t, "invalid", time.Second)["result"].(map[string]any)["isError"].(bool) {
 		t.Fatal("unknown argument accepted")
+	}
+	c.tool(t, "configure", "sess_configure", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": "30*1000"}})
+	if c.receive(t, "configure", time.Second)["result"].(map[string]any)["isError"] != false {
+		t.Fatal("configure")
+	}
+	c.tool(t, "close-all", "sess_close_all", map[string]any{})
+	c.receive(t, "close-all", time.Second)
+	c.tool(t, "sessions", "sess_list", map[string]any{})
+	if len(structured(t, c.receive(t, "sessions", time.Second))["sessions"].([]any)) != 0 {
+		t.Fatal("close_all retained sessions")
 	}
 }
 func TestBlockedStdoutExits(t *testing.T) {
@@ -179,25 +195,20 @@ func TestEOFDrainsFinalResponse(t *testing.T) {
 }
 func TestHalfOpenUnderTwoMinutes(t *testing.T) {
 	if os.Getenv("SESSMCP_LONG_TEST") != "1" {
-		t.Skip("set SESSMCP_LONG_TEST=1 for real 110s half-open E2E")
+		t.Skip("real 110s read deadline")
 	}
-	addr := testutil.Listen(t, func(conn net.Conn) {
-		_, _ = io.Copy(io.Discard, conn) // Never emit bytes, keep the TCP connection open indefinitely.
-	})
+	addr := testutil.Listen(t, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
 	c := harness(t)
-	c.tool(t, "connect", "sess_connect", map[string]any{"protocol": "telnet", "address": addr})
-	v := structured(t, c.receive(t, "connect", time.Second))
+	c.tool(t, "connect", "sess_connect", connectArgs(addr))
+	id := structured(t, c.receive(t, "connect", time.Second))["session"].(string)
 	start := time.Now()
-	c.tool(t, "hang", "sess_read", map[string]any{"session": v["session"], "wait": "5min", "waitfor": "NEVER"})
+	c.tool(t, "hang", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": 110000, "read_idle_timeout_ms": 0}})
 	c.send(t, "ping", "ping", map[string]any{})
 	c.receive(t, "ping", time.Second)
-	r := c.receive(t, "hang", 118*time.Second)
-	elapsed := time.Since(start)
-	v = structured(t, r)
-	if elapsed >= 120*time.Second || v["error"] == "" || v["connected"] != false {
-		t.Fatalf("half-open safety failed after %s: %+v", elapsed, v)
+	v := structured(t, c.receive(t, "hang", 118*time.Second))
+	if time.Since(start) >= 120*time.Second || v["reason"] != "total_timeout" || v["connected"] != true {
+		t.Fatal(v, time.Since(start))
 	}
-	t.Logf("half-open response returned through stdio in %s: %v", elapsed, v["error"])
 }
 
 func TestToolSchemas(t *testing.T) {
@@ -217,14 +228,21 @@ func TestToolSchemas(t *testing.T) {
 	}
 }
 
-func TestControlKeysAndJSONBytes(t *testing.T) {
-	wire := make(chan string, 10)
-	// Acknowledging each input lets ReadFull enforce byte boundaries, regardless
-	// of TCP packet segmentation. No terminal echo is required.
-	sizes := []int{2, 1, 1, 1, 1, 1, 1, 2, 5, 2, 1, 1, 2}
+func TestSendJSONToWire(t *testing.T) {
+	cases := []struct{ tool, data, want string }{
+		{"sess_send_raw", `\r`, `\r`},
+		{"sess_send_escaped", `\r`, "\r"},
+		{"sess_send_escaped", `\x03`, "\x03"},
+		{"sess_send_escaped", `\0`, "\x00"},
+		{"sess_send_escaped", `\\r`, `\r`},
+		{"sess_send_raw", "&#13;", "&#13;"},
+		{"sess_sendline_raw", "", "\r\n"},
+		{"sess_sendline_escaped", `a\t`, "a\t\r\n"},
+	}
+	wire := make(chan string, len(cases))
 	addr := testutil.Listen(t, func(conn net.Conn) {
-		for _, n := range sizes {
-			b := make([]byte, n)
+		for _, tc := range cases {
+			b := make([]byte, len(tc.want))
 			if _, err := io.ReadFull(conn, b); err != nil {
 				return
 			}
@@ -233,16 +251,13 @@ func TestControlKeysAndJSONBytes(t *testing.T) {
 		_, _ = io.Copy(io.Discard, conn)
 	})
 	c := harness(t)
-	c.tool(t, "connect", "sess_connect", map[string]any{"protocol": "telnet", "address": addr, "idle_timeout": "0"})
+	c.tool(t, "connect", "sess_connect", connectArgs(addr))
 	id := structured(t, c.receive(t, "connect", time.Second))["session"].(string)
-	for i, tc := range []struct{ key, value, want string }{
-		{"key", "enter", "\r\n"}, {"key", "ctrl_c", "\x03"}, {"key", "ctrl_d", "\x04"}, {"key", "ctrl_z", "\x1a"}, {"key", "esc", "\x1b"}, {"key", "tab", "\t"},
-		{"data", "\r", "\r"}, {"data", `\r`, `\r`}, {"data", "&#13;", "&#13;"}, {"line", "", "\r\n"}, {"data_escaped", `\r`, "\r"}, {"data_escaped", `\x03`, "\x03"}, {"data_escaped", `\\r`, `\r`},
-	} {
-		call := fmt.Sprintf("byte%d", i)
-		c.tool(t, call, "sess_interact", map[string]any{"session": id, tc.key: tc.value, "wait": "10ms"})
+	for i, tc := range cases {
+		call := fmt.Sprintf("send%d", i)
+		c.tool(t, call, tc.tool, map[string]any{"session": id, "data": tc.data, "collect_output": false})
 		v := structured(t, c.receive(t, call, time.Second))
-		if v["input_state"] != "sent" || v["input_bytes"] != float64(len(tc.want)) || v["hint"] != nil || v["next_action"] != nil {
+		if v["input_state"] != "sent" || v["written_bytes"] != float64(len(tc.want)) {
 			t.Fatal(v)
 		}
 		select {
@@ -251,17 +266,16 @@ func TestControlKeysAndJSONBytes(t *testing.T) {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		case <-time.After(time.Second):
-			t.Fatal("missing wire input")
+			t.Fatal("no wire bytes")
 		}
-	}
-	c.tool(t, "invalid-key", "sess_interact", map[string]any{"session": id, "key": "enter", "line": "x"})
-	if !c.receive(t, "invalid-key", time.Second)["result"].(map[string]any)["isError"].(bool) {
-		t.Fatal("ambiguous input accepted")
 	}
 	c.tool(t, "close", "sess_close", map[string]any{"session": id})
 	v := c.receive(t, "close", time.Second)
-	result := v["result"].(map[string]any)
-	if result["isError"] != false || structured(t, v)["output"] != "" {
+	if v["result"].(map[string]any)["isError"] != false || structured(t, v)["output"] != nil {
 		t.Fatal(v)
+	}
+	c.tool(t, "after-close", "sess_read_all", map[string]any{"session": id})
+	if c.receive(t, "after-close", time.Second)["result"].(map[string]any)["isError"] != true {
+		t.Fatal("read after close")
 	}
 }

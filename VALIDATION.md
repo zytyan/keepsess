@@ -1,3 +1,23 @@
+# 0.3 验证记录
+
+环境：Linux amd64，实际 Go **1.22.1**，发布构建 CGO_ENABLED=0。SSH 使用 x/crypto v0.33.0，字符编码 x/text v0.22.0（go 1.18），Linux TCP 队列查询 x/sys v0.30.0；Telnet 使用内部纯 Go 实现。
+
+- 15 工具 tools/list、严格参数校验、新连接参数、配置读取与原子修改、每次调用覆盖不污染默认值。
+- 验证默认读取总时限 30000ms、静默 **500ms**；实际静默读取用例不少于 480ms；整数数学表达式、除零/非整数/函数调用拒绝。
+- 真实 SSH exit-status 0/7、stdout/stderr 合并、慢命令后台读取、缺失退出状态保留 transport 并报告未知结果、主机密钥验证；stream 与 exec 入口限制。
+- SSH/Telnet 交换机模拟器：模式切换、分包提示符、分页、慢输出和正常关闭；Telnet IAC 分包/子协商/字面 IAC 与写入期限测试保留。
+- raw/escaped/sendline 的精确线上字节，NUL、CR、Ctrl-C、可见反斜杠、HTML 实体、编码前拒绝非法转义和无法表示的文字。
+- UTF-8、GBK、Shift-JIS 跨包字符；非法字节 escape/hex/error 策略；输出预算不拆字符，原始偏移、增量游标、历史分页/尾部与覆盖字节数。
+- 读取并发拒绝、读写并行、配置快照、取消保留已收集输出、显式关闭唤醒读取并丢弃缓冲、unknown 写入状态不自动重试。
+- 真实满 TCP 缓冲写入有界超时；Linux 实际查询 TCP 排队字节并验证阈值拒绝零发送；系统 keepalive 配置更新。
+- stdio 跨会话/控制请求调度、取消、EOF 排空、stdout 慢消费者 3s 截止和全量 race。
+
+Go 1.22.1 全量 race 与 SESSMCP_LONG_TEST=1 长测试通过：core 包 112.674s、MCP 包 114.125s，真实读取调用本身小于 120s，返回 total_timeout 且保留 transport。close_all 取消在途握手的后续回归也通过全量短 race。go vet、skill 校验与 CGO_ENABLED=0 的三个目标构建均通过。Windows/ARM64 仅交叉编译，未在目标系统运行；Windows 非零 backpressure_bytes 明确拒绝，CI 模板包含 Windows 短测试。
+
+---
+
+## 历史验证（0.1 / 0.2，非当前 API）
+
 # 本次验证
 
 环境：Linux amd64；实际使用 Go **1.22.1**（go.mod 最低 1.22.1），SSH 依赖固定版本，Telnet 为内部实现，无外部 Telnet 依赖。

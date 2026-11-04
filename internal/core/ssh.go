@@ -13,7 +13,7 @@ import (
 )
 
 func (s *Session) connectSSH(ctx context.Context, o Options) error {
-	if o.User == "" {
+	if o.Username == "" {
 		return errors.New("SSH user is required")
 	}
 	var host ssh.HostKeyCallback
@@ -40,8 +40,8 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	if o.Password != "" {
 		auth = append(auth, ssh.Password(o.Password))
 	}
-	if o.KeyFile != "" {
-		b, e := os.ReadFile(o.KeyFile)
+	if o.Keyfile != "" {
+		b, e := os.ReadFile(o.Keyfile)
 		if e != nil {
 			return e
 		}
@@ -59,12 +59,16 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	if len(auth) == 0 {
 		return errors.New("SSH password or key_file required")
 	}
-	c, e := (&net.Dialer{Timeout: IOLimit, KeepAlive: TCPKeepAlive}).DialContext(ctx, "tcp", o.Address)
+	c, e := (&net.Dialer{Timeout: s.config.Duration(s.config.ConnectTimeoutMS), KeepAlive: s.keepalivePeriod()}).DialContext(ctx, "tcp", o.address())
 	if e != nil {
 		return e
 	}
 	s.closer = c
-	deadline := time.Now().Add(IOLimit)
+	s.tcp = c.(*net.TCPConn)
+	if e = s.setKeepalive(s.config.TCPKeepaliveMS); e != nil {
+		return e
+	}
+	deadline := time.Now().Add(s.config.Duration(s.config.ConnectTimeoutMS))
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
@@ -72,12 +76,12 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	// Closing the raw socket interrupts handshake, channel setup, writes and Close.
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
-	cc, chans, reqs, e := ssh.NewClientConn(c, o.Address, &ssh.ClientConfig{User: o.User, Auth: auth, HostKeyCallback: host, Timeout: IOLimit})
+	cc, chans, reqs, e := ssh.NewClientConn(c, o.address(), &ssh.ClientConfig{User: o.Username, Auth: auth, HostKeyCallback: host, Timeout: IOLimit})
 	if e != nil {
 		return e
 	}
 	client := ssh.NewClient(cc, chans, reqs)
-	if s.interactive {
+	if s.mode == "stream" {
 		sh, e := client.NewSession()
 		if e != nil {
 			return e
@@ -101,7 +105,12 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 			if e != nil {
 				why = e.Error()
 			}
-			s.disconnect(why)
+			var missing *ssh.ExitMissingError
+			if e == nil || errors.As(e, &missing) {
+				s.disconnect("")
+			} else {
+				s.disconnect(why)
+			}
 		}()
 	} else {
 		s.exec = func(command string) error {
@@ -125,7 +134,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 					if errors.As(e, &missing) {
 						s.mu.Lock()
 						s.exit = nil
-						s.exitMissing = true
+						s.completed = true
 						s.warning = "SSH channel closed without exit-status/exit-signal; command outcome is unknown"
 						s.running = false
 						s.mu.Unlock()
@@ -140,6 +149,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 				}
 				s.mu.Lock()
 				s.exit = &code
+				s.completed = true
 				s.running = false
 				s.mu.Unlock()
 				s.signal()
@@ -153,7 +163,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		if e != nil {
 			s.disconnect("SSH disconnected: " + e.Error())
 		} else {
-			s.disconnect("SSH disconnected")
+			s.disconnect("")
 		}
 	}()
 	return nil

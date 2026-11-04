@@ -3,8 +3,11 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,636 +16,603 @@ import (
 )
 
 func manager(t *testing.T) *Manager { t.Helper(); m := NewManager(); t.Cleanup(m.CloseAll); return m }
-func run(t *testing.T, m *Manager, kind string, r Request) Result {
+func patch(v map[string]any) ConfigPatch {
+	b, _ := json.Marshal(v)
+	var p ConfigPatch
+	_ = json.Unmarshal(b, &p)
+	return p
+}
+func cfg(v map[string]any) ConfigPatch { return patch(v) }
+func options(addr, protocol, mode string) Options {
+	host, port, _ := net.SplitHostPort(addr)
+	n, _ := strconv.Atoi(port)
+	return Options{Protocol: protocol, Host: host, Port: n, Mode: mode, Username: "test", Password: "test"}
+}
+func connect(t *testing.T, m *Manager, o Options) string {
 	t.Helper()
-	v, e := m.Run(context.Background(), kind, r)
-	if e != nil {
-		t.Fatal(e)
-	}
-	return v
-}
-func TestSSHExitAndIncremental(t *testing.T) {
-	addr, key := testutil.SSH(t)
-	m := manager(t)
-	v, e := m.Connect(context.Background(), Options{Protocol: "ssh", Address: addr, User: "test", Password: "test", HostKey: key})
-	if e != nil {
-		t.Fatal(e)
-	}
-	id := v.Session
-	start := time.Now()
-	v = run(t, m, "exec", Request{Session: id, Command: "both", Wait: "30s"})
-	if v.Reason != "exit" || v.ExitCode == nil || *v.ExitCode != 0 || !strings.Contains(v.Output, "stdout") || !strings.Contains(v.Output, "stderr") || time.Since(start) > time.Second {
-		t.Fatalf("SSH completion: %+v", v)
-	}
-	v = run(t, m, "exec", Request{Session: id, Command: "exit7"})
-	if v.ExitCode == nil || *v.ExitCode != 7 {
-		t.Fatalf("exit status: %+v", v)
-	}
-	v = run(t, m, "exec", Request{Session: id, Command: "slow", Wait: "30ms"})
-	if !v.Running || !strings.Contains(v.Output, "first") {
-		t.Fatalf("partial: %+v", v)
-	}
-	busy := run(t, m, "exec", Request{Session: id, Command: "both"})
-	if busy.Reason != "busy" {
-		t.Fatalf("expected busy: %+v", busy)
-	}
-	v = run(t, m, "read", Request{Session: id, Wait: "1s"})
-	if v.Running || !strings.Contains(v.Output, "second") || strings.Contains(v.Output, "first") {
-		t.Fatalf("delta: %+v", v)
-	}
-	v = run(t, m, "read", Request{Session: id, All: true})
-	if !strings.Contains(v.Output, "first") || !strings.Contains(v.Output, "second") {
-		t.Fatalf("history: %+v", v)
-	}
-}
-func TestHostVerification(t *testing.T) {
-	addr, _ := testutil.SSH(t)
-	m := manager(t)
-	_, e := m.Connect(context.Background(), Options{Protocol: "ssh", Address: addr, User: "x", Password: "x", HostKey: "SHA256:bad"})
-	if e == nil {
-		t.Fatal("host key mismatch accepted")
-	}
-}
-func TestDeviceSimulators(t *testing.T) {
-	for _, protocol := range []string{"ssh", "telnet"} {
-		t.Run(protocol, func(t *testing.T) {
-			m := manager(t)
-			o := Options{Protocol: protocol, Interactive: true, User: "test", Password: "test"}
-			if protocol == "ssh" {
-				o.Address, o.HostKey = testutil.SSH(t)
-			} else {
-				o.Address = testutil.TelnetSwitch(t)
-			}
-			v, e := m.Connect(context.Background(), o)
-			if e != nil {
-				t.Fatal(e)
-			}
-			id := v.Session
-			// Connect may include the greeting; wait for it only if not already returned.
-			if !strings.Contains(v.Output, "switch> ") {
-				v = run(t, m, "read", Request{Session: id, WaitFor: `switch> `, Wait: "1s"})
-				if !strings.Contains(v.Output, "switch> ") {
-					t.Fatalf("greeting: %+v", v)
-				}
-			}
-			for _, step := range []struct{ data, pattern string }{{"enable\r\n", `switch# `}, {"configure terminal\r\n", `switch\(config\)# `}, {"interface ethernet 1\r\n", `switch\(config-if\)# `}, {"end\r\n", `switch# `}, {"show running-config\r\n", `--More--`}, {" ", `switch# `}, {"slow\r\n", `switch# `}} {
-				v = run(t, m, "interact", Request{Session: id, Data: step.data, WaitFor: step.pattern, Timeout: "500ms", Wait: "2s"})
-				if v.Reason != "waitfor" {
-					t.Fatalf("%q: %+v", step.data, v)
-				}
-			}
-			v = run(t, m, "interact", Request{Session: id, Data: strings.Repeat("x", InputLimit+1)})
-			if !v.Backpressure || v.Reason != "backpressure" {
-				t.Fatalf("unbounded input accepted: %+v", v)
-			}
-			v = run(t, m, "interact", Request{Session: id, Data: "quit\r\n", Wait: "1s"})
-			if v.Connected || v.Error == "" || !strings.Contains(v.Hint, "connect") {
-				t.Fatalf("disconnect: %+v", v)
-			}
-		})
-	}
-}
-func TestWaitConditionsAndBusy(t *testing.T) {
-	addr := testutil.Listen(t, func(c net.Conn) {
-		_, _ = c.Write([]byte("hello"))
-		b := make([]byte, 32)
-		for {
-			n, e := c.Read(b)
-			if e != nil {
-				return
-			}
-			if string(b[:n]) == "tick" {
-				for i := 0; i < 10; i++ {
-					_, _ = c.Write([]byte("x"))
-					time.Sleep(20 * time.Millisecond)
-				}
-			}
-		}
-	})
-	m := manager(t)
-	v, e := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr})
-	if e != nil {
-		t.Fatal(e)
-	}
-	id := v.Session
-	v = run(t, m, "read", Request{Session: id, Wait: "60ms", WaitFor: "NEVER", Timeout: "1s"})
-	if v.Reason != "wait" {
-		t.Fatalf("fixed: %+v", v)
-	}
-	start := time.Now()
-	v = run(t, m, "interact", Request{Session: id, Data: "tick", Wait: "1s", Timeout: "50ms"})
-	if v.Reason != "timeout" || time.Since(start) < 200*time.Millisecond || time.Since(start) > 800*time.Millisecond {
-		t.Fatalf("idle reset: %+v", v)
-	}
-	done := make(chan Result, 1)
-	go func() { r, _ := m.Run(context.Background(), "read", Request{Session: id, Wait: "1s"}); done <- r }()
-	s, _ := m.Get(id)
-	deadline := time.Now().Add(time.Second)
-	for {
-		if !s.op.TryLock() {
-			break
-		}
-		s.op.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("operation never started")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	v = run(t, m, "read", Request{Session: id})
-	if v.Reason != "busy" || !v.Backpressure {
-		t.Fatalf("busy: %+v", v)
-	}
-	_, _ = m.Close(id)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("close waited for operation lock")
-	}
-}
-func TestBoundedHistoryAndTail(t *testing.T) {
-	s := &Session{id: "test", connected: true, notify: make(chan struct{}, 1)}
-	_, _ = s.Write([]byte(strings.Repeat("x", HistoryLimit+100)))
-	v := s.snapshot(Request{}, "test")
-	if !v.Truncated || !v.More || len(v.Output) != DefaultOutputLimit || v.RetainedFrom != 100 {
-		t.Fatalf("history bounds: %+v", v.statusSummary())
-	}
-	off := v.End
-	next := s.snapshot(Request{Offset: &off}, "test")
-	if next.Start != off {
-		t.Fatal("paging did not advance")
-	}
-	_, _ = s.Write([]byte("\none\ntwo\nthree\n"))
-	v = s.snapshot(Request{Tail: 2}, "test")
-	if v.Output != "two\nthree\n" {
-		t.Fatalf("tail %q", v.Output)
-	}
-}
-func (r Result) statusSummary() string { return r.Reason }
-func TestValidation(t *testing.T) {
-	for _, r := range []Request{{Wait: "0s"}, {Wait: "-1s"}, {Wait: "forever"}, {Timeout: "0s"}, {WaitFor: "["}, {Tail: -1}} {
-		if _, e := parseWait(r); e == nil {
-			t.Fatalf("accepted %+v", r)
-		}
-	}
-	if d, e := Duration("1min"); e != nil || d != time.Minute {
-		t.Fatal(d, e)
-	}
-}
-
-func TestInputWriteDeadlineAndBackpressure(t *testing.T) {
-	t.Run("blocked write bounded by fixed wait", func(t *testing.T) {
-		m := manager(t)
-		a, b := net.Pipe()
-		defer b.Close()
-		s := &Session{id: "blocked", interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: a, closer: a}
-		m.sessions[s.id] = s
-		start := time.Now()
-		v := run(t, m, "interact", Request{Session: s.id, Data: "x", InputID: "blocked-1", Wait: "30ms"})
-		if v.Connected || v.Reason != "io_error" || time.Since(start) > time.Second {
-			t.Fatalf("blocked write escaped deadline: %+v", v)
-		}
-		if v.InputState != "unknown" {
-			t.Fatal("partial write claimed certainty", v)
-		}
-		v = run(t, m, "interact", Request{Session: s.id, Data: "x", InputID: "blocked-1"})
-		if v.InputState != "duplicate" || v.InputSeq != 1 {
-			t.Fatal("uncertain input replayed", v)
-		}
-	})
-	t.Run("silent endpoint allows next completed write", func(t *testing.T) {
-		addr := testutil.Listen(t, func(c net.Conn) {
-			b := make([]byte, 32)
-			for {
-				if _, e := c.Read(b); e != nil {
-					return
-				}
-			}
-		})
-		m := manager(t)
-		v, e := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr})
-		if e != nil {
-			t.Fatal(e)
-		}
-		id := v.Session
-		v = run(t, m, "interact", Request{Session: id, Data: "first", Wait: "20ms"})
-		if v.Backpressure || !v.Connected || v.InputState != "sent" {
-			t.Fatal(v)
-		}
-		v = run(t, m, "interact", Request{Session: id, Data: "second", Wait: "20ms"})
-		if v.Backpressure || v.InputState != "sent" || v.InputSeq != 2 {
-			t.Fatalf("completed write prevented further input: %+v", v)
-		}
-		v = run(t, m, "interact", Request{Session: id, Data: "\x03", Wait: "20ms"})
-		if v.Reason == "backpressure" {
-			t.Fatal("Ctrl-C rejected")
-		}
-	})
-}
-
-func TestSSHMissingExitStatusKeepsTransport(t *testing.T) {
-	addr, key := testutil.SSH(t)
-	m := manager(t)
-	v, e := m.Connect(context.Background(), Options{Protocol: "ssh", Address: addr, User: "test", Password: "test", HostKey: key})
-	if e != nil {
-		t.Fatal(e)
-	}
-	id := v.Session
-	v = run(t, m, "exec", Request{Session: id, Command: "missing-status", Wait: "1s"})
-	if v.Reason != "exit_status_missing" || !v.Connected || v.Running || v.ExitCode != nil || v.Warning == "" || v.Error != "" || !strings.Contains(v.Output, "device output") {
-		t.Fatalf("missing status misclassified: %+v", v)
-	}
-	v = run(t, m, "exec", Request{Session: id, Command: "both"})
-	if !v.Connected || v.ExitCode == nil || *v.ExitCode != 0 || v.Warning != "" {
-		t.Fatalf("transport lost or stale warning: %+v", v)
-	}
-}
-
-// This deliberately models a terminal that treats CR and LF as separate Enters
-// and replays the last command on an empty Enter. It is not a Huawei emulator.
-func TestSSHWireOnceAndSeparateEnterReplay(t *testing.T) {
-	for _, raw := range []bool{false, true} {
-		t.Run(map[bool]string{false: "line_CR", true: "raw_CRLF"}[raw], func(t *testing.T) {
-			received := make(chan string, 1)
-			addr, key := testutil.SSHWithShell(t, func(rw io.ReadWriter) {
-				want := 9
-				if raw {
-					want = 10
-				}
-				b := make([]byte, want)
-				if _, e := io.ReadFull(rw, b); e != nil {
-					return
-				}
-				received <- string(b)
-				last := ""
-				line := ""
-				for _, c := range b {
-					if c == '\r' || c == '\n' {
-						cmd := line
-						line = ""
-						if cmd == "" {
-							cmd = last
-						}
-						last = cmd
-						if cmd == "diagnose" {
-							_, _ = io.WriteString(rw, "Warning: Enter diagnose view\r\n[~UNIONS-5-diagnose]\r\n")
-						}
-					} else {
-						line += string(c)
-					}
-				}
-				_, _ = io.Copy(io.Discard, rw)
-			})
-			m := manager(t)
-			v, e := m.Connect(context.Background(), Options{Protocol: "ssh", Address: addr, User: "x", Password: "x", HostKey: key, Interactive: true})
-			if e != nil {
-				t.Fatal(e)
-			}
-			line := "diagnose"
-			r := Request{Session: v.Session, Line: &line, Wait: "100ms", InputID: "enter-diagnose"}
-			if raw {
-				r.Line = nil
-				r.Data = "diagnose\r\n"
-			}
-			v = run(t, m, "interact", r)
-			wire := <-received
-			want := "diagnose\r"
-			count := 1
-			if raw {
-				want += "\n"
-				count = 2
-			}
-			if wire != want || strings.Count(v.Output, "Warning:") != count || v.InputState != "sent" || v.InputSeq != 1 || v.InputBytes != len(want) {
-				t.Fatalf("wire=%q result=%+v", wire, v)
-			}
-			dup := run(t, m, "interact", r)
-			if dup.InputState != "duplicate" || dup.InputSeq != 1 {
-				t.Fatalf("retransmitted logical input: %+v", dup)
-			}
-		})
-	}
-}
-func TestDelayedOutputReadAndDeduplication(t *testing.T) {
-	received := make(chan string, 4)
-	addr := testutil.Listen(t, func(c net.Conn) {
-		b := make([]byte, 128)
-		for {
-			n, e := c.Read(b)
-			if e != nil {
-				return
-			}
-			received <- string(b[:n])
-			time.Sleep(100 * time.Millisecond)
-			_, _ = c.Write([]byte("done\r\n[~UNIONS-5]"))
-		}
-	})
-	m := manager(t)
-	v, e := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr})
-	if e != nil {
-		t.Fatal(e)
-	}
-	id := v.Session
-	line := "display device"
-	r := Request{Session: id, Line: &line, Enter: "cr", InputID: "display-device-1", Wait: "20ms"}
-	v = run(t, m, "interact", r)
-	if v.Output != "" || v.InputState != "sent" || v.NextAction != "" {
-		t.Fatalf("empty output looks unsent: %+v", v)
-	}
-	first := <-received
-	if first != "display device\r" {
-		t.Fatalf("wire %q", first)
-	}
-	v = run(t, m, "interact", r)
-	if v.InputState != "duplicate" {
-		t.Fatal(v)
-	}
-	other := "display version"
-	r.Line = &other
-	if _, e = m.Run(context.Background(), "interact", r); e == nil {
-		t.Fatal("changed payload accepted under same ID")
-	}
-	v = run(t, m, "read", Request{Session: id, WaitFor: `\[~?UNIONS-5\]`, Wait: "1s"})
-	if v.Reason != "waitfor" || !strings.Contains(v.Output, "done") || v.InputState != "none" || v.InputSeq != 1 {
-		t.Fatalf("delayed output lost: %+v", v)
-	}
-	select {
-	case x := <-received:
-		t.Fatalf("unexpected replay %q", x)
-	default:
-	}
-}
-func TestLineValidation(t *testing.T) {
-	m := manager(t)
-	s := &Session{id: "line", interactive: true, done: make(chan struct{}), notify: make(chan struct{}, 1)}
-	m.sessions[s.id] = s
-	line := "a\nb"
-	for _, r := range []Request{{Session: s.id, Line: &line}, {Session: s.id, Data: "x", Line: &line}, {Session: s.id, Enter: "cr"}, {Session: s.id, InputID: "without-input"}} {
-		if _, e := m.Run(context.Background(), "interact", r); e == nil {
-			t.Fatal("accepted malformed input", r)
-		}
-	}
-}
-
-func TestWriteDrainAllowsNextInput(t *testing.T) {
-	m := manager(t)
-	a, b := net.Pipe()
-	defer b.Close()
-	s := &Session{id: "drain", interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: a, closer: a}
-	m.sessions[s.id] = s
-	done := make(chan Result, 1)
-	go func() {
-		v, _ := m.Run(context.Background(), "interact", Request{Session: s.id, Data: "first", Wait: "200ms"})
-		done <- v
-	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		s.mu.Lock()
-		seq := s.inputSeq
-		s.mu.Unlock()
-		if seq == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("write never started")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	v := run(t, m, "interact", Request{Session: s.id, Data: "again", InputID: "retry-after-busy"})
-	if v.Reason != "busy" || v.InputState != "not_sent" || !v.RetrySameInput || v.NextAction != "wait_current_call" {
-		t.Fatal(v)
-	}
-	buf := make([]byte, 5)
-	if _, e := io.ReadFull(b, buf); e != nil || string(buf) != "first" {
-		t.Fatal(string(buf), e)
-	}
-	if v = <-done; v.InputState != "sent" || v.Backpressure {
-		t.Fatal(v)
-	}
-	go func() { _, _ = io.ReadFull(b, buf) }()
-	v = run(t, m, "interact", Request{Session: s.id, Data: "again", InputID: "retry-after-busy", Wait: "20ms"})
-	if v.InputState != "sent" || v.InputSeq != 2 || v.Backpressure {
-		t.Fatal(v)
-	}
-}
-
-func TestShortSessionIDsAndConfiguredInputLimit(t *testing.T) {
-	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
-	m := manager(t)
-	o := Options{Protocol: "telnet", Address: addr, MaxInputBytes: 8192}
-	v, e := m.Connect(context.Background(), o)
-	if e != nil || v.Session != "s1" {
-		t.Fatal(v, e)
-	}
-	id := v.Session
-	v = run(t, m, "interact", Request{Session: id, Data: strings.Repeat("x", 8192), Wait: "20ms"})
-	if v.InputState != "sent" {
-		t.Fatal(v)
-	}
-	v = run(t, m, "interact", Request{Session: id, Data: strings.Repeat("x", 8193), Wait: "20ms"})
-	if v.InputState != "not_sent" || !v.Backpressure || v.InputSeq != 1 {
-		t.Fatal(v)
-	}
-	_, _ = m.Close(id)
-	v, e = m.Connect(context.Background(), o)
-	if e != nil || v.Session != "s2" {
-		t.Fatal(v, e)
-	}
-	for _, n := range []int{-1, MaxInputLimit + 1} {
-		o.MaxInputBytes = n
-		if _, e = m.Connect(context.Background(), o); e == nil {
-			t.Fatal("invalid limit accepted", n)
-		}
-	}
-}
-
-// Use portable socket buffer controls rather than OS-specific TCP queue queries.
-func TestTCPFullSendBufferDeadline(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	v, err := m.Connect(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
-	accepted := make(chan *net.TCPConn, 1)
-	go func() {
-		c, e := listener.Accept()
-		if e == nil {
-			accepted <- c.(*net.TCPConn)
+	return v.Session
+}
+func run(t *testing.T, m *Manager, kind string, r Request) Result {
+	t.Helper()
+	v, err := m.Operate(context.Background(), kind, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+func noCollect() *bool { b := false; return &b }
+func localSession(t *testing.T) (*Manager, *Session, *bytes.Buffer) {
+	t.Helper()
+	m := manager(t)
+	b := new(bytes.Buffer)
+	s := &Session{id: "s1", protocol: "ssh", mode: "stream", config: DefaultConfig("ssh"), last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{}), input: b}
+	m.sessions[s.id] = s
+	return m, s, b
+}
+func waitActive(t *testing.T, s *Session) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.mu.Lock()
+		active := s.active
+		s.mu.Unlock()
+		if active > 0 {
+			return
 		}
-	}()
-	c, err := net.Dial("tcp", listener.Addr().String())
+		if time.Now().After(deadline) {
+			t.Fatal("operation never became active")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func TestDefaultsConfigurationAtomicAndOverrides(t *testing.T) {
+	m, s, wire := localSession(t)
+	info, err := m.GetConfig(s.id)
+	if err != nil || info.Config.ReadIdleTimeoutMS != 500 || info.Config.ReadTotalTimeoutMS != 30000 || info.Fields["read_idle_timeout_ms"].Description == "" {
+		t.Fatal(info, err)
+	}
+	if _, err = m.Configure(s.id, cfg(map[string]any{"read_idle_timeout_ms": 0, "session_idle_timeout_ms": "30*60*1000", "line_end": `\0`})); err != nil {
+		t.Fatal(err)
+	}
+	v := run(t, m, "sendline_escaped", Request{Session: s.id, Data: `a\xFF`, CollectOutput: noCollect(), Config: cfg(map[string]any{"line_end": `\r\n`})})
+	if v.InputState != "sent" || v.WrittenBytes != 4 || !bytes.Equal(wire.Bytes(), []byte{'a', 255, 13, 10}) {
+		t.Fatal(v, wire.Bytes())
+	}
+	info, _ = m.GetConfig(s.id)
+	if info.Config.LineEnd != `\0` {
+		t.Fatal("override changed global config")
+	}
+	before := info.Config
+	for _, p := range []ConfigPatch{cfg(map[string]any{"read_idle_timeout_ms": 1, "encoding": "unknown"}), cfg(map[string]any{"typo": 1}), cfg(map[string]any{"read_total_timeout_ms": 0}), cfg(map[string]any{"max_output_bytes": 65537}), cfg(map[string]any{"end_pattern": "["}), cfg(map[string]any{"line_end": `\q`}), cfg(map[string]any{"read_idle_timeout_ms": nil})} {
+		if _, err = m.Configure(s.id, p); err == nil {
+			t.Fatal("invalid config accepted", p)
+		}
+	}
+	info, _ = m.GetConfig(s.id)
+	if info.Config != before {
+		t.Fatal("failed patch was not atomic")
+	}
+	if _, err = m.Operate(context.Background(), "read_available", Request{Session: s.id, Config: cfg(map[string]any{"tcp_keepalive_ms": 0})}); err == nil {
+		t.Fatal("connection override accepted")
+	}
+}
+func TestIntegerExpressions(t *testing.T) {
+	for source, want := range map[string]int64{`30000`: 30000, `"30*60*1000"`: 1800000, `"(8*1024)/2"`: 4096} {
+		got, err := integer(json.RawMessage(source))
+		if err != nil || got != want {
+			t.Fatal(source, got, err)
+		}
+	}
+	for _, source := range []string{`1.5`, `"1/0"`, `"1/2"`, `"f()"`, `"1<<5"`, `"99999999999999999999999999999999"`, `null`, `true`} {
+		if _, err := integer(json.RawMessage(source)); err == nil {
+			t.Fatal("unsafe expression accepted", source)
+		}
+	}
+}
+func TestSSHExecExitStreamsAndMissingStatus(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	o.HostKey = key
+	id := connect(t, m, o)
+	for _, tc := range []struct {
+		cmd  string
+		code int
+	}{{"both", 0}, {"exit7", 7}} {
+		v := run(t, m, "exec", Request{Session: id, Command: tc.cmd})
+		if v.Reason != "exec_finish" || v.ExitCode == nil || *v.ExitCode != tc.code || v.InputState != "sent" {
+			t.Fatal(v)
+		}
+		if tc.cmd == "both" && (!strings.Contains(v.Output, "stdout") || !strings.Contains(v.Output, "stderr")) {
+			t.Fatal(v)
+		}
+	}
+	v := run(t, m, "exec", Request{Session: id, Command: "missing-status"})
+	if v.Reason != "exec_finish" || v.ExitCode != nil || v.Warning == "" || !v.Connected {
+		t.Fatal(v)
+	}
+	v = run(t, m, "exec", Request{Session: id, Command: "slow", Config: cfg(map[string]any{"read_total_timeout_ms": 30, "read_idle_timeout_ms": 0})})
+	if v.Reason != "total_timeout" || !v.Running || !strings.Contains(v.Output, "first") {
+		t.Fatal(v)
+	}
+	busy := run(t, m, "exec", Request{Session: id, Command: "both"})
+	if busy.InputState != "not_sent" || !strings.Contains(busy.Error, "busy") {
+		t.Fatal(busy)
+	}
+	v = run(t, m, "read_until", Request{Session: id})
+	if v.Reason != "exec_finish" || v.Running || !strings.Contains(v.Output, "second") {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_all", Request{Session: id})
+	if !strings.Contains(v.Output, "first") || !strings.Contains(v.Output, "second") {
+		t.Fatal(v)
+	}
+	if _, err := m.Operate(context.Background(), "send_raw", Request{Session: id, Data: "x"}); err == nil {
+		t.Fatal("send accepted in exec mode")
+	}
+}
+func TestSSHHostVerificationAndModes(t *testing.T) {
+	addr, _ := testutil.SSH(t)
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	o.HostKey = "SHA256:bad"
+	if _, err := m.Connect(context.Background(), o); err == nil {
+		t.Fatal("bad host key accepted")
+	}
+	o = options(addr, "telnet", "exec")
+	if _, err := m.Connect(context.Background(), o); err == nil {
+		t.Fatal("telnet exec accepted")
+	}
+}
+func TestSSHAndTelnetDeviceSimulators(t *testing.T) {
+	for _, protocol := range []string{"ssh", "telnet"} {
+		t.Run(protocol, func(t *testing.T) {
+			m := manager(t)
+			var addr, key string
+			if protocol == "ssh" {
+				addr, key = testutil.SSH(t)
+			} else {
+				addr = testutil.TelnetSwitch(t)
+			}
+			o := options(addr, protocol, "stream")
+			o.HostKey = key
+			o.Config = cfg(map[string]any{"line_end": `\r\n`, "read_idle_timeout_ms": 500, "read_total_timeout_ms": 2000})
+			id := connect(t, m, o)
+			v := run(t, m, "read_until", Request{Session: id, Config: cfg(map[string]any{"end_pattern": `switch> `})})
+			if v.Reason != "match" {
+				t.Fatal(v)
+			}
+			for _, step := range []struct{ line, pattern string }{{"enable", `switch# `}, {"configure terminal", `switch\(config\)# `}, {"interface ethernet 1", `switch\(config-if\)# `}, {"end", `switch# `}, {"show running-config", `--More--`}} {
+				v = run(t, m, "sendline_raw", Request{Session: id, Data: step.line, Config: cfg(map[string]any{"end_pattern": step.pattern})})
+				if v.Reason != "match" {
+					t.Fatal(step, v)
+				}
+			}
+			v = run(t, m, "send_raw", Request{Session: id, Data: " ", Config: cfg(map[string]any{"end_pattern": `switch# `})})
+			if v.Reason != "match" || !strings.Contains(v.Output, "description") {
+				t.Fatal(v)
+			}
+			v = run(t, m, "sendline_raw", Request{Session: id, Data: "slow", Config: cfg(map[string]any{"end_pattern": `switch# `})})
+			if v.Reason != "match" || !strings.Contains(v.Output, "slow serial") {
+				t.Fatal(v)
+			}
+			v = run(t, m, "sendline_raw", Request{Session: id, Data: "quit"})
+			if v.Reason != "closed" || v.Connected {
+				t.Fatal(v)
+			}
+		})
+	}
+}
+func TestSendVariantsEncodingAndByteEscapes(t *testing.T) {
+	m, s, wire := localSession(t)
+	for _, tc := range []struct {
+		kind, data, encoding string
+		want                 []byte
+	}{
+		{"send_raw", `\r`, "utf-8", []byte(`\r`)},
+		{"send_escaped", `\r\n\0\xFF\t`, "utf-8", []byte{13, 10, 0, 255, 9}},
+		{"sendline_raw", "", "utf-8", []byte{13}},
+		{"sendline_escaped", `x\r`, "utf-8", []byte{'x', 13, 13}},
+		{"send_raw", "中文", "gbk", []byte{0xd6, 0xd0, 0xce, 0xc4}},
+		{"send_escaped", `\u4e2d\xFF`, "gbk", []byte{0xd6, 0xd0, 255}},
+		{"send_raw", "日本", "shift-jis", []byte{0x93, 0xfa, 0x96, 0x7b}},
+	} {
+		wire.Reset()
+		v := run(t, m, tc.kind, Request{Session: s.id, Data: tc.data, CollectOutput: noCollect(), Config: cfg(map[string]any{"encoding": tc.encoding})})
+		if v.InputState != "sent" || !bytes.Equal(wire.Bytes(), tc.want) {
+			t.Fatal(tc, v, wire.Bytes())
+		}
+	}
+	before := wire.Len()
+	for _, tc := range []struct{ data, enc string }{{`\q`, "utf-8"}, {`\x0`, "utf-8"}, {`\uD800`, "utf-8"}, {"😀", "gbk"}} {
+		if _, err := m.Operate(context.Background(), "send_escaped", Request{Session: s.id, Data: tc.data, CollectOutput: noCollect(), Config: cfg(map[string]any{"encoding": tc.enc})}); err == nil || wire.Len() != before {
+			t.Fatal("invalid input written", tc, err)
+		}
+	}
+}
+func TestReadMatchBoundaryBudgetAndHistory(t *testing.T) {
+	m, s, _ := localSession(t)
+	_, _ = s.Write([]byte("before>after\none\ntwo\n"))
+	v := run(t, m, "read_until", Request{Session: s.id, Config: cfg(map[string]any{"end_pattern": ">"})})
+	if v.Reason != "match" || v.Output != "before>" || !v.More {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_available", Request{Session: s.id, Config: cfg(map[string]any{"max_output_bytes": 3})})
+	if v.Reason != "output_limit" || v.Output != "aft" {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_tail", Request{Session: s.id, Lines: 2})
+	if v.Output != "one\ntwo\n" {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_available", Request{Session: s.id})
+	if v.Output != "er\none\ntwo\n" {
+		t.Fatal("history moved incremental cursor", v)
+	}
+	var got strings.Builder
+	var off int64
+	for {
+		v = run(t, m, "read_all", Request{Session: s.id, Offset: &off, Config: cfg(map[string]any{"max_output_bytes": 4})})
+		got.WriteString(v.Output)
+		off = v.End
+		if !v.More {
+			break
+		}
+	}
+	if got.String() != "before>after\none\ntwo\n" {
+		t.Fatal(got.String())
+	}
+	_, _ = s.Write(bytes.Repeat([]byte{'x'}, HistoryLimit+17))
+	v = run(t, m, "read_available", Request{Session: s.id})
+	if v.DroppedBytes == 0 || !v.More {
+		t.Fatal("history loss not reported", v)
+	}
+	v = run(t, m, "read_all", Request{Session: s.id})
+	if v.DroppedBytes == 0 {
+		t.Fatal("historical prefix loss not reported", v)
+	}
+}
+func TestIncrementalDecodeAndErrorPolicies(t *testing.T) {
+	for _, tc := range []struct {
+		encoding string
+		wire     []byte
+		want     string
+	}{{"utf-8", []byte("中"), "中"}, {"gbk", []byte{0xd6, 0xd0}, "中"}, {"shift-jis", []byte{0x93, 0xfa}, "日"}} {
+		m, s, _ := localSession(t)
+		_, _ = s.Write(tc.wire[:1])
+		r := Request{Session: s.id, Config: cfg(map[string]any{"encoding": tc.encoding})}
+		v := run(t, m, "read_available", r)
+		if v.Output != "" || !v.More || s.cursor != 0 {
+			t.Fatal(tc, v)
+		}
+		_, _ = s.Write(tc.wire[1:])
+		v = run(t, m, "read_available", r)
+		if v.Output != tc.want || v.More {
+			t.Fatal(tc, v)
+		}
+	}
+	m, s, _ := localSession(t)
+	_, _ = s.Write([]byte{255, 'a'})
+	v := run(t, m, "read_available", Request{Session: s.id, Config: cfg(map[string]any{"output_decode_error_action": "error"})})
+	if v.Reason != "aborted" || v.Error == "" || s.cursor != 0 || !v.Connected {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_available", Request{Session: s.id, Config: cfg(map[string]any{"output_decode_error_action": "to_hex"})})
+	if v.Output != "<FF>a" {
+		t.Fatal(v)
+	}
+	_, _ = s.Write([]byte{255})
+	v = run(t, m, "read_available", Request{Session: s.id})
+	if v.Output != `\xFF` {
+		t.Fatal(v)
+	}
+	_, _ = s.Write([]byte("中"))
+	v = run(t, m, "read_available", Request{Session: s.id, Config: cfg(map[string]any{"max_output_bytes": 1})})
+	if v.Reason != "output_limit" || v.MinimumOutputBytes != 3 || v.Output != "" {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_available", Request{Session: s.id})
+	if v.Output != "中" {
+		t.Fatal(v)
+	}
+}
+func TestReadTimeoutsCancellationAndSnapshots(t *testing.T) {
+	m, s, wire := localSession(t)
+	_, err := m.Configure(s.id, cfg(map[string]any{"read_total_timeout_ms": 80, "read_idle_timeout_ms": 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan Result, 1)
+	go func() { v, _ := m.Operate(context.Background(), "read_until", Request{Session: s.id}); done <- v }()
+	waitActive(t, s)
+	if _, err := m.Operate(context.Background(), "read_available", Request{Session: s.id}); err == nil {
+		t.Fatal("concurrent readers accepted")
+	}
+	v := run(t, m, "send_raw", Request{Session: s.id, Data: "while-reading", CollectOutput: noCollect()})
+	if v.InputState != "sent" || wire.String() != "while-reading" {
+		t.Fatal(v)
+	}
+	_, err = m.Configure(s.id, cfg(map[string]any{"read_total_timeout_ms": 1, "read_idle_timeout_ms": 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = <-done
+	if v.Reason != "total_timeout" || !v.Connected {
+		t.Fatal(v)
+	}
+	start := time.Now()
+	v = run(t, m, "read_until", Request{Session: s.id, Config: cfg(map[string]any{"read_total_timeout_ms": 500, "read_idle_timeout_ms": 40})})
+	if v.Reason != "idle_timeout" || time.Since(start) < 35*time.Millisecond || !v.Connected {
+		t.Fatal(v)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(10 * time.Millisecond); _, _ = s.Write([]byte("partial")); cancel() }()
+	v, err = m.Operate(ctx, "read_until", Request{Session: s.id, Config: cfg(map[string]any{"read_total_timeout_ms": 500, "read_idle_timeout_ms": 0})})
+	if err != nil || v.Reason != "cancelled" || !v.Connected || v.Output != "partial" {
+		t.Fatal(v, err)
+	}
+}
+func TestBlockedWriteBoundedAndCloseDiscards(t *testing.T) {
+	m, s, _ := localSession(t)
+	a, b := net.Pipe()
+	defer b.Close()
+	s.input = a
+	s.closer = a
+	v := run(t, m, "send_raw", Request{Session: s.id, Data: "x", CollectOutput: noCollect(), Config: cfg(map[string]any{"write_timeout_ms": 30})})
+	if v.Reason != "aborted" || v.InputState != "unknown" || v.Connected {
+		t.Fatal(v)
+	}
+	_, _ = s.Write([]byte(strings.Repeat("unread", 1000)))
+	v, err := m.Close(s.id)
+	if err != nil || v.Output != "" || v.Error != "" || v.Reason != "closed" {
+		t.Fatal(v, err)
+	}
+	if _, err = m.Operate(context.Background(), "read_all", Request{Session: s.id}); err == nil {
+		t.Fatal("read after explicit close accepted")
+	}
+	_, _ = s.Write([]byte("late"))
+	if len(s.buf) != 0 {
+		t.Fatal("late output resurrected discarded buffer")
+	}
+}
+func TestEOFAndAbortedPreserveReceivedOutput(t *testing.T) {
+	for _, failure := range []string{"", "network failure"} {
+		m, s, _ := localSession(t)
+		_, _ = s.Write([]byte("received"))
+		s.disconnect(failure)
+		v := run(t, m, "read_until", Request{Session: s.id})
+		want := "closed"
+		if failure != "" {
+			want = "aborted"
+		}
+		if v.Output != "received" || v.Reason != want || v.Connected {
+			t.Fatal(v)
+		}
+	}
+}
+func TestSessionExpirationAndShortIDs(t *testing.T) {
+	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
+	m := manager(t)
+	o := options(addr, "telnet", "stream")
+	id := connect(t, m, o)
+	if id != "s1" {
+		t.Fatal(id)
+	}
+	s, _ := m.Get(id)
+	s.mu.Lock()
+	s.last = time.Now().Add(-time.Hour)
+	s.lastUse = time.Now()
+	s.mu.Unlock()
+	if s.expire(time.Now()) {
+		t.Fatal("unused stream uses endpoint silence")
+	}
+	s.mu.Lock()
+	s.lastUse = time.Now().Add(-time.Hour)
+	s.active = 1
+	s.mu.Unlock()
+	if s.expire(time.Now()) {
+		t.Fatal("active reader reclaimed")
+	}
+	s.mu.Lock()
+	s.active = 0
+	s.config.SessionIdleTimeoutMS = 0
+	s.mu.Unlock()
+	if s.expire(time.Now()) {
+		t.Fatal("disabled idle reclamation")
+	}
+	s.mu.Lock()
+	s.config.SessionIdleTimeoutMS = 10
+	s.mu.Unlock()
+	if !s.expire(time.Now()) {
+		t.Fatal("expired session retained")
+	}
+	m.List()
+	if id = connect(t, m, o); id != "s2" {
+		t.Fatal(id)
+	}
+}
+func TestFullTCPBufferWriteDeadline(t *testing.T) {
+	accepted := make(chan *net.TCPConn, 1)
+	addr := testutil.Listen(t, func(c net.Conn) { accepted <- c.(*net.TCPConn); _, _ = io.Copy(io.Discard, &neverReader{c}) })
+	c, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	peer := <-accepted
-	defer peer.Close()
 	if err = peer.SetReadBuffer(1024); err != nil {
 		t.Fatal(err)
 	}
 	if err = c.(*net.TCPConn).SetWriteBuffer(1024); err != nil {
 		t.Fatal(err)
 	}
-	m := manager(t)
-	s := &Session{id: "tcpfull", maxInputBytes: MaxInputLimit, interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: c, closer: c}
-	m.sessions[s.id] = s
-	start := time.Now()
-	v := run(t, m, "interact", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), Wait: "100ms", InputID: "full"})
-	if v.Reason != "io_error" || v.Connected || v.InputState != "unknown" || time.Since(start) > time.Second {
-		t.Fatalf("full TCP buffer escaped deadline: %+v", v)
-	}
-	v = run(t, m, "interact", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), InputID: "full"})
-	if v.InputState != "duplicate" {
-		t.Fatal("uncertain write replayed", v)
-	}
-}
-
-func TestCloseDoesNotReadOutput(t *testing.T) {
-	m := manager(t)
-	s := &Session{id: "close", connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
-	m.sessions[s.id] = s
-	_, _ = s.Write([]byte(strings.Repeat("unread console replay", 1000)))
-	v, err := m.Close(s.id)
-	if err != nil || v.Output != "" || v.Error != "" || v.Hint != "" || v.NextAction != "" || v.Connected || v.Reason != "closed" || s.cursor != 0 {
-		t.Fatal(v, err)
-	}
-	if _, err = m.Get(s.id); err == nil {
-		t.Fatal("closed session retained")
-	}
-}
-
-func TestOutputBudgetPreservesUnreadData(t *testing.T) {
-	s := &Session{id: "output", connected: true, notify: make(chan struct{}, 1)}
-	text := strings.Repeat("0123456789", 2000)
-	_, _ = s.Write([]byte(text))
-	var got strings.Builder
-	for {
-		v := s.snapshot(Request{MaxOutputBytes: 317}, "wait")
-		if len(v.Output) > 317 || v.Truncated || v.End-v.Start != int64(len(v.Output)) {
-			t.Fatal(v)
-		}
-		got.WriteString(v.Output)
-		if !v.More {
-			break
-		}
-	}
-	if got.String() != text {
-		t.Fatal("budget lost or repeated output")
-	}
-	off := int64(10)
-	v := s.snapshot(Request{Offset: &off, MaxOutputBytes: 5}, "wait")
-	if v.Output != text[10:15] || s.cursor != int64(len(text)) {
+	m, s, _ := localSession(t)
+	s.input = c
+	s.closer = c
+	s.tcp = c.(*net.TCPConn)
+	v := run(t, m, "send_raw", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), CollectOutput: noCollect(), Config: cfg(map[string]any{"max_input_bytes": MaxInputLimit, "write_timeout_ms": 100})})
+	if v.InputState != "unknown" || v.Connected || v.Reason != "aborted" {
 		t.Fatal(v)
 	}
-	for _, n := range []int{-1, ResultLimit + 1} {
-		if _, err := parseWait(Request{MaxOutputBytes: n}); err == nil {
-			t.Fatal("invalid output limit", n)
+}
+
+// Wait for socket closure without reading bytes, so the peer receive queue fills.
+type neverReader struct{ net.Conn }
+
+func (n *neverReader) Read(p []byte) (int, error) {
+	b := make([]byte, 1)
+	for {
+		_, err := n.Conn.Write(b)
+		if err != nil {
+			return 0, err
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
-
-func TestSessionExpirationSeparatesUnusedAndActive(t *testing.T) {
-	now := time.Now()
-	for _, tc := range []struct {
-		name                         string
-		interactive, running, active bool
-		lastAge, callAge, useAge     time.Duration
-		idle                         time.Duration
-		disconnected                 bool
-		reason                       string
-	}{
-		{name: "console between calls", interactive: true, running: true, lastAge: 10 * time.Minute, useAge: 5 * time.Minute, idle: SessionIdleLimit},
-		{name: "unused lifetime expired", interactive: true, lastAge: time.Hour, useAge: time.Hour, idle: SessionIdleLimit, disconnected: true, reason: "session_idle"},
-		{name: "unused lifetime disabled", interactive: true, lastAge: time.Hour, useAge: time.Hour},
-		{name: "new call after long silence", interactive: true, active: true, lastAge: time.Hour, callAge: time.Second, idle: SessionIdleLimit},
-		{name: "active console silence", interactive: true, active: true, lastAge: time.Hour, callAge: IdleLimit, disconnected: true, reason: "endpoint_idle"},
-		{name: "exec between polls", running: true, lastAge: IdleLimit, disconnected: true, reason: "endpoint_idle"},
-		{name: "poll does not reset exec silence", running: true, active: true, lastAge: IdleLimit, callAge: time.Second, disconnected: true, reason: "endpoint_idle"},
-		{name: "active output resets silence", interactive: true, active: true, lastAge: time.Second, callAge: IdleLimit},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &Session{interactive: tc.interactive, running: tc.running, connected: true, last: now.Add(-tc.lastAge), lastUse: now.Add(-tc.useAge), idleTimeout: tc.idle, notify: make(chan struct{}, 1), done: make(chan struct{})}
-			if tc.active {
-				s.activeSince = now.Add(-tc.callAge)
-			}
-			s.expire(now)
-			if s.connected == tc.disconnected || !strings.Contains(s.failure, tc.reason) {
-				t.Fatalf("connected=%v failure=%s", s.connected, s.failure)
-			}
-		})
-	}
-}
-
-func TestIdleTimeoutConfiguration(t *testing.T) {
+func TestKeepaliveAndQueueCapability(t *testing.T) {
 	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
 	m := manager(t)
-	for _, tc := range []struct {
-		value string
-		want  time.Duration
-	}{{"", SessionIdleLimit}, {"0", 0}, {"10min", 10 * time.Minute}} {
-		v, err := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr, IdleTimeout: tc.value})
-		if err != nil {
+	id := connect(t, m, options(addr, "telnet", "stream"))
+	for _, ms := range []int{0, 1000} {
+		if _, err := m.Configure(id, cfg(map[string]any{"tcp_keepalive_ms": ms})); err != nil {
 			t.Fatal(err)
 		}
-		s, _ := m.Get(v.Session)
-		if s.idleTimeout != tc.want {
-			t.Fatal(s.idleTimeout, tc.want)
-		}
 	}
-	for _, value := range []string{"-1s", "nonsense", "0s"} {
-		if _, err := m.Connect(context.Background(), Options{Protocol: "telnet", Address: addr, IdleTimeout: value}); err == nil {
-			t.Fatal("invalid idle lifetime", value)
+	info, err := m.Configure(id, cfg(map[string]any{"backpressure_bytes": 1024}))
+	if queueSupported() {
+		if err != nil || info.Config.BackpressureBytes != 1024 {
+			t.Fatal(info, err)
 		}
+		s, _ := m.Get(id)
+		if _, err := queuedBytes(s.tcp); err != nil {
+			t.Fatal(err)
+		}
+	} else if err == nil {
+		t.Fatal("unsupported queue threshold accepted")
 	}
 }
-
-func TestEscapedInputDecodesOnceAndDeduplicatesBytes(t *testing.T) {
+func TestLongSilentReadBound(t *testing.T) {
+	if os.Getenv("SESSMCP_LONG_TEST") != "1" {
+		t.Skip("real 110s read deadline")
+	}
+	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
 	m := manager(t)
-	var wire bytes.Buffer
-	s := &Session{id: "escaped", interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: &wire, maxInputBytes: 4}
-	m.sessions[s.id] = s
-	escaped := `\x03\r`
-	v := run(t, m, "interact", Request{Session: s.id, DataEscaped: &escaped, InputID: "same", Wait: "1ms"})
-	if v.InputState != "sent" || v.InputBytes != 2 || wire.String() != "\x03\r" {
-		t.Fatal(v, wire.Bytes())
-	}
-	v = run(t, m, "interact", Request{Session: s.id, Data: "\x03\r", InputID: "same"})
-	if v.InputState != "duplicate" || wire.Len() != 2 {
-		t.Fatal(v, wire.Bytes())
-	}
-	escaped = `\x41\x42\x43\x44\x45`
-	v = run(t, m, "interact", Request{Session: s.id, DataEscaped: &escaped, Wait: "1ms"})
-	if v.InputState != "not_sent" || wire.Len() != 2 {
-		t.Fatal("decoded size limit not enforced", v)
-	}
-	escaped = `\q`
-	if _, err := m.Run(context.Background(), "interact", Request{Session: s.id, DataEscaped: &escaped}); err == nil || wire.Len() != 2 {
-		t.Fatal("invalid escape sent input", err)
-	}
-	escaped = `\r`
-	for _, r := range []Request{{Session: s.id, DataEscaped: &escaped, Data: "x"}, {Session: s.id, DataEscaped: &escaped, Key: "enter"}, {Session: s.id, DataEscaped: &escaped, Enter: "cr"}} {
-		if _, err := m.Run(context.Background(), "interact", r); err == nil {
-			t.Fatal("ambiguous escaped input accepted", r)
-		}
+	id := connect(t, m, options(addr, "telnet", "stream"))
+	start := time.Now()
+	v := run(t, m, "read_until", Request{Session: id, Config: cfg(map[string]any{"read_total_timeout_ms": 110000, "read_idle_timeout_ms": 0})})
+	if v.Reason != "total_timeout" || !v.Connected || time.Since(start) >= 120*time.Second {
+		t.Fatal(v, time.Since(start))
 	}
 }
 
-func TestDecodeVisibleEscapes(t *testing.T) {
-	for _, tc := range []struct{ source, want string }{
-		{`\r\n\t\b\f\v\a`, "\r\n\t\b\f\v\a"},
-		{`\x00\xff`, string([]byte{0, 255})},
-		{`\u4e2d\U0001f600`, "中😀"},
-		{`\\r`, `\r`},
-		{`echo "a" 'b'`, `echo "a" 'b'`},
-		{`&#13;`, `&#13;`},
-		{`\003`, "\x03"},
-	} {
-		got, err := decodeInput(tc.source)
-		if err != nil || got != tc.want {
-			t.Fatalf("%q got %q want %q err=%v", tc.source, got, tc.want, err)
-		}
+func TestDefaultReadIdleIs500ms(t *testing.T) {
+	m, s, _ := localSession(t)
+	start := time.Now()
+	v := run(t, m, "read_until", Request{Session: s.id})
+	elapsed := time.Since(start)
+	if v.Reason != "idle_timeout" || elapsed < 480*time.Millisecond || elapsed > 2*time.Second || !v.Connected {
+		t.Fatal(v, elapsed)
 	}
-	for _, source := range []string{`\`, `\x0`, `\xGG`, `\uD800`, `\U00110000`, `\q`} {
-		if _, err := decodeInput(source); err == nil {
-			t.Fatal("invalid escape accepted", source)
+}
+func TestWriteDuringReadAndExplicitCloseWakesReader(t *testing.T) {
+	m, s, _ := localSession(t)
+	done := make(chan Result, 1)
+	go func() {
+		v, _ := m.Operate(context.Background(), "read_until", Request{Session: s.id, Config: cfg(map[string]any{"read_idle_timeout_ms": 0})})
+		done <- v
+	}()
+	waitActive(t, s)
+	_, _ = s.Write([]byte("discard me"))
+	if _, err := m.Close(s.id); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case v := <-done:
+		if v.Reason != "closed" || v.Output != "" {
+			t.Fatal(v)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("close did not interrupt read")
+	}
+}
+func TestRealTCPQueueThresholdRejectsWithoutWriting(t *testing.T) {
+	if !queueSupported() {
+		t.Skip("OS queue query unavailable")
+	}
+	ready := make(chan struct{})
+	addr := testutil.Listen(t, func(c net.Conn) {
+		_ = c.(*net.TCPConn).SetReadBuffer(1024)
+		close(ready)
+		_, _ = io.Copy(io.Discard, &neverReader{c})
+	})
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	<-ready
+	tcp := c.(*net.TCPConn)
+	if err = tcp.SetWriteBuffer(1 << 20); err != nil {
+		t.Fatal(err)
+	}
+	m, s, _ := localSession(t)
+	s.input = c
+	s.closer = c
+	s.tcp = tcp
+	v := run(t, m, "send_raw", Request{Session: s.id, Data: strings.Repeat("x", 128<<10), CollectOutput: noCollect(), Config: cfg(map[string]any{"max_input_bytes": 128 << 10, "write_timeout_ms": 1000})})
+	if v.InputState != "sent" {
+		t.Fatal(v)
+	}
+	queued, err := queuedBytes(tcp)
+	if err != nil || queued == 0 {
+		t.Fatal("queue did not retain data", queued, err)
+	}
+	v = run(t, m, "send_raw", Request{Session: s.id, Data: "must-not-send", CollectOutput: noCollect(), Config: cfg(map[string]any{"backpressure_bytes": 1})})
+	if v.InputState != "not_sent" || v.QueuedBytes == nil || *v.QueuedBytes < 1 || v.WrittenBytes != 0 || !v.Connected {
+		t.Fatal(v)
+	}
+}
+
+func TestConnectTimeoutAndCloseAllCancelOpening(t *testing.T) {
+	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	o.Insecure = true
+	o.Config = cfg(map[string]any{"connect_timeout_ms": 30})
+	start := time.Now()
+	if _, err := m.Connect(context.Background(), o); err == nil || time.Since(start) > time.Second {
+		t.Fatal("handshake deadline failed", err, time.Since(start))
+	}
+	o.Config = nil
+	done := make(chan error, 1)
+	go func() { _, err := m.Connect(context.Background(), o); done <- err }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		m.mu.Lock()
+		opening := m.opening
+		m.mu.Unlock()
+		if opening > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("connect did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	m.CloseAll()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("close_all did not cancel connection")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("opening SSH connection not interrupted")
+	}
+	if len(m.List()) != 0 {
+		t.Fatal("late connection resurrected after close_all")
 	}
 }

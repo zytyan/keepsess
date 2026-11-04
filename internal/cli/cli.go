@@ -31,19 +31,18 @@ const Help = `sessmcp — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go 
   sessmcp install-skill [--dir PATH]   安装 SKILL.md (默认 ./sessmcp-skill)
   sessmcp version                     查看版本
 
-普通 SSH 优先 sess_exec，以 SSH 退出状态返回；交换机/路由器使用
-sess_interact 和 waitfor 正则、wait 固定时间、timeout 输出静默时间。
-等待条件任一满足即返回，默认 wait=5s，单次上限 115s，活动调用/SSH exec 输出静默 110s 报错断开。
-空闲会话默认保留 30min；连接参数 idle_timeout 可配置，0 禁用回收。
-默认增量输出 8KiB；max_output_bytes 可调至 64KiB，all/tail/offset 读取历史。
-sess_close 不返回终端正文；key=enter/ctrl_c 等可直接发送控制键。
-data 原样发送；data_escaped 将可见转义文本显式解码一次再发送。
-交互写完即可继续输入，不要求回显；同会话并发返回 busy，不排队。
-连接参数 max_input_bytes 配置单条输入上限（默认 4096，最高 1MiB，含 Enter）。
-session 使用 s1、s2 等进程内短句柄；TCP keepalive 默认启用，周期参数 15s。
-单条交互命令优先 line（SSH 默认 CR）；空输出先 sess_read，不要重发。
+15 个工具：connect/configure/get_config/list、exec、四种 send/sendline、
+read_available/read_until/read_tail/read_all、close/close_all（均带 sess_ 前缀）。
+普通 SSH 使用 mode=exec；交换机/console 使用 mode=stream，Telnet 只支持 stream。
+读取默认总时限 30000ms、静默时限 500ms；config 可持久设置或按调用覆盖。
+send_raw 编码文字；send_escaped 显式解码一层转义；sendline 追加配置结尾。
+发送默认顺便收集未读流，collect_output=false 仅发送；不归因输入输出，不自动重放。
+默认增量输出 8KiB，上限 64KiB；history 1MiB；close 丢弃连接和缓冲，无正文。
+读写可并行，同方向竞争 busy，不无限排队；RPC 上限 115s，写入超时断连。
+空闲会话默认 30min 回收，可禁用；session 使用 s1、s2 等短句柄。
+TCP keepalive 默认 15000ms；Linux 支持 TCP 队列阈值，Windows 明确报告不支持。
 MCP 配置: {"command":"/path/to/sessmcp","args":["serve"]}
---log 写入 0600 JSONL 审计；认证字段脱敏，命令/line/data 仍可能含敏感信息。
+--log 写入 0600 JSONL 审计；认证字段脱敏，command/data 仍可能含敏感信息。
 Telnet 为明文；SSH 默认验证主机密钥。连接只在本次服务进程内持久化。
 `
 

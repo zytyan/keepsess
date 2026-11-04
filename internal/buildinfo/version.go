@@ -3,7 +3,7 @@ package buildinfo
 
 import "runtime/debug"
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Revision is injected by scripts/build.sh; go build may supply VCS metadata.
 var Revision = "unknown"

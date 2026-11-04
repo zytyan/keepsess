@@ -1,3 +1,19 @@
+# 0.3 接口迁移与现场反馈
+
+当前可调用的 15 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/sessmcp/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
+
+0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode/config；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。普通 stream 空闲回收独立为 30min，可禁用。
+
+输入提供 raw/escaped 和是否追加 line_end 的四种组合。escaped 显式处理模型经过 agent 承载的可见转义，编码文字与直接字节区分；不把错误字节简单归因于模型不了解 JSON。输入和输出不建立关联，不再接受 input_id，也不自动重发。使用 sent/not_sent/unknown 和已确认写入字节数判断是否可能已执行。
+
+匹配仅消费到匹配末尾，未读后缀保留；历史读取独立于增量游标。close/close_all 明确丢弃连接与缓冲，不倾倒 console 回放；远端正常 EOF 则可在回收前读取已保留的数据。未实现自动登录/分页/提交，也未声称定位真实厂商设备的命令重复根因。
+
+Linux 支持真实 OS TCP 队列阈值；Windows 显式报告不支持该查询，不伪装成另一个指标。普通有界读写和系统 keepalive 仍支持两平台。
+
+---
+
+## 历史分析（0.1 / 0.2）
+
 # 网络设备现场反馈复盘
 
 反馈包含：exec 输出后断链、增量空输出诱发重试、提示符不匹配、一次 diagnose 调用出现两次进入视图警告。本次没有真实设备访问和原始审计日志，以下区分代码确认与模拟器验证。

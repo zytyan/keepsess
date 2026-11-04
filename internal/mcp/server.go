@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,6 +66,25 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 	if len(args.Arguments) == 0 {
 		args.Arguments = json.RawMessage(`{}`)
 	}
+	def, ok := definitions[args.Name]
+	if !ok {
+		return toolResult(nil, errors.New("unknown tool; refresh tools/list for the 0.3 API"))
+	}
+	var keys map[string]json.RawMessage
+	if e := json.Unmarshal(args.Arguments, &keys); e != nil || keys == nil {
+		return toolResult(nil, errors.New("arguments must be an object"))
+	}
+	props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	for k := range keys {
+		if _, ok := props[k]; !ok {
+			return toolResult(nil, fmt.Errorf("unknown argument %q for %s", k, args.Name))
+		}
+	}
+	for _, k := range def["inputSchema"].(map[string]any)["required"].([]string) {
+		if _, ok := keys[k]; !ok {
+			return toolResult(nil, fmt.Errorf("missing required argument %q", k))
+		}
+	}
 	if s.Audit != nil {
 		var record any
 		_ = json.Unmarshal(p, &record)
@@ -80,65 +100,133 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		}
 		v, e := s.Manager.Connect(ctx, o)
 		return toolResult(v, e)
-	case "sess_exec", "sess_interact", "sess_read":
-		var r core.Request
+	case "sess_configure":
+		var r struct {
+			Session string           `json:"session"`
+			Config  core.ConfigPatch `json:"config"`
+		}
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		kind := map[string]string{"sess_exec": "exec", "sess_interact": "interact", "sess_read": "read"}[args.Name]
-		v, e := s.Manager.Run(ctx, kind, r)
+		if r.Config == nil {
+			return toolResult(nil, errors.New("config must be an object"))
+		}
+		v, e := s.Manager.Configure(r.Session, r.Config)
 		return toolResult(v, e)
-	case "sess_close":
+	case "sess_get_config", "sess_close":
 		var r struct {
 			Session string `json:"session"`
 		}
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
+		if args.Name == "sess_get_config" {
+			v, e := s.Manager.GetConfig(r.Session)
+			return toolResult(v, e)
+		}
 		v, e := s.Manager.Close(r.Session)
 		return toolResult(v, e)
 	case "sess_list":
-		var r struct{}
+		return toolResult(map[string]any{"sessions": s.Manager.List()}, nil)
+	case "sess_close_all":
+		s.Manager.CloseAll()
+		return toolResult(map[string]any{"reason": "closed", "connected": false}, nil)
+	default:
+		var r core.Request
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		return toolResult(map[string]any{"sessions": s.Manager.List()}, nil)
-	default:
-		return toolResult(nil, errors.New("unknown tool"))
+		v, e := s.Manager.Operate(ctx, strings.TrimPrefix(args.Name, "sess_"), r)
+		return toolResult(v, e)
 	}
 }
-func schema(props map[string]any, required ...string) any {
+func schema(props map[string]any, required ...string) map[string]any {
 	if required == nil {
 		required = []string{}
 	}
 	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}
 }
 func str(desc string) any { return map[string]any{"type": "string", "description": desc} }
-func Tools() []any {
-	connect := map[string]any{"idle_timeout": str("Unused session lifetime; default 30min, 0 disables reclamation. Separate from 110s active-operation output silence and 115s call deadline."), "max_input_bytes": map[string]any{"type": "integer", "minimum": 0, "maximum": core.MaxInputLimit, "description": "Per-input byte limit including Enter; 0/omitted defaults to 4096; maximum 1MiB."}, "protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "address": str("host:port; IPv6 [host]:port"), "user": str("SSH username"), "password": str("SSH password; redacted in audit"), "key_file": str("Local SSH private key path"), "key_passphrase": str("Private key passphrase; redacted in audit"), "known_hosts": str("Local known_hosts path"), "host_key": str("Pinned SHA256 host-key fingerprint"), "insecure": map[string]any{"type": "boolean", "description": "Explicitly skip host-key verification (lab only)"}, "interactive": map[string]any{"type": "boolean", "description": "Default false: standard SSH MUST prefer exec for immediate exit-status. True for switch/router foreground shells."}}
-	out := []any{map[string]any{"name": "sess_connect", "description": "Create persistent SSH/Telnet connection. Prefer non-interactive SSH exec on standard servers. Telnet is plaintext; use on trusted networks. No automatic reconnect or command replay.", "inputSchema": schema(connect, "protocol", "address")}}
-	for _, kind := range []string{"exec", "interact", "read"} {
-		p := map[string]any{"max_output_bytes": map[string]any{"type": "integer", "minimum": 0, "maximum": core.ResultLimit, "description": "Output byte budget; 0/omitted defaults to 8192. Raw offsets retained; more=true means read from end."}, "session": str("Short process-local handle returned by sess_connect, e.g. s1; never reused within this server process"), "wait": str("Fixed time from call start; default 5s. Examples 100ms,30s,1min. Can exceed 115s but hard call cap is 115s."), "waitfor": str("Go RE2 regex matched against new combined stdout/stderr; OR with wait/timeout/SSH exit"), "timeout": str("Time since last stdout/stderr refresh, not since last input (e.g. 100ms). OR with wait/waitfor."), "all": map[string]any{"type": "boolean", "description": "Read retained history, default 8KiB, maximum 64KiB per result; use offset=end to paginate"}, "tail": map[string]any{"type": "integer", "minimum": 0, "maximum": 100000, "description": "Last N retained lines (subject to max_output_bytes)"}, "offset": map[string]any{"type": "integer", "minimum": 0, "description": "Absolute byte offset for paging; dropped history is reported"}}
-		desc := "Wait/read without sending input; an empty output after sent input never means failure or permission to resend; default incremental output. Check more/truncated/end, connected/error, running/exit_code. Hard deadline 115s; active-operation output silence 110s disconnects; unused sessions default to 30min."
-		req := []string{"session"}
-		if kind == "exec" {
-			p["command"] = str("SSH exec command, bounded by connection max_input_bytes; new SSH channel on persistent transport. Shell state does not persist across exec calls.")
-			req = append(req, "command")
-			p["input_id"] = str("Unique ID for one logical input, max 128 bytes. Reuse same ID and input for retries to suppress duplicate sends in this session's last 128 IDs; never change the input under an existing ID.")
-			desc = "Preferred for standard SSH: start command and return immediately on SSH exit-status (combined stdout/stderr); OR wait/waitfor/timeout. If running=true, poll sess_read, never resubmit the command."
+func integerSchema(desc string, min, max int64) any {
+	return map[string]any{"type": "integer", "minimum": min, "maximum": max, "description": desc}
+}
+func configSchema(override bool) any {
+	descriptions := core.ConfigDescriptions()
+	props := map[string]any{}
+	for k, desc := range descriptions {
+		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms") {
+			continue
 		}
-		if kind == "interact" {
-			p["data_escaped"] = str(`Visible escaped input decoded exactly once by sessmcp, AFTER JSON decoding. Supports \r \n \t \b \f \v \a \\ \" \xNN \uNNNN \UNNNNNNNN (also Go octal escapes). Use this when the agent transports visible escape text. Example JSON {"data_escaped":"\\r"} sends one CR. Ordinary quotes stay literal; HTML entities stay literal; invalid escapes send nothing. Exclusive with data/line/key/enter; decoded bytes count against max_input_bytes.`)
-			p["key"] = map[string]any{"type": "string", "enum": []string{"enter", "ctrl_c", "ctrl_d", "ctrl_z", "esc", "tab"}, "description": "Send one control key. Enter uses SSH CR/Telnet CRLF. Exclusive with line/data/data_escaped/enter."}
-			p["data"] = str("Exact UTF-8 bytes after JSON decoding; use data_escaped for one explicit escape-decoding layer, bounded by connection max_input_bytes. JSON \u0003 sends Ctrl-C, \r sends CR; HTML entities and double-escaped sequences stay literal. No extra escape decoding. Prefer line for a command; for pager send a space. SSH raw Enter is usually \\r; CRLF can trigger two Enters on some terminals. Empty data polls.")
-			p["line"] = str("Recommended: one command without CR/LF; appends exactly the selected Enter sequence. Mutually exclusive with data. SSH defaults cr; Telnet defaults crlf.")
-			p["enter"] = map[string]any{"type": "string", "enum": []string{"cr", "lf", "crlf"}, "description": "Only with line. SSH device consoles: prefer cr; adjust only when device needs a different sequence."}
-			p["input_id"] = str("Unique ID per logical input, max 128 bytes. Reusing same ID and input suppresses retransmission within the last 128 IDs in this session, including uncertain/failed sends. No guarantee after reconnect/eviction.")
-			desc = "Send to persistent Telnet or interactive SSH shell. Use waitfor prompt/pager or timeout for silent terminals; any wait condition returns. Use line for one command, key for controls, data_escaped for visible escapes, and optional input_id for retry deduplication. Never replay sent/unknown input because output is empty. Successful Write permits the next input even without output; it does not prove remote execution. Same-session concurrent calls return busy."
+		if strings.HasSuffix(k, "_ms") || strings.HasSuffix(k, "_bytes") {
+			props[k] = map[string]any{"description": desc + " Integer or arithmetic string, e.g. 30*60*1000. No eval/calls.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "maxLength": 128}}}
+		} else {
+			props[k] = str(desc)
 		}
-		out = append(out, map[string]any{"name": "sess_" + kind, "description": desc, "inputSchema": schema(p, req...)})
 	}
-	out = append(out, map[string]any{"name": "sess_list", "description": "List sessions; detects disconnects. Reconnect with sess_connect when connected=false.", "inputSchema": schema(map[string]any{})}, map[string]any{"name": "sess_close", "description": "Close and release session without returning terminal output; read first if needed. Normal close is not an error. Includes blocked operations. Does not wait for the session operation lock.", "inputSchema": schema(map[string]any{"session": str("Session handle")}, "session")})
+	return schema(props)
+}
+
+var definitions = buildDefinitions()
+
+func buildDefinitions() map[string]map[string]any {
+	defs := map[string]map[string]any{}
+	add := func(name, desc string, p map[string]any, required ...string) {
+		defs[name] = map[string]any{"name": name, "description": desc, "inputSchema": schema(p, required...)}
+	}
+	session := func() map[string]any {
+		return map[string]any{"session": str("Short handle returned by sess_connect, e.g. s1. Always target an explicit session.")}
+	}
+	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "host": str("Hostname or IP; IPv6 without brackets"), "port": integerSchema("TCP port", 1, 65535), "username": str("SSH username"), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("Local SSH private key path"), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Local known_hosts path"), "host_key": str("Pinned SHA256 SSH host-key fingerprint"), "insecure": map[string]any{"type": "boolean", "description": "Explicitly skip SSH host verification"}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec; choose stream for device consoles. Telnet always stream."}, "config": configSchema(false)}
+	add("sess_connect", "Create a persistent connection and short handle; no terminal output consumed. SSH exec has exit status; stream is bidirectional with no input/output attribution. No reconnect/replay. Telnet is plaintext.", connect, "protocol", "host", "port")
+	p := session()
+	p["config"] = configSchema(false)
+	add("sess_configure", "Atomically patch session settings; omitted fields unchanged. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
+	add("sess_get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
+	add("sess_list", "List process-local sessions and transport/exec state.", map[string]any{})
+	add("sess_close", "Discard this connection and all buffers. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
+	add("sess_close_all", "Discard every connection and buffer. No terminal output returned.", map[string]any{})
+	for _, kind := range []string{"exec", "send_raw", "send_escaped", "sendline_raw", "sendline_escaped", "read_available", "read_until", "read_tail", "read_all"} {
+		p := session()
+		p["config"] = configSchema(true)
+		desc := ""
+		required := []string{"session"}
+		switch kind {
+		case "exec":
+			p["command"] = str("One SSH exec command; shell state does not persist across commands.")
+			required = append(required, "command")
+			desc = "SSH mode=exec only. Complete on protocol exit status, never on guessed markers. Missing exit status means unknown outcome. Read remaining output without replaying the command."
+		case "send_raw", "sendline_raw":
+			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
+			required = append(required, "data")
+			desc = "Stream only. Encode text and write with bounded deadline; sendline appends line_end. Optional collection observes the unread stream, not output attributed to this input. Never replay sent/unknown input on empty output."
+		case "send_escaped", "sendline_escaped":
+			p["data"] = str(`Visible escape text decoded exactly once AFTER JSON decoding. \0 \r \n \t and \xNN are bytes; \uNNNN/\UNNNNNNNN and ordinary Unicode use configured encoding. JSON {"data":"\\x03"} sends Ctrl-C. \\ sends literal backslash. Invalid escapes reject before writing. sendline appends line_end.`)
+			required = append(required, "data")
+			desc = "Stream only. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once."
+		case "read_available":
+			desc = "Immediately consume currently available unread output, bounded by max_output_bytes; never wait. A partial encoded character remains unread until completed."
+		case "read_until":
+			desc = "Consume unread and future output until match, total_timeout, idle_timeout, aborted, cancelled, output_limit, closed or SSH exec_finish. Default total 30000ms, idle 500ms; timeouts preserve connection. Pattern match consumes only through match."
+		case "read_tail":
+			p["lines"] = integerSchema("Last N retained lines; default 20; does not move incremental cursor.", 1, 100000)
+			desc = "Read last N retained lines immediately, bounded by output budget. Raw offsets allow paging with read_all; no cursor change."
+		case "read_all":
+			p["offset"] = integerSchema("Absolute raw byte offset; default retained start. Use returned end to page; does not move incremental cursor.", 0, 1<<53)
+			desc = "Read retained history immediately, bounded by output budget, not future output. Dropped bytes are reported. Page with offset=end."
+		}
+		if kind == "exec" || strings.HasPrefix(kind, "send") {
+			p["collect_output"] = map[string]any{"type": "boolean", "default": true, "description": "Default true: after writing collect with read_until. False returns only a send receipt. Per-call config never changes session settings."}
+		}
+		add("sess_"+kind, desc, p, required...)
+	}
+	return defs
+}
+func Tools() []any {
+	order := []string{"sess_connect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_send_raw", "sess_send_escaped", "sess_sendline_raw", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_all", "sess_close", "sess_close_all"}
+	out := make([]any, 0, len(order))
+	for _, name := range order {
+		out = append(out, definitions[name])
+	}
 	return out
 }
 
@@ -340,7 +428,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "sessmcp", "version": buildinfo.String()}, "instructions": "Prefer sess_exec for standard SSH. Device consoles: interactive=true, sess_interact with line (SSH CR) or key, optional input_id and waitfor/timeout. Empty output never means unsent. Calls are bounded; unused sessions default to 30min. sess_close returns no terminal output. Never blindly replay commands."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "sessmcp", "version": buildinfo.String()}, "instructions": "Use SSH mode=exec for commands; mode=stream for consoles. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: total 30000ms, idle 500ms, output 8192 bytes. Configure session or override config per operation. Never replay sent/unknown inputs. close discards buffers."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

@@ -1,124 +1,121 @@
 ---
 name: sessmcp
-description: Operate persistent SSH/Telnet sessions through sessmcp, including device consoles, incremental reads, input receipts and retry deduplication.
+description: Operate persistent SSH exec or SSH/Telnet console streams through sessmcp 0.3, with encoded text, explicit byte escapes, bounded reads and session configuration.
 ---
 
-# sessmcp MCP operating skill
+# sessmcp 0.3 operating skill
 
-Configure an MCP stdio server with executable `sessmcp`, args `["serve"]`.
-Audit: `["serve", "--log", "/private/path/audit.jsonl"]`. Authentication fields are redacted;
-commands, line and data may still contain secrets.
+Start MCP stdio with `sessmcp serve`. Use `sessmcp version` or MCP initialize to check the
+build identity; the 0.3 API replaces sess_interact/sess_read and old wait/input_id parameters.
+Optional audit: `serve --log /private/path/audit.jsonl`. Authentication fields are redacted;
+commands and send data are recorded and can contain secrets. Never enable insecure SSH host
+verification without explicit user intent.
 
-## Choose the mode before sending commands
+## Connect and configure
 
-- Ordinary SSH server: `sess_connect` with interactive=false (default), then `sess_exec`.
-  Supply protocol, address (host:port), SSH user, password/key_file and known_hosts/host_key.
-  Use insecure=true only with explicit user intent to skip host-key verification.
-  Each exec uses a new channel over the persistent transport; cwd/environment do not persist.
-- Switch/router CLI, including Huawei-style consoles: connect with interactive=true, then
-  `sess_interact`. Do not probe by executing the same command first in exec and then in a shell.
-- Telnet is always interactive. Login by matching Username/Password prompts and sending one field
-  at a time; never guess or automatically replay the device's authentication flow.
-
-## Send one logical command, then read its result
-
-Prefer `line` without newline characters for a single console command:
+`sess_connect` requires protocol, host and port. SSH takes username and password/keyfile,
+plus known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
+consoles. Telnet only supports stream and is plaintext. Always use the actual short session
+handle returned (s1, s2, ...); do not select a session implicitly. IDs are not reused in-process.
+Connect returns no terminal output and does not consume the greeting.
 
 ```json
-{"session":"s1","line":"display version","input_id":"inspect-version-1","waitfor":"(?m)(<[^>\r\n]+>|\\[[^\r\n]*\\])\\s*$","wait":"30s"}
+{"protocol":"telnet","host":"switch.example","port":23,"config":{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000}}
 ```
 
-`line` appends the selected Enter exactly once: SSH defaults to CR, Telnet defaults to CRLF.
-Set enter="cr"/"lf"/"crlf" only when the device requires it. Some consoles treat CR and LF as
-separate Enters; CRLF can then trigger an empty-line replay. SSH devices should start with CR.
-Do not add CR/LF to line; it rejects embedded line breaks. `line` and raw `data` are exclusive.
-Use key="enter"/"ctrl_c"/"ctrl_d"/"ctrl_z"/"esc"/"tab" for control keys, exclusive with
-line/data/data_escaped/enter. key=enter and line="" send SSH CR or Telnet CRLF. Use raw data for
-pagination (a single space) or deliberate byte sequences;
-raw data is never normalized or given an extra newline. JSON escapes must represent real control
-characters, e.g. data="diagnose\r"; do not send literal backslash-r. JSON "\u0003" is Ctrl-C;
-"\\r" and "&#13;" stay literal. JSON does not allow \xNN; no extra escape decoding occurs.
+`sess_configure(session, config)` atomically updates only supplied fields. `sess_get_config`
+returns effective values, descriptions, units and capabilities, without credentials. All send,
+exec and read tools accept a config object for that call only; active operations retain their
+snapshot. connect_timeout_ms, session_idle_timeout_ms and tcp_keepalive_ms cannot be overridden
+per operation. Changing connect_timeout on an established session only stores the value; explicitly reuse
+that config on a new connect.
 
-For visible escape text transported by an XML/JSON agent, prefer data_escaped. sessmcp decodes
-one explicit escape layer AFTER JSON decoding, independent of the agent's presentation format.
-Example: visible \r in the parameter is JSON {"data_escaped":"\\r"} and sends byte 0D;
-visible \x03 is JSON {"data_escaped":"\\x03"} and sends Ctrl-C. It also supports \n, \t,
-\\, escaped quotes, \uNNNN, \UNNNNNNNN and Go octal escapes. Ordinary quotes remain literal.
-To send literal backslash-r, supply visible \\r (JSON {"data_escaped":"\\\\r"}).
-Do not pre-decode repeatedly: decoding happens exactly once. Unknown/incomplete escapes reject
-before any bytes are sent; HTML entities remain literal. data_escaped is exclusive with
-line/data/key/enter. Input limits, receipts and deduplication use DECODED bytes. Auditing still
-records input text, including secrets in data_escaped, just like raw data.
+Defaults: read total 30000ms; read idle 500ms; connect/write 10000ms; unused session 1800000ms;
+TCP keepalive 15000ms; max input 4096 bytes; max output 8192 bytes; encoding utf-8; end_pattern
+empty (disabled). Idle read/session timeout and keepalive accept 0 to disable; total read must
+be 1..110000ms. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
+strings such as "30*60*1000", without function calls or arbitrary evaluation.
 
-input_id is optional. When using it, assign one ID per logical command and keep it on retries. Within a
-session's last 128 distinct IDs, the server rejects changed input under an old ID and suppresses
-retransmission of the same input, even after an uncertain send. input_id is optional and distinct
-from JSON-RPC request id. Deduplication does not survive eviction, reconnect or process restart.
-Without input_id, two identical calls remain two intentional sends; do not repeat on empty output.
+## Choose exec or stream
 
-Read the receipt before deciding what to do next:
+- `sess_exec(session, command, config?)`: SSH mode=exec only. Uses a fresh SSH channel on the
+  persistent transport; shell cwd/variables do not persist. Combined stdout/stderr and protocol
+  exit status determine completion, never text markers. If running=true, read the existing
+  operation; do not resubmit. Missing exit status is an unknown outcome with warning and no
+  exit_code; transport remains usable. exec_finish means channel completion, not success.
+- Stream send tools: send_raw, send_escaped, sendline_raw, sendline_escaped (all prefixed sess_).
+  They write with bounded deadlines, then collect unread output by default. Set
+  collect_output=false to return only a send receipt, e.g. when another call is already reading.
+  The observed stream is NOT attributed to the latest input. No input IDs or automatic replay.
 
-| input_state | Meaning | Action |
-|---|---|---|
-| sent | Transport accepted input; device completion is not implied | Read output, then sess_read if needed |
-| not_sent | Busy or input size limit rejected this input before sending | Wait for the active call, or reduce input/configure max_input_bytes |
-| unknown | Send failed/timed out and may have partially executed | Inspect remote state before another input |
-| duplicate | Existing input_id was recognized; no new input was sent | Inspect output; poll sess_read |
-| none | This call sent no input (read/list/connect) | input_seq refers to the latest session input |
+`send_raw` encodes literal Unicode text with encoding; it does not parse escapes or append bytes.
+`send_escaped` decodes ONE visible escape layer after JSON decoding: \0 \r \n \t \xNN produce
+bytes, ordinary Unicode and \uNNNN/\UNNNNNNNN use encoding. \\ produces a literal backslash;
+Go three-digit octal escapes are also accepted. Unknown/incomplete escapes reject before writing.
+HTML entities remain literal. Unencodable input rejects the entire operation, never partial text.
 
-input_seq identifies the send attempt; input_bytes is its intended byte count, not a confirmed
-remote-execution count. When next_action="sess_read", call sess_read without command/line/data/key.
-On busy with retry_same_input=true, wait for the active call (wait_current_call) or SSH command
-to finish, then retry the same rejected input/ID. A not_sent ID was not registered.
-Interactive running=true is advisory, not a requirement to read before sending another input.
-**An empty output or reason=wait/timeout is never evidence that a command was not executed.**
-For SSH exec, running=true means the original command is still active: poll, never resubmit.
-If reason=exit_status_missing, the SSH channel closed without exit status. Preserve and inspect
-its output; success is unknown. The transport is retained unless actually disconnected. For future
-network-device commands use an interactive connection, without automatically replaying this command.
+| JSON arguments for an escaped send | Wire bytes |
+|---|---|
+| `{"session":"s1","data":"\\r"}` | CR (0D) |
+| `{"session":"s1","data":"\\x03"}` | Ctrl-C (03) |
+| `{"session":"s1","data":"\\0"}` | NUL (00) |
+| `{"session":"s1","data":"\\\\r"}` | literal backslash + r |
 
-## Waits, prompts and history
+This explicit layer supports XML/JSON agent carriers; do not repeatedly pre-decode strings.
+Raw and escaped sendline append configured line_end exactly once, even if input already has an
+ending. Empty data is allowed. line_end is visible escape text decoded at configuration time
+as UTF-8 plus byte escapes: SSH defaults \r, Telnet \r\n. Use raw send for pager space, Tab,
+or controls that must not append an Enter. Never silently change raw bytes to repair CRLF.
 
-wait is fixed time from invocation (default 5s), timeout is output silence, waitfor is Go RE2 regex.
-These conditions and SSH completion are OR. Set wait explicitly when 5s is too short; duration
-examples: 100ms, 30s, 1min. Calls are capped at 115s; active-operation output silence for 110s disconnects.
-For an interactive call, the 110s clock starts at call start or last output, whichever is later.
-SSH exec silence protection continues between polls; reads do not reset it.
-Unused sessions default to 30min since the last operation; idle_timeout on connect changes this
-lifetime, "0" disables reclamation. Long reasoning/approval without calls does not use the 110s
-console deadline. Sending input does not refresh output silence; timeout cannot trigger before
-its duration from the current call start.
-A waitfor match is only as reliable as the pattern. Huawei-style prompts may contain ~ or * and
-change between <host>, [~host], [*host] and nested views. Match an observed full prompt, not a guessed
-mode name or arbitrary command echo. Device command names vary; use device help rather than guessing.
-Polling matches unread output, including bytes arriving between calls; input calls match new output.
-waitfor does not match tool reason/error fields; disconnects end waiting automatically.
+```json
+{"session":"s1","data":"display version","config":{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$"}}
+```
 
-Results are incremental and share one per-session cursor. For retained history use all=true,
-tail=N, or offset=end to page. All three run tools accept max_output_bytes: default 8192,
-maximum 65536, 0 uses default. History is at most 1MiB. Inspect more,
-truncated and retained_from. Explicit all/tail/offset do not move the default cursor.
+Use the above with sess_sendline_raw. Supply an observed prompt regex, not a guessed vendor
+mode. Adjust to [~host], [*host], or nested views when observed; a pattern match does not prove
+command success. Use a pager's observed pattern and sess_send_raw data=" " for the next page.
+Do not automatically commit/save/discard configurations or answer confirmation questions.
 
-Session handles are short process-local IDs (s1, s2), never reused until restart.
-Input defaults to 4096 bytes including Enter; set max_input_bytes on connect (0 uses default, up to 1MiB).
-Use the handle actually returned by sess_connect; restart requires a new connection and handle.
-After a complete Write, new input is permitted without output or a prompt. Write completion
-means transport acceptance, not an empty TCP send queue, peer receipt, or remote execution.
-There is no OS-specific TCP-full query: Write waits for capacity when needed.
-TCP/SSH flow control blocks writes on Linux
-and Windows; write timeout is at most 10s and bounded by wait from call start. Timeout or
-cancellation during a write closes the connection with unknown input state. Concurrent
-same-session calls return busy without queuing. Output backlog is reported independently.
-Do not replay a sent/unknown input merely because output is empty.
+Read input_state before retrying: sent means transport accepted input; not_sent means no new
+input was written; unknown means partial execution is possible. written_bytes is a confirmed
+lower bound when unknown, not evidence of zero delivery. Never replay sent/unknown input merely
+because output is empty. Timeout or cancellation during a write closes transport; cancellation
+during collection only stops the read. One writer and one reader may run concurrently; contention
+within either direction is busy and does not queue input.
 
-SSH and Telnet explicitly enable TCP keepalive with a 15s period through the Go 1.22 API.
-Actual probe/failure timing depends on the OS. Probes do not send console input, prove command
-completion, or refresh the 110s endpoint output-silence clock.
+## Read and manage output
 
-Use sess_list to inspect connections, sess_close to release them or abort a blocked connection.
-Close returns no terminal output and normal closure is not an error; read first if output matters.
-CLI version and MCP initialize expose 0.2.0 plus build identity; check it when old behavior appears.
-Cancellation stops waiting, not the remote command. On connected=false, reconnect and inspect state
-before retrying side effects. Maximum 32 sessions and 32 tool workers. Across-session waits are
-concurrent; same-session contention returns busy. A non-reading stdout consumer causes the server
-to exit after 3s instead of deadlocking. Restarting requires new remote connections.
+- sess_read_available: immediate unread data, no waiting.
+- sess_read_until: unread plus future data, until the first end condition.
+- sess_read_tail(lines=20): last retained lines; bounded and does not move incremental cursor.
+- sess_read_all(offset?): retained history, not all future output; no cursor change. Page with
+  offset=end. Neither historical read waits for more bytes.
+
+End reasons: exec_finish (exec only), match, total_timeout, idle_timeout, aborted, cancelled,
+output_limit, closed. Immediate reads need no reason when current data is exhausted. Total
+clock starts at read invocation; idle starts then and resets on endpoint bytes. Timeouts leave
+connections open. end_pattern matches DECODED unread output, including bytes received before
+this send; it does not match reason/error fields. Match consumes only through the match, leaving
+later output unread. Never infer input/output pairing or successful execution from it.
+
+Read output is valid UTF-8, without implicit ANSI stripping or EOL normalization. Supported
+encodings: utf-8, gbk, shift-jis. Incomplete multibyte characters remain unread until completed;
+closed streams/history finalize them under output_decode_error_action. Invalid bytes default
+to visible \xNN; to_hex renders <NN>; error reports aborted and leaves the offending byte unread.
+A decode error does not itself close transport. Override policy to inspect retained data.
+
+max_output_bytes is 1..65536 UTF-8 display bytes, including escaped invalid-byte text. more=true
+means unread bytes remain; use incremental read or read_all offset=end. start/end are RAW byte
+offsets, independent of encoding. dropped_bytes reports overwritten history (retention 1MiB).
+If minimum_output_bytes is returned, increase output budget to fit the next whole character.
+
+backpressure_bytes=0 disables the optional OS queue threshold. Linux supports SIOCOUTQ queued
+bytes (including unacknowledged bytes, entire encrypted transport for SSH); Windows explicitly
+rejects a nonzero threshold. Check get_config capabilities. Both platforms still have bounded
+writes and SSH flow control. TCP acceptance/queue drain is not remote command completion.
+
+Use sess_list to inspect state. sess_close discards one session and all buffers; sess_close_all
+discards every session. Neither returns terminal output; subsequent reads fail. Read first if
+output matters. Unused sessions reclaim automatically after session_idle_timeout_ms; remote
+closure may happen earlier. A running SSH exec has a separate 110s no-output watchdog. If
+connected=false, reconnect with sess_connect and inspect remote state before retrying side effects.

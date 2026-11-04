@@ -41,10 +41,11 @@ func NewConn(c net.Conn, writeTimeout time.Duration) *Conn {
 	}
 	return &Conn{Conn: c, reader: bufio.NewReaderSize(c, 4096), writeTimeout: writeTimeout}
 }
-func (c *Conn) writeRaw(p []byte) (int, error) {
+func (c *Conn) writeRaw(p []byte) (int, error) { return c.writeRawTimeout(p, c.writeTimeout) }
+func (c *Conn) writeRawTimeout(p []byte, timeout time.Duration) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if e := c.Conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); e != nil {
+	if e := c.Conn.SetWriteDeadline(time.Now().Add(timeout)); e != nil {
 		return 0, e
 	}
 	defer c.Conn.SetWriteDeadline(time.Time{})
@@ -61,7 +62,10 @@ func (c *Conn) writeRaw(p []byte) (int, error) {
 	}
 	return total, nil
 }
-func (c *Conn) Write(p []byte) (int, error) {
+func (c *Conn) Write(p []byte) (int, error) { return c.WriteWithTimeout(p, c.writeTimeout) }
+
+// WriteWithTimeout snapshots the operation timeout without changing negotiation settings.
+func (c *Conn) WriteWithTimeout(p []byte, timeout time.Duration) (int, error) {
 	// Keep memory bounded even for callers other than sessmcp's input limiter.
 	consumed := 0
 	for len(p) > 0 {
@@ -77,7 +81,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 				encoded = append(encoded, b)
 			}
 		}
-		n, e := c.writeRaw(encoded)
+		n, e := c.writeRawTimeout(encoded, timeout)
 		if e != nil { // Report original bytes represented by completely written encodings.
 			for _, b := range chunk {
 				width := 1
