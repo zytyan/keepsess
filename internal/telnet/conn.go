@@ -66,7 +66,7 @@ func (c *Conn) Write(p []byte) (int, error) { return c.WriteWithTimeout(p, c.wri
 
 // WriteWithTimeout snapshots the operation timeout without changing negotiation settings.
 func (c *Conn) WriteWithTimeout(p []byte, timeout time.Duration) (int, error) {
-	// Keep memory bounded even for callers other than sessmcp's input limiter.
+	// Keep memory bounded even for callers other than keepsess's input limiter.
 	consumed := 0
 	for len(p) > 0 {
 		size := len(p)

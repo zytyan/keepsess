@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zytyan/sessmcp/internal/testutil"
+	"github.com/zytyan/keepsess/internal/testutil"
 )
 
 func manager(t *testing.T) *Manager { t.Helper(); m := NewManager(); t.Cleanup(m.CloseAll); return m }

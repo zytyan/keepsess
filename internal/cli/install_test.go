@@ -34,10 +34,10 @@ func TestInstallJSONPreservesCommentsServersAndArguments(t *testing.T) {
  "inputs": [{"id":"token","type":"promptString"}],
  "servers": {
    "other": {"type":"http","url":"https://example.invalid/mcp"},
-   "sessmcp": {"command":"/old/sessmcp","args":["serve","--log","/private/audit.jsonl"],"env":{"KEEP":"yes"},"disabled":true},
+   "keepsess": {"command":"/old/keepsess","args":["serve","--log","/private/audit.jsonl"],"env":{"KEEP":"yes"},"disabled":true},
  },
 }`)
-	next, err := installJSON(original, "vscode", "/new path/sessmcp")
+	next, err := installJSON(original, "vscode", "/new path/keepsess")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,27 +46,27 @@ func TestInstallJSONPreservesCommentsServersAndArguments(t *testing.T) {
 	}
 	root := plainJSON(t, next)
 	servers := root["servers"].(map[string]any)
-	server := servers["sessmcp"].(map[string]any)
-	if server["command"] != "/new path/sessmcp" || server["type"] != "stdio" || server["disabled"] != true || server["env"].(map[string]any)["KEEP"] != "yes" || len(server["args"].([]any)) != 3 || servers["other"] == nil || root["inputs"] == nil {
+	server := servers["keepsess"].(map[string]any)
+	if server["command"] != "/new path/keepsess" || server["type"] != "stdio" || server["disabled"] != true || server["env"].(map[string]any)["KEEP"] != "yes" || len(server["args"].([]any)) != 3 || servers["other"] == nil || root["inputs"] == nil {
 		t.Fatal(root)
 	}
-	again, err := installJSON(next, "vscode", "/new path/sessmcp")
+	again, err := installJSON(next, "vscode", "/new path/keepsess")
 	if err != nil || !bytes.Equal(next, again) {
 		t.Fatal("not idempotent", err)
 	}
-	for _, bad := range []string{`[]`, `{"mcpServers":null}`, `{"mcpServers":{"sessmcp":{"command":"other","args":["serve"]}}}`, `{"a":1,"a":2}`, `{"mcpServers":`} {
-		if _, err = installJSON([]byte(bad), "json", "/bin/sessmcp"); err == nil {
+	for _, bad := range []string{`[]`, `{"mcpServers":null}`, `{"mcpServers":{"keepsess":{"command":"other","args":["serve"]}}}`, `{"a":1,"a":2}`, `{"mcpServers":`} {
+		if _, err = installJSON([]byte(bad), "json", "/bin/keepsess"); err == nil {
 			t.Fatal("invalid/conflicting config accepted", bad)
 		}
 	}
 }
 func TestInstallTOMLPreservesAllOtherBytes(t *testing.T) {
-	original := []byte("# top comment\nmodel = 'example'\ntext = '''\n[fake.table]\ncommand = 'not really a command'\n'''\n[mcp_servers.other]\ncommand = 'other-server'\n[mcp_servers.\"sessmcp\"]\ncommand = '/old/sessmcp' # keep inline comment\nargs = ['serve', '--log', '/private/audit.jsonl']\nenabled = false\n[mcp_servers.sessmcp.env]\nKEEP = 'secret'\n[projects.'a.b']\ntrust_level = 'trusted'\n")
-	next, err := installTOML(original, `C:\Program Files\sessmcp\sessmcp.exe`)
+	original := []byte("# top comment\nmodel = 'example'\ntext = '''\n[fake.table]\ncommand = 'not really a command'\n'''\n[mcp_servers.other]\ncommand = 'other-server'\n[mcp_servers.\"keepsess\"]\ncommand = '/old/keepsess' # keep inline comment\nargs = ['serve', '--log', '/private/audit.jsonl']\nenabled = false\n[mcp_servers.keepsess.env]\nKEEP = 'secret'\n[projects.'a.b']\ntrust_level = 'trusted'\n")
+	next, err := installTOML(original, `C:\Program Files\keepsess\keepsess.exe`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCommand := []byte("'/old/sessmcp'")
+	oldCommand := []byte("'/old/keepsess'")
 	parts := bytes.SplitN(original, oldCommand, 2)
 	if !bytes.HasPrefix(next, parts[0]) || !bytes.HasSuffix(next, parts[1]) {
 		t.Fatal("changed unrelated TOML bytes", string(next))
@@ -75,30 +75,30 @@ func TestInstallTOMLPreservesAllOtherBytes(t *testing.T) {
 	if err = toml.Unmarshal(next, &root); err != nil {
 		t.Fatal(err)
 	}
-	entry := root["mcp_servers"].(map[string]any)["sessmcp"].(map[string]any)
-	if entry["command"] != `C:\Program Files\sessmcp\sessmcp.exe` || entry["enabled"] != false || entry["env"].(map[string]any)["KEEP"] != "secret" {
+	entry := root["mcp_servers"].(map[string]any)["keepsess"].(map[string]any)
+	if entry["command"] != `C:\Program Files\keepsess\keepsess.exe` || entry["enabled"] != false || entry["env"].(map[string]any)["KEEP"] != "secret" {
 		t.Fatal(root)
 	}
-	again, err := installTOML(next, `C:\Program Files\sessmcp\sessmcp.exe`)
+	again, err := installTOML(next, `C:\Program Files\keepsess\keepsess.exe`)
 	if err != nil || !bytes.Equal(again, next) {
 		t.Fatal("not idempotent", err)
 	}
-	fresh, err := installTOML([]byte("# preserve\nmodel='example'\n"), "/new/sessmcp")
+	fresh, err := installTOML([]byte("# preserve\nmodel='example'\n"), "/new/keepsess")
 	if err != nil || !bytes.HasPrefix(fresh, []byte("# preserve\nmodel='example'\n")) {
 		t.Fatal(string(fresh), err)
 	}
 	if err = toml.Unmarshal(fresh, &root); err != nil {
 		t.Fatal(err)
 	}
-	entry = root["mcp_servers"].(map[string]any)["sessmcp"].(map[string]any)
+	entry = root["mcp_servers"].(map[string]any)["keepsess"].(map[string]any)
 	if entry["tool_timeout_sec"] != int64(120) {
 		t.Fatal(entry)
 	}
-	inline := []byte(`mcp_servers = { sessmcp = { command = '/old/sessmcp', args = ['serve'] } }`)
-	if _, err = installTOML(inline, "/new/sessmcp"); err != nil {
+	inline := []byte(`mcp_servers = { keepsess = { command = '/old/keepsess', args = ['serve'] } }`)
+	if _, err = installTOML(inline, "/new/keepsess"); err != nil {
 		t.Fatal("inline existing entry", err)
 	}
-	if _, err = installTOML([]byte("[mcp_servers.sessmcp]\ncommand='other'\nargs=['serve']\n"), "/new/sessmcp"); err == nil {
+	if _, err = installTOML([]byte("[mcp_servers.keepsess]\ncommand='other'\nargs=['serve']\n"), "/new/keepsess"); err == nil {
 		t.Fatal("collision overwritten")
 	}
 }
@@ -154,7 +154,7 @@ func TestInstallerCopiesBinarySkillAndConfigIdempotently(t *testing.T) {
 			if !strings.Contains(out.String(), "Backup:") {
 				t.Fatal("missing backup")
 			}
-			backups, _ := filepath.Glob(file + ".sessmcp-backup-*")
+			backups, _ := filepath.Glob(file + ".keepsess-backup-*")
 			if len(backups) != 1 {
 				t.Fatal(backups)
 			}
@@ -192,7 +192,7 @@ func TestInstallerDryRunAndConflictWriteNothing(t *testing.T) {
 		t.Fatal("dry-run created files", err)
 	}
 	file = filepath.Join(root, ".mcp.json")
-	original := []byte(`{"mcpServers":{"sessmcp":{"command":"other","args":[]}}}`)
+	original := []byte(`{"mcpServers":{"keepsess":{"command":"other","args":[]}}}`)
 	_ = os.WriteFile(file, original, 0600)
 	if err := installAt(installOptions{client: "auto", file: file}, source, &out); err == nil {
 		t.Fatal("collision not rejected")
@@ -201,7 +201,7 @@ func TestInstallerDryRunAndConflictWriteNothing(t *testing.T) {
 	if !bytes.Equal(b, original) {
 		t.Fatal("collision changed config")
 	}
-	if _, err := os.Stat(filepath.Join(root, ".sessmcp")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, ".keepsess")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("collision created managed files")
 	}
 }
@@ -237,7 +237,7 @@ func TestInstallAutoFormatAndFlagOrder(t *testing.T) {
 		t.Fatal(paths, err)
 	}
 	paths, err = resolveInstall(installOptions{client: "auto", file: filepath.Join(root, ".codex", "config.toml")}, "hash")
-	if err != nil || paths.client != "codex" || paths.skill != filepath.Join(root, ".agents", "skills", "sessmcp", "SKILL.md") {
+	if err != nil || paths.client != "codex" || paths.skill != filepath.Join(root, ".agents", "skills", "keepsess", "SKILL.md") {
 		t.Fatal(paths, err)
 	}
 	for _, args := range [][]string{{"install", file, "--client", "vscode", "--dry-run"}, {"install", "--client=vscode", "--dry-run", file}} {

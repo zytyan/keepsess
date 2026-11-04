@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zytyan/sessmcp/internal/buildinfo"
-	"github.com/zytyan/sessmcp/internal/core"
+	"github.com/zytyan/keepsess/internal/buildinfo"
+	"github.com/zytyan/keepsess/internal/core"
 )
 
 const MaxInflight = 32
@@ -428,7 +428,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "sessmcp", "version": buildinfo.String()}, "instructions": "Use SSH mode=exec for commands; mode=stream for consoles. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: total 30000ms, idle 500ms, output 8192 bytes. Configure session or override config per operation. Never replay sent/unknown inputs. close discards buffers."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use SSH mode=exec for commands; mode=stream for consoles. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: total 30000ms, idle 500ms, output 8192 bytes. Configure session or override config per operation. Never replay sent/unknown inputs. close discards buffers."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

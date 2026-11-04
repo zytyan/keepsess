@@ -1,12 +1,12 @@
 /dist/
 /publish/
-/sessmcp-skill/
+/keepsess-skill/
 *.log
 *.jsonl
 *.pem
 *.key
 .env
 
-/.sessmcp/
-*.sessmcp-backup-*
-*.sessmcp-install.lock
+/.keepsess/
+*.keepsess-backup-*
+*.keepsess-install.lock

@@ -7,6 +7,6 @@ for target in linux/amd64 linux/arm64 windows/amd64; do
   target_arch=${target#*/}
   suffix=
   if [ "$target_os" = windows ]; then suffix=.exe; fi
-  CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -buildvcs=false -trimpath -ldflags="-s -w -X github.com/zytyan/sessmcp/internal/buildinfo.Revision=$build_revision" -o "dist/sessmcp-$target_os-$target_arch$suffix" ./cmd/sessmcp
+  CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -buildvcs=false -trimpath -ldflags="-s -w -X github.com/zytyan/keepsess/internal/buildinfo.Revision=$build_revision" -o "dist/keepsess-$target_os-$target_arch$suffix" ./cmd/keepsess
 done
-(cd dist && sha256sum sessmcp-* > SHA256SUMS)
+(cd dist && sha256sum keepsess-* > SHA256SUMS)

@@ -36,7 +36,7 @@ func installCommand(args []string, out, errout io.Writer) error {
 	flags.SetOutput(errout)
 	var opts installOptions
 	flags.StringVar(&opts.client, "client", "auto", "auto, claude, cursor, vscode, codex or json")
-	flags.StringVar(&opts.dir, "dir", "", "Managed binary directory (default project/.sessmcp)")
+	flags.StringVar(&opts.dir, "dir", "", "Managed binary directory (default project/.keepsess)")
 	flags.StringVar(&opts.skillDir, "skill-dir", "", "Skill destination directory; defaults to client skill location")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "Print destinations without writing any files")
 	// Permit the positional file before or after flags, matching install [file].
@@ -142,7 +142,7 @@ func resolveInstall(opts installOptions, sourceHash string) (installPaths, error
 	}
 	dir := opts.dir
 	if dir == "" {
-		dir = filepath.Join(root, ".sessmcp")
+		dir = filepath.Join(root, ".keepsess")
 	}
 	dir, err = installAbs(dir)
 	if err != nil {
@@ -152,20 +152,20 @@ func resolveInstall(opts installOptions, sourceHash string) (installPaths, error
 	if skillDir == "" {
 		switch client {
 		case "claude":
-			skillDir = filepath.Join(root, ".claude", "skills", "sessmcp")
+			skillDir = filepath.Join(root, ".claude", "skills", "keepsess")
 		case "cursor":
-			skillDir = filepath.Join(root, ".cursor", "skills", "sessmcp")
+			skillDir = filepath.Join(root, ".cursor", "skills", "keepsess")
 		case "vscode":
-			skillDir = filepath.Join(root, ".github", "skills", "sessmcp")
+			skillDir = filepath.Join(root, ".github", "skills", "keepsess")
 		default:
-			skillDir = filepath.Join(root, ".agents", "skills", "sessmcp")
+			skillDir = filepath.Join(root, ".agents", "skills", "keepsess")
 		}
 	}
 	skillDir, err = installAbs(skillDir)
 	if err != nil {
 		return installPaths{}, err
 	}
-	executable := "sessmcp"
+	executable := "keepsess"
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
 	}
@@ -245,7 +245,7 @@ func installAt(opts installOptions, source string, out io.Writer) error {
 	if err = os.MkdirAll(filepath.Dir(paths.config), 0755); err != nil {
 		return err
 	}
-	lockPath := paths.config + ".sessmcp-install.lock"
+	lockPath := paths.config + ".keepsess-install.lock"
 	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("cannot acquire installation lock %s: %w", lockPath, err)
@@ -266,7 +266,7 @@ func installAt(opts installOptions, source string, out io.Writer) error {
 	if err = commitInstall(files, atomicInstallWrite); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "Installed sessmcp for %s.\nConfig: %s\nExecutable: %s\nSkill: %s\n", paths.client, paths.config, paths.binary, paths.skill)
+	_, err = fmt.Fprintf(out, "Installed keepsess for %s.\nConfig: %s\nExecutable: %s\nSkill: %s\n", paths.client, paths.config, paths.binary, paths.skill)
 	if err != nil {
 		return err
 	}
@@ -290,7 +290,7 @@ func commitInstall(files []installFile, write func(string, []byte, os.FileMode) 
 			if err := os.MkdirAll(filepath.Dir(f.path), 0755); err != nil {
 				return err
 			}
-			backup, err := os.CreateTemp(filepath.Dir(f.path), filepath.Base(f.path)+".sessmcp-backup-*")
+			backup, err := os.CreateTemp(filepath.Dir(f.path), filepath.Base(f.path)+".keepsess-backup-*")
 			if err != nil {
 				return err
 			}
@@ -342,7 +342,7 @@ func atomicInstallWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".sessmcp-install-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".keepsess-install-*")
 	if err != nil {
 		return err
 	}

@@ -1,3 +1,11 @@
+# 0.3.2 keepsess 命名统一
+
+程序入口 cmd/keepsess、Go module github.com/zytyan/keepsess、MCP serverInfo.name、注册项 keepsess、skills/keepsess、安装目录 .keepsess、三平台产物和仓库引用统一改名。按用户要求不实现旧安装器配置迁移；15 个 sess_* 工具名与短句柄保持原语义。
+
+Go 1.22.1 全量 race、go vet、skill 校验及 CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 构建通过。四客户端真实安装端到端通过：注册项、程序路径和 skill 全部为 keepsess，删除原下载后仍可 initialize（serverInfo.name=keepsess）并发现原有 15 个 sess_* 工具。Windows/ARM64 未运行实测。
+
+---
+
 # 0.3.1 安装器验证
 
 - 覆盖 Claude Code / Cursor 的 mcpServers JSON、VS Code servers JSONC、Codex mcp_servers TOML。

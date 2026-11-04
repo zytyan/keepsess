@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zytyan/sessmcp/internal/core"
-	"github.com/zytyan/sessmcp/internal/testutil"
+	"github.com/zytyan/keepsess/internal/core"
+	"github.com/zytyan/keepsess/internal/testutil"
 )
 
 type client struct {
@@ -121,7 +121,10 @@ func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	c := harness(t)
 	c.send(t, "init", "initialize", map[string]any{"protocolVersion": "2025-11-25"})
 	v := c.receive(t, "init", time.Second)
-	if !strings.HasPrefix(v["result"].(map[string]any)["serverInfo"].(map[string]any)["version"].(string), "0.3.1+") {
+	if v["result"].(map[string]any)["serverInfo"].(map[string]any)["name"] != "keepsess" {
+		t.Fatal("incorrect MCP server name", v)
+	}
+	if !strings.HasPrefix(v["result"].(map[string]any)["serverInfo"].(map[string]any)["version"].(string), "0.3.2+") {
 		t.Fatal(v)
 	}
 	c.send(t, "list", "tools/list", map[string]any{})

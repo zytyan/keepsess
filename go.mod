@@ -1,4 +1,4 @@
-module github.com/zytyan/sessmcp
+module github.com/zytyan/keepsess
 
 go 1.22.1
 

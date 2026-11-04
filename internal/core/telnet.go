@@ -5,7 +5,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/zytyan/sessmcp/internal/telnet"
+	"github.com/zytyan/keepsess/internal/telnet"
 )
 
 func (s *Session) connectTelnet(ctx context.Context, o Options) error {

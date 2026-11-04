@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zytyan/sessmcp/internal/telnet"
+	"github.com/zytyan/keepsess/internal/telnet"
 	"golang.org/x/crypto/ssh"
 )
 

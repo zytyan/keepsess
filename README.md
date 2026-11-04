@@ -1,22 +1,24 @@
-# sessmcp
+# keepsess
 
 面向 LLM 的持久 SSH exec / SSH、Telnet 双向流 MCP 工具。纯 Go，固定 Go 1.22.1 验证，发布构建 `CGO_ENABLED=0`，支持 linux/amd64、linux/arm64、windows/amd64。
+
+项目、Go module、MCP 注册名和 skill 名称统一为 **keepsess**，仓库地址为 [zytyan/keepsess](https://github.com/zytyan/keepsess)。工具名继续使用 `sess_*`，句柄继续使用 `s1`、`s2`；安装器直接写入 keepsess 配置，不迁移旧名称。
 
 ## 启动
 
 ```sh
-sessmcp help
-sessmcp serve
-sessmcp serve --log /private/path/audit.jsonl
-sessmcp version
-sessmcp mcp-skill
-sessmcp install-skill --dir ./sessmcp-skill
+keepsess help
+keepsess serve
+keepsess serve --log /private/path/audit.jsonl
+keepsess version
+keepsess mcp-skill
+keepsess install-skill --dir ./keepsess-skill
 ```
 
 无子命令只显示帮助；stdout 专供 MCP。配置示例：
 
 ```json
-{"command":"/path/to/sessmcp","args":["serve"]}
+{"command":"/path/to/keepsess","args":["serve"]}
 ```
 
 版本 0.3.0 重构为下列 15 个工具。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
@@ -27,44 +29,44 @@ MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
-sessmcp install
+keepsess install
 
 # 可指定目标 MCP 配置文件，自动识别常见路径或格式
-sessmcp install .cursor/mcp.json
-sessmcp install .vscode/mcp.json
-sessmcp install .codex/config.toml
+keepsess install .cursor/mcp.json
+keepsess install .vscode/mcp.json
+keepsess install .codex/config.toml
 
 # 显式选择客户端；省略文件时使用下表默认路径
-sessmcp install --client cursor
-sessmcp install --client vscode
-sessmcp install --client codex
-sessmcp install /path/to/custom.json --client claude
+keepsess install --client cursor
+keepsess install --client vscode
+keepsess install --client codex
+keepsess install /path/to/custom.json --client claude
 
 # 只预览；不创建目录或文件
-sessmcp install --client codex --dry-run
+keepsess install --client codex --dry-run
 
 # 自定义二进制管理目录和 skill 目录
-sessmcp install /path/to/config.json --client json --dir /private/sessmcp --skill-dir /path/to/skills/sessmcp
+keepsess install /path/to/config.json --client json --dir /private/keepsess --skill-dir /path/to/skills/keepsess
 ```
 
 `[FILE]` 指目标客户端配置，不是待安装的可执行文件。安装器会：
 
-1. 复制当前运行的 sessmcp 二进制到项目 `.sessmcp/bin/<内容哈希>/`，配置使用该文件的绝对路径和 `serve` 参数；之后可移动或删除原下载文件。新版本放到新目录，不覆盖仍在运行的 Windows exe。
-2. 合并名为 sessmcp 的服务项，保留其他服务、字段及注释；已识别的 sessmcp serve 项只更新程序路径，保留自定义 args（包括审计）、env、启停和授权设置。Codex 新建项设置 tool_timeout_sec=120，以容纳服务端 115s 硬上限；已有设置不更改。
-3. 安装二进制内嵌的完整 SKILL.md；改动已有配置或 skill 前生成同目录、0600 权限的 `.sessmcp-backup-*` 备份。相同版本重复安装不改内容，也不反复备份。
-4. 先校验、后落盘，配置最后写入；失败则回滚已经修改的文件。现有同名服务不是 sessmcp serve 时拒绝覆盖。配置锁避免同时安装覆盖，规划后检测到文件被其他程序改动会拒绝写入。
+1. 复制当前运行的 keepsess 二进制到项目 `.keepsess/bin/<内容哈希>/`，配置使用该文件的绝对路径和 `serve` 参数；之后可移动或删除原下载文件。新版本放到新目录，不覆盖仍在运行的 Windows exe。
+2. 合并名为 keepsess 的服务项，保留其他服务、字段及注释；已识别的 keepsess serve 项只更新程序路径，保留自定义 args（包括审计）、env、启停和授权设置。Codex 新建项设置 tool_timeout_sec=120，以容纳服务端 115s 硬上限；已有设置不更改。
+3. 安装二进制内嵌的完整 SKILL.md；改动已有配置或 skill 前生成同目录、0600 权限的 `.keepsess-backup-*` 备份。相同版本重复安装不改内容，也不反复备份。
+4. 先校验、后落盘，配置最后写入；失败则回滚已经修改的文件。现有同名服务不是 keepsess serve 时拒绝覆盖。配置锁避免同时安装覆盖，规划后检测到文件被其他程序改动会拒绝写入。
 
 | `--client` | 默认配置文件 | 配置结构 | 默认项目 skill |
 |---|---|---|---|
-| claude | `.mcp.json` | `mcpServers.sessmcp` | `.claude/skills/sessmcp/SKILL.md` |
-| cursor | `.cursor/mcp.json` | `mcpServers.sessmcp` | `.cursor/skills/sessmcp/SKILL.md` |
-| vscode | `.vscode/mcp.json` | `servers.sessmcp`，type=stdio | `.github/skills/sessmcp/SKILL.md` |
-| codex | `.codex/config.toml` | `[mcp_servers.sessmcp]` | `.agents/skills/sessmcp/SKILL.md` |
-| json | `.mcp.json` | 通用 `mcpServers.sessmcp` | `.agents/skills/sessmcp/SKILL.md`，客户端需支持此发现目录 |
+| claude | `.mcp.json` | `mcpServers.keepsess` | `.claude/skills/keepsess/SKILL.md` |
+| cursor | `.cursor/mcp.json` | `mcpServers.keepsess` | `.cursor/skills/keepsess/SKILL.md` |
+| vscode | `.vscode/mcp.json` | `servers.keepsess`，type=stdio | `.github/skills/keepsess/SKILL.md` |
+| codex | `.codex/config.toml` | `[mcp_servers.keepsess]` | `.agents/skills/keepsess/SKILL.md` |
+| json | `.mcp.json` | 通用 `mcpServers.keepsess` | `.agents/skills/keepsess/SKILL.md`，客户端需支持此发现目录 |
 
 默认作用域是项目，不扫描或修改所有客户端的全局配置。指定标准 `.cursor/.codex/.vscode` 目录内的文件时，会以其上一级作为项目根；其他自定义位置以配置所在目录为根。要安装到全局配置或自定义 profile，可指定完整路径，并用 `--dir/--skill-dir` 明确管理和 skill 位置；不会修改 PATH。新建或更新配置文件使用 0600，二进制使用 0755，skill 使用 0644。
 
-JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服务只替换 command 字符串，其余字节保持不变。不能无损扩展的特殊 TOML 布局（如已有 inline mcp_servers 表但尚无 sessmcp）会在写入前报错，需先转为普通表。安装目标为目录、符号链接、非法配置或重复 JSON key 时拒绝写入。异常退出遗留 `.sessmcp-install.lock` 时，应确认没有安装进程后再处理该锁文件。
+JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服务只替换 command 字符串，其余字节保持不变。不能无损扩展的特殊 TOML 布局（如已有 inline mcp_servers 表但尚无 keepsess）会在写入前报错，需先转为普通表。安装目标为目录、符号链接、非法配置或重复 JSON key 时拒绝写入。异常退出遗留 `.keepsess-install.lock` 时，应确认没有安装进程后再处理该锁文件。
 
 安装不会启动后台服务、替你连接设备、修改客户端权限或自动批准工具。重新加载客户端 MCP 配置，并完成客户端自己的项目信任/授权；旧连接属于旧进程，不会迁移。文件落盘和 stdio 握手已验证，不等于验证了每种客户端 GUI 的信任流程。生成的配置包含机器本地绝对路径，不适合直接作为跨机器配置提交；备份可能包含其他服务的秘密，不要发布。
 
@@ -204,4 +206,4 @@ GOTOOLCHAIN=go1.22.1 sh scripts/build.sh
 
 测试覆盖真实 SSH 退出与双流、缺失退出状态、Telnet IAC 分包、交换机模式/分页/慢输出、输入转义与线上字节、Unicode/GBK/Shift-JIS 分包与错误策略、超时/取消、读写并发、TCP 满缓冲/队列阈值、stdio 慢消费者及 race。长测试验证真实静默端点的读取在两分钟内结束且 transport 保留。Windows/ARM64 在本地只验证交叉编译；docs/ci.yml 是包含 Windows 短测试的 CI 模板，未自动启用。
 
-[验证记录](VALIDATION.md) · [现场反馈与迁移说明](docs/field-report.md) · [AI skill](skills/sessmcp/SKILL.md)
+[验证记录](VALIDATION.md) · [现场反馈与迁移说明](docs/field-report.md) · [AI skill](skills/keepsess/SKILL.md)

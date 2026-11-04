@@ -13,7 +13,7 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-// Only a recognizable sessmcp stdio entry is upgraded automatically. Preserve
+// Only a recognizable keepsess stdio entry is upgraded automatically. Preserve
 // its env, logging arguments, timeouts and approval settings without enabling it.
 func ownedServer(entry map[string]any) bool {
 	command, ok := entry["command"].(string)
@@ -21,7 +21,7 @@ func ownedServer(entry map[string]any) bool {
 		return false
 	}
 	base := path.Base(strings.ReplaceAll(command, `\`, "/"))
-	if base != "sessmcp" && base != "sessmcp.exe" {
+	if base != "keepsess" && base != "keepsess.exe" {
 		return false
 	}
 	if _, exists := entry["url"]; exists {
@@ -98,12 +98,12 @@ func installJSON(b []byte, client, command string) ([]byte, error) {
 		return nil, fmt.Errorf("%s must be an object; nothing installed", key)
 	}
 	var entry map[string]any
-	current := root.Find("/" + key + "/sessmcp")
+	current := root.Find("/" + key + "/keepsess")
 	if current != nil {
 		plain := current.Clone()
 		plain.Standardize()
 		if err = json.Unmarshal(plain.Pack(), &entry); err != nil || entry == nil || !ownedServer(entry) {
-			return nil, errors.New("existing sessmcp entry is not a recognizable sessmcp serve command; rename it before installing")
+			return nil, errors.New("existing keepsess entry is not a recognizable keepsess serve command; rename it before installing")
 		}
 		if entry["command"] == command && (client != "vscode" || entry["type"] == "stdio") {
 			return b, nil
@@ -120,7 +120,7 @@ func installJSON(b []byte, client, command string) ([]byte, error) {
 		raw, _ := json.Marshal(entry)
 		value, _ := hujson.Parse(raw)
 		obj := servers.Value.(*hujson.Object)
-		obj.Members = append(obj.Members, hujson.ObjectMember{Name: hujson.Value{Value: hujson.String("sessmcp")}, Value: value})
+		obj.Members = append(obj.Members, hujson.ObjectMember{Name: hujson.Value{Value: hujson.String("keepsess")}, Value: value})
 	}
 	root.Format()
 	out := root.Pack()
@@ -140,17 +140,17 @@ func installTOML(b []byte, command string) ([]byte, error) {
 		if !ok {
 			return nil, errors.New("mcp_servers must be a TOML table")
 		}
-		if raw, exists := servers["sessmcp"]; exists {
+		if raw, exists := servers["keepsess"]; exists {
 			entry, ok = raw.(map[string]any)
 			if !ok || !ownedServer(entry) {
-				return nil, errors.New("existing sessmcp entry is not a recognizable sessmcp serve command; rename it before installing")
+				return nil, errors.New("existing keepsess entry is not a recognizable keepsess serve command; rename it before installing")
 			}
 		}
 	}
 	if entry == nil {
 		// Append a standard section, then validate the WHOLE result. Inline parent
 		// tables cannot be extended; report that before any files are touched.
-		section, err := toml.Marshal(map[string]any{"mcp_servers": map[string]any{"sessmcp": map[string]any{"command": command, "args": []string{"serve"}, "tool_timeout_sec": 120}}})
+		section, err := toml.Marshal(map[string]any{"mcp_servers": map[string]any{"keepsess": map[string]any{"command": command, "args": []string{"serve"}, "tool_timeout_sec": 120}}})
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +193,7 @@ func installTOML(b []byte, command string) ([]byte, error) {
 			}
 		}
 	}
-	return nil, errors.New("cannot locate sessmcp command in TOML; nothing installed")
+	return nil, errors.New("cannot locate keepsess command in TOML; nothing installed")
 }
 func tomlKey(n *unstable.Node) []string {
 	var parts []string
@@ -206,7 +206,7 @@ func tomlKey(n *unstable.Node) []string {
 func findTOMLCommand(n *unstable.Node, parent []string) (int, int, bool) {
 	key := append(append([]string(nil), parent...), tomlKey(n)...)
 	v := n.Value()
-	if strings.Join(key, "\x00") == "mcp_servers\x00sessmcp\x00command" && v.Kind == unstable.String {
+	if strings.Join(key, "\x00") == "mcp_servers\x00keepsess\x00command" && v.Kind == unstable.String {
 		return int(v.Raw.Offset), int(v.Raw.Length), true
 	}
 	if v.Kind == unstable.InlineTable {

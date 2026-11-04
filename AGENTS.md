@@ -1,4 +1,4 @@
-# sessmcp 开发约束
+# keepsess 开发约束
 
 - SSH 复用 golang.org/x/crypto/ssh。用户最新要求：Telnet 使用内部实现，禁止重新引入要求更高 Go 补丁版本的 Telnet 库。
 - Go 1.22（固定目标补丁版本 1.22.1），纯 Go、CGO_ENABLED=0；依赖不得要求高于 Go 1.22。

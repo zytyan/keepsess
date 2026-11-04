@@ -1,11 +1,11 @@
 ---
-name: sessmcp
-description: Operate persistent SSH exec or SSH/Telnet console streams through sessmcp 0.3, with encoded text, explicit byte escapes, bounded reads and session configuration.
+name: keepsess
+description: Operate persistent SSH exec or SSH/Telnet console streams through keepsess 0.3, with encoded text, explicit byte escapes, bounded reads and session configuration.
 ---
 
-# sessmcp 0.3 operating skill
+# keepsess 0.3 operating skill
 
-Start MCP stdio with `sessmcp serve`. Use `sessmcp version` or MCP initialize to check the
+Start MCP stdio with `keepsess serve`. Use `keepsess version` or MCP initialize to check the
 build identity; the 0.3 API replaces sess_interact/sess_read and old wait/input_id parameters.
 Optional audit: `serve --log /private/path/audit.jsonl`. Authentication fields are redacted;
 commands and send data are recorded and can contain secrets. Never enable insecure SSH host
@@ -13,7 +13,7 @@ verification without explicit user intent.
 
 ## Install only when requested
 
-`sessmcp install [FILE] --client claude|cursor|vscode|codex` installs the executable, MCP entry
+`keepsess install [FILE] --client claude|cursor|vscode|codex` installs the executable, MCP entry
 and embedded skill. FILE is the target client config; omitted means the selected client's
 project config. Default client auto/no file uses Claude Code .mcp.json. Standard .cursor/mcp.json,
 .vscode/mcp.json and .codex/config.toml paths are recognized; --client resolves ambiguity.
@@ -21,12 +21,12 @@ Use --dry-run to inspect destinations without writes, --dir for managed binaries
 --skill-dir for a nonstandard skill location. Custom/global config paths need the intended
 skill directory explicitly when it differs from project defaults.
 
-The installer preserves other servers, comments, existing sessmcp serve arguments/env and
+The installer preserves other servers, comments, existing keepsess serve arguments/env and
 permission settings; changed files get private backups. It copies the executable into a
 content-addressed directory, so the original download can be moved. It does not start services
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
-sessmcp entries fail before writes. Never publish config backups that may contain secrets.
+keepsess entries fail before writes. Never publish config backups that may contain secrets.
 All 15 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
