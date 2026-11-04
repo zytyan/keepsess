@@ -9,7 +9,13 @@ import (
 
 func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Result {
 	started := time.Now()
-	deadline := started.Add(c.Duration(c.ReadTotalTimeoutMS))
+	totalTimeoutMS := c.ReadTotalTimeoutMS
+	if kind == "exec_wait" {
+		// SSH exec collection must not end because
+		// a terminal goes quiet or happens to print a configured prompt.
+		totalTimeoutMS = c.ExecTotalTimeoutMS
+	}
+	deadline := started.Add(c.Duration(totalTimeoutMS))
 	var re *regexp.Regexp
 	if kind == "read_until" && c.EndPattern != "" {
 		re = regexp.MustCompile(c.EndPattern)
@@ -78,9 +84,9 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		if idleSince.Before(started) {
 			idleSince = started
 		}
-		idleReached := c.ReadIdleTimeoutMS > 0 && now.Sub(idleSince) >= c.Duration(c.ReadIdleTimeoutMS)
+		idleReached := kind == "read_until" && c.ReadIdleTimeoutMS > 0 && now.Sub(idleSince) >= c.Duration(c.ReadIdleTimeoutMS)
 		totalReached := !now.Before(deadline)
-		immediate := kind != "read_until"
+		immediate := kind != "read_until" && kind != "exec_wait"
 		// A live incomplete character survives idle/immediate reads; only closed,
 		// completed exec or an explicit history read finalizes its invalid bytes.
 		final := !connected || (s.mode == "exec" && completed) || history

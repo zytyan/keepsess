@@ -282,3 +282,47 @@ func TestSendJSONToWire(t *testing.T) {
 		t.Fatal("read after close")
 	}
 }
+
+func TestExecUsesIndependentWaitThroughMCP(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	args := connectArgs(addr)
+	args["protocol"] = "ssh"
+	args["username"] = "test"
+	args["password"] = "test"
+	args["host_key"] = key
+	args["mode"] = "exec"
+	args["config"] = map[string]any{"read_total_timeout_ms": 1, "read_idle_timeout_ms": 1, "end_pattern": "first", "exec_total_timeout_ms": "1*1000"}
+	c := harness(t)
+	c.tool(t, "exec-connect", "sess_connect", args)
+	id := structured(t, c.receive(t, "exec-connect", time.Second))["session"].(string)
+	c.tool(t, "exec-full", "sess_exec", map[string]any{"session": id, "command": "slow"})
+	v := structured(t, c.receive(t, "exec-full", 2*time.Second))
+	if v["reason"] != "exec_finish" || v["exit_code"] != float64(0) || !strings.Contains(v["output"].(string), "second") {
+		t.Fatal(v)
+	}
+	c.tool(t, "exec-partial", "sess_exec", map[string]any{"session": id, "command": "slow", "config": map[string]any{"exec_total_timeout_ms": 30}})
+	v = structured(t, c.receive(t, "exec-partial", time.Second))
+	if v["reason"] != "total_timeout" || v["running"] != true || v["connected"] != true || v["input_state"] != "sent" {
+		t.Fatal(v)
+	}
+	c.tool(t, "exec-config", "sess_get_config", map[string]any{"session": id})
+	conf := structured(t, c.receive(t, "exec-config", time.Second))["config"].(map[string]any)
+	if conf["exec_total_timeout_ms"] != float64(1000) || conf["read_total_timeout_ms"] != float64(1) || conf["end_pattern"] != "first" {
+		t.Fatal(conf)
+	}
+	c.tool(t, "exec-drain", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": 1000, "read_idle_timeout_ms": 0, "end_pattern": ""}})
+	v = structured(t, c.receive(t, "exec-drain", 2*time.Second))
+	if v["reason"] != "exec_finish" || !strings.Contains(v["output"].(string), "second") {
+		t.Fatal(v)
+	}
+	c.tool(t, "exec-no-collect", "sess_exec", map[string]any{"session": id, "command": "quiet", "collect_output": false, "config": map[string]any{"exec_total_timeout_ms": 1}})
+	v = structured(t, c.receive(t, "exec-no-collect", time.Second))
+	if v["input_state"] != "sent" || v["reason"] != nil || v["running"] != true {
+		t.Fatal(v)
+	}
+	c.tool(t, "exec-quiet-drain", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": 2000, "read_idle_timeout_ms": 0, "end_pattern": ""}})
+	v = structured(t, c.receive(t, "exec-quiet-drain", 3*time.Second))
+	if v["reason"] != "exec_finish" || v["output"] != "quiet done\n" {
+		t.Fatal(v)
+	}
+}

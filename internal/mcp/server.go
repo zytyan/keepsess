@@ -194,7 +194,7 @@ func buildDefinitions() map[string]map[string]any {
 		case "exec":
 			p["command"] = str("One SSH exec command; shell state does not persist across commands.")
 			required = append(required, "command")
-			desc = "SSH mode=exec only. Complete on protocol exit status, never on guessed markers. Missing exit status means unknown outcome. Read remaining output without replaying the command."
+			desc = "SSH mode=exec only. Wait for protocol completion using independent exec_total_timeout_ms (default 30000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. Timeout does not stop the command: inspect running and read without replaying. Missing exit status means unknown outcome."
 		case "send_raw", "sendline_raw":
 			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
 			required = append(required, "data")
@@ -215,7 +215,11 @@ func buildDefinitions() map[string]map[string]any {
 			desc = "Read retained history immediately, bounded by output budget, not future output. Dropped bytes are reported. Page with offset=end."
 		}
 		if kind == "exec" || strings.HasPrefix(kind, "send") {
-			p["collect_output"] = map[string]any{"type": "boolean", "default": true, "description": "Default true: after writing collect with read_until. False returns only a send receipt. Per-call config never changes session settings."}
+			collection := "Default true: after writing collect with read_until. False returns only a send receipt. Per-call config never changes session settings."
+			if kind == "exec" {
+				collection = "Default true: wait for SSH completion with exec_total_timeout_ms, independent of read settings/patterns. False returns only a send receipt. Per-call config never changes session settings."
+			}
+			p["collect_output"] = map[string]any{"type": "boolean", "default": true, "description": collection}
 		}
 		add("sess_"+kind, desc, p, required...)
 	}
@@ -428,7 +432,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use SSH mode=exec for commands; mode=stream for consoles. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: total 30000ms, idle 500ms, output 8192 bytes. Configure session or override config per operation. Never replay sent/unknown inputs. close discards buffers."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use SSH mode=exec for commands; mode=stream for consoles. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec uses independent exec_total_timeout_ms (30000ms), ignoring read timeouts and end_pattern. Configure session or override config per operation. Never replay sent/unknown inputs. close discards buffers."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

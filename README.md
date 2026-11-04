@@ -80,7 +80,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_configure | session、config；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
-| sess_exec | session、command、collect_output?、config?；SSH exec，按协议退出状态完成 |
+| sess_exec | session、command、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
 | sess_send_raw | session、data、collect_output?、config?；文字编码后发送，不解析转义 |
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
 | sess_sendline_raw | 同 raw，追加一次配置的 line_end |
@@ -113,8 +113,9 @@ SSH 默认 mode=exec，适合普通服务器。交换机、路由器和 console 
 | connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改仅保存值，重新 connect 时显式复用该 config 才生效 |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
 | session_idle_timeout_ms | 1800000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
-| read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms |
-| read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms |
+| read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |
+| read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 sess_exec |
+| exec_total_timeout_ms | 30000 | sess_exec 命令启动后等待协议完成的独立总时限，1..110000ms；不受 read 超时与 end_pattern 影响 |
 | tcp_keepalive_ms | 15000 | 系统 TCP keepalive 周期参数，0 禁用，最高一天；实际探测与失效时序取决于 OS |
 | line_end | SSH `\r`，Telnet `\r\n` | 可见转义文本，配置时按 UTF-8 与字节转义解码一次，最多 1024 字节；可为空 |
 | encoding | utf-8 | utf-8、gbk、shift-jis；支持 utf8、sjis、shift_jis 等别名 |
@@ -123,7 +124,7 @@ SSH 默认 mode=exec，适合普通服务器。交换机、路由器和 console 
 | max_input_bytes | 4096 | 实际编码后输入长度，包含行结束符；1..1048576 |
 | max_output_bytes | 8192 | 返回 UTF-8 文本字节预算，包括非法字节的展示文本；1..65536 |
 | backpressure_bytes | 0 | 非零时按系统 TCP 队列阈值拒绝新写入，最高 1GiB；需平台支持 |
-| end_pattern | 空 | Go RE2，匹配解码后的未读输出；空表示禁用，最多 1024 字节 |
+| end_pattern | 空 | Go RE2，匹配解码后的未读输出；空表示禁用，最多 1024 字节；不影响 sess_exec |
 
 数字可传整数或只包含整数、四则运算、括号的字符串，例如：
 
@@ -170,7 +171,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 |---|---|
 | exec_finish | SSH exec channel 完成，不保证成功；有可靠协议退出状态才给 exit_code |
 | match | 观察到结束正则，仅消费到匹配末尾，后面的字节留待下次读取 |
-| total_timeout | 从本次读取开始达到总时限，不关闭连接 |
+| total_timeout | 达到读取总时限，或 sess_exec 的独立等待总时限；不关闭连接 |
 | idle_timeout | 本次读取期间无新字节达到静默时限，不关闭连接 |
 | aborted | 网络、协议或输出解码错误，附 error；connected 指明连接是否还在 |
 | cancelled | 调用方取消；读取取消保留连接，发送期间取消则断连且 input_state=unknown |
@@ -184,6 +185,18 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 历史保留 1MiB，more 表示后面还有数据；start/end 为原始字节偏移，不是显示字符下标。增量读取推进一个会话游标；read_all/read_tail 不推进。read_all 默认从仍保留的最早位置开始，用 offset=end 分页，不会无限等待未来输出。dropped_bytes 明确报告请求位置之前已被覆盖的字节。显式 close 会丢弃全部缓冲，后续读取失败；远端自然关闭后尚可读取保留数据，直到回收或 close。
 
 ## SSH exec 与连接保护
+
+**sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次 config，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 30000ms，1..110000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。
+
+例如，下面的 sess_exec 最多等待协议完成 60 秒，不改变会话默认设置：
+
+```json
+{"session":"s1","command":"sleep 2; uname -a","config":{"exec_total_timeout_ms":60000}}
+```
+
+独立总时限到达仍返回 reason=total_timeout；它只结束本次等待，不停止远端命令或断开 transport。running=true 时用 sess_read_until/sess_read_available 继续读取，不重发命令。**随后显式调用的 read 工具照常使用 read 配置**；例如 read_until 仍可按 500ms 静默返回。collect_output=false 跳过执行等待读取，只返回发送回执。
+
+输出预算、取消、关闭、网络/解码错误及后台 SSH exec 的 110s 静默保护继续生效，不能把 output_limit/total_timeout/cancelled 当作命令完成。只有 exec_finish 表示协议 channel 已结束，成功与否还须看 exit_code；缺失退出状态仍是未知结果。
 
 sess_exec 每次新建 SSH channel，在持久 transport 上执行命令，合并 stdout/stderr。exec 的 cwd、环境不跨命令保留。运行中返回 running=true 时，用 read_until/read_available 继续读，不重新提交。缺失 exit-status/exit-signal 返回 exec_finish、warning 和缺省 exit_code，不能假定成功，也不因此关闭 transport。
 

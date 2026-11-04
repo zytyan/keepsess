@@ -181,6 +181,9 @@ func SSHWithShell(t *testing.T, shell func(io.ReadWriter)) (string, string) {
 							_, _ = io.WriteString(ch, "first\n")
 							time.Sleep(150 * time.Millisecond)
 							_, _ = io.WriteString(ch.Stderr(), "second\n")
+						case "quiet":
+							time.Sleep(650 * time.Millisecond)
+							_, _ = io.WriteString(ch, "quiet done\n")
 						case "hang":
 							_, _ = io.Copy(io.Discard, ch)
 							return

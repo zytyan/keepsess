@@ -19,6 +19,7 @@ type Config struct {
 	SessionIdleTimeoutMS    int64  `json:"session_idle_timeout_ms"`
 	ReadTotalTimeoutMS      int64  `json:"read_total_timeout_ms"`
 	ReadIdleTimeoutMS       int64  `json:"read_idle_timeout_ms"`
+	ExecTotalTimeoutMS      int64  `json:"exec_total_timeout_ms"`
 	TCPKeepaliveMS          int64  `json:"tcp_keepalive_ms"`
 	LineEnd                 string `json:"line_end"`
 	Encoding                string `json:"encoding"`
@@ -47,8 +48,9 @@ var configDescriptions = map[string]string{
 	"connect_timeout_ms":         "Connect, authentication and initial shell setup deadline. On an established session this is stored only; explicitly reuse config on a new connect.",
 	"write_timeout_ms":           "Write/channel setup deadline; failed writes close transport and may have executed. Maximum 110000ms.",
 	"session_idle_timeout_ms":    "Reclaim session and buffers after no operations; 0 disables. Active readers/writers or running exec are excluded.",
-	"read_total_timeout_ms":      "Total read deadline from read start; 1..110000ms. Does not close transport.",
-	"read_idle_timeout_ms":       "Read silence deadline from read start, reset by endpoint bytes; 0 disables. Default 500ms.",
+	"read_total_timeout_ms":      "Total read deadline from read start; 1..110000ms. Does not close transport. Ignored by sess_exec.",
+	"read_idle_timeout_ms":       "Read silence deadline from read start, reset by endpoint bytes; 0 disables. Default 500ms. Ignored by sess_exec.",
+	"exec_total_timeout_ms":      "sess_exec collection deadline after command startup; default 30000ms, 1..110000ms. Independent of read timeouts and end_pattern. Timeout returns without stopping the command; inspect running and read without replaying.",
 	"tcp_keepalive_ms":           "OS TCP keepalive period, 0 disables. Actual probe/failure timing depends on OS.",
 	"line_end":                   "Visible escape text decoded once to bytes and appended by sendline; \\0 is NUL. Empty appends nothing.",
 	"encoding":                   "Text encoding: utf-8, gbk or shift-jis; byte escapes bypass encoding.",
@@ -57,7 +59,7 @@ var configDescriptions = map[string]string{
 	"max_input_bytes":            "1..1048576 encoded bytes, including line ending.",
 	"max_output_bytes":           "1..65536 UTF-8 output bytes, including invalid-byte representations. Default 8192.",
 	"backpressure_bytes":         "0 disables threshold. Otherwise reject a new write while OS TCP queued bytes >= threshold; no user-space queue. Platform support required.",
-	"end_pattern":                "Go RE2 over decoded unread output; empty disables. Match is observation, not command completion.",
+	"end_pattern":                "Go RE2 over decoded unread output; empty disables. Match is observation, not command completion. Ignored by sess_exec.",
 }
 
 func DefaultConfig(protocol string) Config {
@@ -65,7 +67,7 @@ func DefaultConfig(protocol string) Config {
 	if protocol == "telnet" {
 		end = `\r\n`
 	}
-	return Config{ConnectTimeoutMS: 10000, WriteTimeoutMS: 10000, SessionIdleTimeoutMS: 1800000, ReadTotalTimeoutMS: 30000, ReadIdleTimeoutMS: 500, TCPKeepaliveMS: 15000, LineEnd: end, Encoding: "utf-8", InputEncodeErrorAction: "error", OutputDecodeErrorAction: "to_escape_bytes", MaxInputBytes: 4096, MaxOutputBytes: 8192}
+	return Config{ConnectTimeoutMS: 10000, WriteTimeoutMS: 10000, SessionIdleTimeoutMS: 1800000, ReadTotalTimeoutMS: 30000, ReadIdleTimeoutMS: 500, ExecTotalTimeoutMS: 30000, TCPKeepaliveMS: 15000, LineEnd: end, Encoding: "utf-8", InputEncodeErrorAction: "error", OutputDecodeErrorAction: "to_escape_bytes", MaxInputBytes: 4096, MaxOutputBytes: 8192}
 }
 func (c Config) Duration(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
 func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
@@ -88,6 +90,8 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 			c.ReadTotalTimeoutMS, err = integer(v)
 		case "read_idle_timeout_ms":
 			c.ReadIdleTimeoutMS, err = integer(v)
+		case "exec_total_timeout_ms":
+			c.ExecTotalTimeoutMS, err = integer(v)
 		case "tcp_keepalive_ms":
 			c.TCPKeepaliveMS, err = integer(v)
 		case "max_input_bytes":
@@ -129,8 +133,8 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 	case "shift_jis", "shiftjis", "sjis":
 		c.Encoding = "shift-jis"
 	}
-	if c.ConnectTimeoutMS < 1 || c.ConnectTimeoutMS > 110000 || c.WriteTimeoutMS < 1 || c.WriteTimeoutMS > 110000 || c.ReadTotalTimeoutMS < 1 || c.ReadTotalTimeoutMS > 110000 {
-		return c, errors.New("connect/write/read_total timeouts must be 1..110000ms")
+	if c.ConnectTimeoutMS < 1 || c.ConnectTimeoutMS > 110000 || c.WriteTimeoutMS < 1 || c.WriteTimeoutMS > 110000 || c.ReadTotalTimeoutMS < 1 || c.ReadTotalTimeoutMS > 110000 || c.ExecTotalTimeoutMS < 1 || c.ExecTotalTimeoutMS > 110000 {
+		return c, errors.New("connect/write/read_total/exec_total timeouts must be 1..110000ms")
 	}
 	if c.ReadIdleTimeoutMS < 0 || c.ReadIdleTimeoutMS > 110000 || c.SessionIdleTimeoutMS < 0 || c.SessionIdleTimeoutMS > 31536000000 || c.TCPKeepaliveMS < 0 || c.TCPKeepaliveMS > 86400000 {
 		return c, errors.New("idle/keepalive timeout outside allowed range")

@@ -72,7 +72,7 @@ func waitActive(t *testing.T, s *Session) {
 func TestDefaultsConfigurationAtomicAndOverrides(t *testing.T) {
 	m, s, wire := localSession(t)
 	info, err := m.GetConfig(s.id)
-	if err != nil || info.Config.ReadIdleTimeoutMS != 500 || info.Config.ReadTotalTimeoutMS != 30000 || info.Fields["read_idle_timeout_ms"].Description == "" {
+	if err != nil || info.Config.ReadIdleTimeoutMS != 500 || info.Config.ReadTotalTimeoutMS != 30000 || info.Config.ExecTotalTimeoutMS != 30000 || info.Fields["read_idle_timeout_ms"].Description == "" {
 		t.Fatal(info, err)
 	}
 	if _, err = m.Configure(s.id, cfg(map[string]any{"read_idle_timeout_ms": 0, "session_idle_timeout_ms": "30*60*1000", "line_end": `\0`})); err != nil {
@@ -87,7 +87,7 @@ func TestDefaultsConfigurationAtomicAndOverrides(t *testing.T) {
 		t.Fatal("override changed global config")
 	}
 	before := info.Config
-	for _, p := range []ConfigPatch{cfg(map[string]any{"read_idle_timeout_ms": 1, "encoding": "unknown"}), cfg(map[string]any{"typo": 1}), cfg(map[string]any{"read_total_timeout_ms": 0}), cfg(map[string]any{"max_output_bytes": 65537}), cfg(map[string]any{"end_pattern": "["}), cfg(map[string]any{"line_end": `\q`}), cfg(map[string]any{"read_idle_timeout_ms": nil})} {
+	for _, p := range []ConfigPatch{cfg(map[string]any{"read_idle_timeout_ms": 1, "encoding": "unknown"}), cfg(map[string]any{"typo": 1}), cfg(map[string]any{"read_total_timeout_ms": 0}), cfg(map[string]any{"exec_total_timeout_ms": 0}), cfg(map[string]any{"exec_total_timeout_ms": 110001}), cfg(map[string]any{"max_output_bytes": 65537}), cfg(map[string]any{"end_pattern": "["}), cfg(map[string]any{"line_end": `\q`}), cfg(map[string]any{"read_idle_timeout_ms": nil})} {
 		if _, err = m.Configure(s.id, p); err == nil {
 			t.Fatal("invalid config accepted", p)
 		}
@@ -135,7 +135,7 @@ func TestSSHExecExitStreamsAndMissingStatus(t *testing.T) {
 	if v.Reason != "exec_finish" || v.ExitCode != nil || v.Warning == "" || !v.Connected {
 		t.Fatal(v)
 	}
-	v = run(t, m, "exec", Request{Session: id, Command: "slow", Config: cfg(map[string]any{"read_total_timeout_ms": 30, "read_idle_timeout_ms": 0})})
+	v = run(t, m, "exec", Request{Session: id, Command: "slow", Config: cfg(map[string]any{"exec_total_timeout_ms": 30})})
 	if v.Reason != "total_timeout" || !v.Running || !strings.Contains(v.Output, "first") {
 		t.Fatal(v)
 	}
@@ -614,5 +614,122 @@ func TestConnectTimeoutAndCloseAllCancelOpening(t *testing.T) {
 	}
 	if len(m.List()) != 0 {
 		t.Fatal("late connection resurrected after close_all")
+	}
+}
+
+func TestSSHExecWaitIgnoresReadSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, command    string
+		global, override map[string]any
+	}{
+		{name: "default idle does not stop quiet exec", command: "quiet"},
+		{name: "global read deadlines and pattern ignored", command: "slow", global: map[string]any{"read_total_timeout_ms": 1, "read_idle_timeout_ms": 1, "end_pattern": "first"}},
+		{name: "per-call read deadlines and pattern ignored", command: "slow", override: map[string]any{"read_total_timeout_ms": 1, "read_idle_timeout_ms": 1, "end_pattern": "first"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			addr, key := testutil.SSH(t)
+			m := manager(t)
+			o := options(addr, "ssh", "exec")
+			o.HostKey = key
+			o.Config = cfg(tc.global)
+			id := connect(t, m, o)
+			before, err := m.GetConfig(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := run(t, m, "exec", Request{Session: id, Command: tc.command, Config: cfg(tc.override)})
+			if v.Reason != "exec_finish" || v.Running || v.ExitCode == nil || *v.ExitCode != 0 || !v.Connected {
+				t.Fatal(v)
+			}
+			if tc.command == "quiet" && v.Output != "quiet done\n" {
+				t.Fatal(v)
+			}
+			if tc.command == "slow" && (!strings.Contains(v.Output, "first") || !strings.Contains(v.Output, "second")) {
+				t.Fatal(v)
+			}
+			after, _ := m.GetConfig(id)
+			if after.Config != before.Config {
+				t.Fatal("exec altered persistent config")
+			}
+		})
+	}
+}
+
+func TestSSHExecIndependentDeadlineThenExplicitRead(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	o.HostKey = key
+	o.Config = cfg(map[string]any{"exec_total_timeout_ms": "5*1000", "read_total_timeout_ms": 1, "read_idle_timeout_ms": 1, "end_pattern": "first"})
+	id := connect(t, m, o)
+	v := run(t, m, "exec", Request{Session: id, Command: "slow", Config: cfg(map[string]any{"exec_total_timeout_ms": 30})})
+	if v.Reason != "total_timeout" || !v.Running || !v.Connected || v.InputState != "sent" || !strings.Contains(v.Output, "first") {
+		t.Fatal(v)
+	}
+	info, _ := m.GetConfig(id)
+	if info.Config.ExecTotalTimeoutMS != 5000 || info.Config.ReadTotalTimeoutMS != 1 || info.Config.ReadIdleTimeoutMS != 1 || info.Config.EndPattern != "first" {
+		t.Fatal("override changed config", info)
+	}
+	// An explicit read is still a read: its own timeout must remain effective.
+	v = run(t, m, "read_until", Request{Session: id})
+	if v.Reason != "total_timeout" || !v.Running || !v.Connected {
+		t.Fatal("explicit read ignored read settings", v)
+	}
+	v = run(t, m, "read_until", Request{Session: id, Config: cfg(map[string]any{"read_total_timeout_ms": 1000, "read_idle_timeout_ms": 0, "end_pattern": ""})})
+	if v.Reason != "exec_finish" || v.Running || v.ExitCode == nil || !strings.Contains(v.Output, "second") {
+		t.Fatal(v)
+	}
+}
+
+func TestSSHExecStillHonorsCancellationAndOutputBudget(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	o.HostKey = key
+	id := connect(t, m, o)
+	v := run(t, m, "exec", Request{Session: id, Command: "slow", Config: cfg(map[string]any{"max_output_bytes": 5})})
+	if v.Reason != "output_limit" || !v.Running || !v.Connected || v.Output != "first" {
+		t.Fatal(v)
+	}
+	v = run(t, m, "read_until", Request{Session: id})
+	if v.Reason != "exec_finish" {
+		t.Fatal(v)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s, _ := m.Get(id)
+	done := make(chan Result, 1)
+	go func() { v, _ := m.Operate(ctx, "exec", Request{Session: id, Command: "hang"}); done <- v }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.mu.Lock()
+		running := s.running
+		s.mu.Unlock()
+		if running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("exec did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Wait for channel startup, so this tests cancellation while collecting.
+	for {
+		if s.writeMu.TryLock() {
+			s.writeMu.Unlock()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("exec channel did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case v = <-done:
+		if v.Reason != "cancelled" || !v.Running || !v.Connected || v.InputState != "sent" {
+			t.Fatal(v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("exec wait ignored cancellation")
 	}
 }

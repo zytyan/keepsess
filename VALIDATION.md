@@ -1,3 +1,13 @@
+# exec 等待与读取配置隔离
+
+- sess_exec 使用独立 exec_total_timeout_ms，默认 30000ms，范围 1..110000ms；read_total_timeout_ms、read_idle_timeout_ms、end_pattern 对 exec 等待无效。
+- 真实 SSH quiet 命令静默 650ms 后退出，默认 500ms read idle 不会截断 exec；会话级和单次级 read total/idle=1ms、正则匹配 first 的配置也不会提前返回。
+- 独立 exec 截止返回 total_timeout/running=true，保留连接与发送回执；单次覆盖不污染持久配置。随后显式 read_until 仍使用自身 read 配置并可读取原命令的后续输出。
+- 保留取消、输出预算、缺失 exit-status、非零退出和双流测试；JSON-RPC 端到端验证配置传递与 collect_output=false 跳过等待。
+- Go 1.22.1 全量短 race、go vet、skill 校验及 CGO_ENABLED=0 三目标构建通过。Windows/ARM64 仅验证编译，未运行实测。
+
+---
+
 # 0.3.2 keepsess 命名统一
 
 程序入口 cmd/keepsess、Go module github.com/zytyan/keepsess、MCP serverInfo.name、注册项 keepsess、skills/keepsess、安装目录 .keepsess、三平台产物和仓库引用统一改名。按用户要求不实现旧安装器配置迁移；15 个 sess_* 工具名与短句柄保持原语义。

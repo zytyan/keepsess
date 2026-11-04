@@ -48,10 +48,10 @@ snapshot. connect_timeout_ms, session_idle_timeout_ms and tcp_keepalive_ms canno
 per operation. Changing connect_timeout on an established session only stores the value; explicitly reuse
 that config on a new connect.
 
-Defaults: read total 30000ms; read idle 500ms; connect/write 10000ms; unused session 1800000ms;
+Defaults: read total 30000ms; read idle 500ms; exec total 30000ms; connect/write 10000ms; unused session 1800000ms;
 TCP keepalive 15000ms; max input 4096 bytes; max output 8192 bytes; encoding utf-8; end_pattern
 empty (disabled). Idle read/session timeout and keepalive accept 0 to disable; total read must
-be 1..110000ms. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
+be 1..110000ms; exec_total_timeout_ms has the same range. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
 strings such as "30*60*1000", without function calls or arbitrary evaluation.
 
 ## Choose exec or stream
@@ -61,6 +61,16 @@ strings such as "30*60*1000", without function calls or arbitrary evaluation.
   exit status determine completion, never text markers. If running=true, read the existing
   operation; do not resubmit. Missing exit status is an unknown outcome with warning and no
   exit_code; transport remains usable. exec_finish means channel completion, not success.
+  **sess_exec ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern**, from BOTH
+  persistent and per-call config. It waits on independent exec_total_timeout_ms (default 30000,
+  range 1..110000), measured from collection after command startup; startup still has
+  write_timeout_ms and the whole RPC cap remains 115s. Set config.exec_total_timeout_ms for a
+  different execution wait, not a read timeout. Quiet commands and prompt-like text must not
+  end the exec wait. collect_output=false skips waiting and returns a send receipt.
+  The independent deadline returns total_timeout without killing the command or closing
+  transport. Output budget, cancellation, connection errors and the separate 110s exec silence
+  watchdog still apply. If running=true, read the existing command instead of replaying it.
+  Explicit follow-up sess_read_until DOES use read timeouts and end_pattern as usual.
 - Stream send tools: send_raw, send_escaped, sendline_raw, sendline_escaped (all prefixed sess_).
   They write with bounded deadlines, then collect unread output by default. Set
   collect_output=false to return only a send receipt, e.g. when another call is already reading.
@@ -111,7 +121,9 @@ within either direction is busy and does not queue input.
 
 End reasons: exec_finish (exec only), match, total_timeout, idle_timeout, aborted, cancelled,
 output_limit, closed. Immediate reads need no reason when current data is exhausted. Total
-clock starts at read invocation; idle starts then and resets on endpoint bytes. Timeouts leave
+clock starts at read invocation; idle starts then and resets on endpoint bytes. These read
+conditions apply to read tools and stream-send collection, not sess_exec. Its total_timeout
+is instead governed by exec_total_timeout_ms. Timeouts leave
 connections open. end_pattern matches DECODED unread output, including bytes received before
 this send; it does not match reason/error fields. Match consumes only through the match, leaving
 later output unread. Never infer input/output pairing or successful execution from it.

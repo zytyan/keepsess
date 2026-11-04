@@ -470,7 +470,11 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if result.InputState != "sent" || !collect {
 		return result, nil
 	}
-	v := s.read(ctx, "read_until", Request{Session: r.Session}, cfg)
+	waitKind := "read_until"
+	if kind == "exec" {
+		waitKind = "exec_wait"
+	}
+	v := s.read(ctx, waitKind, Request{Session: r.Session}, cfg)
 	v.InputState = result.InputState
 	v.InputBytes = result.InputBytes
 	v.WrittenBytes = result.WrittenBytes

@@ -3,7 +3,7 @@
 - SSH 复用 golang.org/x/crypto/ssh。用户最新要求：Telnet 使用内部实现，禁止重新引入要求更高 Go 补丁版本的 Telnet 库。
 - Go 1.22（固定目标补丁版本 1.22.1），纯 Go、CGO_ENABLED=0；依赖不得要求高于 Go 1.22。
 - 交叉编译 linux/amd64、linux/arm64、windows/amd64。
-- 进程内持久 SSH/Telnet 连接；无需重启恢复。标准 SSH 优先 exec，以 SSH exit-status/exit-signal 判断完成，合并 stdout/stderr，禁止结束标记猜测。
+- 进程内持久 SSH/Telnet 连接；无需重启恢复。标准 SSH 优先 exec，以 SSH exit-status/exit-signal 判断完成，合并 stdout/stderr，禁止结束标记猜测。sess_exec 使用独立 exec_total_timeout_ms（默认 30000ms，1..110000ms），忽略 read_total_timeout_ms/read_idle_timeout_ms/end_pattern；超时只结束等待、不杀命令，后续显式 read 工具仍按 read 配置执行。
 - 0.3 API 采用 15 工具：配置、exec、四种 send/sendline、四种 read、连接管理。读取 total=30000ms、idle=500ms，end_pattern 默认禁用，任一条件返回；配置可按调用覆盖且不污染全局。任何调用不得无限等待。
 - 独立端点静默保护、连接/握手/写入超时、RPC 上限、stdio 并发调度、有界队列及有界历史，防止半开连接和队头阻塞。整个调用小于两分钟，read_total_timeout_ms 最大 110000；正常读超时不关闭连接。运行中 SSH exec 独立 110s 无输出保护；无活动调用会话按 session_idle_timeout_ms 回收（默认 30min，0 禁用），不能因分析/审批无输出在 110s 自动关闭。
 - 默认增量输出；all/tail 可读取保留的历史，并明确报告截断/丢失；缓慢端点必须返回反压信息，禁止无限输入堆积。
