@@ -20,10 +20,10 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 	if kind == "read_until" && c.EndPattern != "" {
 		re = regexp.MustCompile(c.EndPattern)
 	}
-	history := kind == "read_all" || kind == "read_tail"
+	history := kind == "read_history" || kind == "read_tail"
 	s.mu.Lock()
 	from := s.cursor
-	if kind == "read_all" {
+	if kind == "read_history" {
 		from = 0
 		if r.Offset != nil {
 			from = *r.Offset

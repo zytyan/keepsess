@@ -74,6 +74,14 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 ## 工具
 
+发送工具默认发送后等待并收集未读输出；`collect_output=false` 时仅发送。`sess_read_history` 是有输出预算的保留历史读取，并非一次返回全部输出。工具名已改为 `sess_send_text`、`sess_sendline_text`、`sess_read_history`；旧工具名不再注册，更新后需刷新客户端 tools/list。
+
+| 旧名 | 新名 |
+|---|---|
+| sess_send_raw | sess_send_text |
+| sess_sendline_raw | sess_sendline_text |
+| sess_read_all | sess_read_history |
+
 | 工具 | 参数与用途 |
 |---|---|
 | sess_connect | protocol、host、port；可选 username/password/keyfile、SSH 主机校验、mode、config |
@@ -81,20 +89,20 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
 | sess_exec | session、command、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
-| sess_send_raw | session、data、collect_output?、config?；文字编码后发送，不解析转义 |
+| sess_send_text | session、data、collect_output?、config?；发送文字并默认收集输出，不解析转义 |
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
-| sess_sendline_raw | 同 raw，追加一次配置的 line_end |
+| sess_sendline_text | 同 text，追加一次配置的 line_end |
 | sess_sendline_escaped | 同 escaped，追加一次配置的 line_end |
 | sess_read_available | session、config?；立即读取未读数据，不等待 |
 | sess_read_until | session、config?；按匹配、超时等条件结束读取 |
 | sess_read_tail | session、lines?、config?；最后 N 行，默认 20，不移动增量游标 |
-| sess_read_all | session、offset?、config?；立即分页读取保留历史，不移动增量游标 |
+| sess_read_history | session、offset?、config?；立即分页读取保留历史，不移动增量游标 |
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；所有后续操作明确指定 session。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
-SSH 默认 mode=exec，适合普通服务器。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认校验主机密钥：使用 known_hosts 或 host_key（SHA256 指纹），只有显式 insecure=true 才跳过。
+SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互模式使用 sess_sendline_text/sess_sendline_escaped。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认校验主机密钥：使用 known_hosts 或 host_key（SHA256 指纹），只有显式 insecure=true 才跳过。
 
 ```json
 {"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","known_hosts":"/private/known_hosts","mode":"exec"}
@@ -136,7 +144,7 @@ SSH 默认 mode=exec，适合普通服务器。交换机、路由器和 console 
 
 ## 发送、转义和编码
 
-四个 send 工具只适用于 stream。raw 的含义是“不解析转义”，文字仍按 encoding 编码。escaped 在 JSON 解码之后显式解码一层，适合模型经过 XML/JSON agent 承载可见转义文本。
+四个 send 工具只适用于 stream。text 表示文字输入，按 encoding 编码，不解析转义；它不限定 ASCII，可以发送中文、日文等 Unicode 文字。escaped 在 JSON 解码之后显式解码一层，适合模型经过 XML/JSON agent 承载可见转义文本。
 
 - 普通文字、`\uNNNN`、`\UNNNNNNNN` 使用配置的文字编码。
 - `\0 \r \n \t \b \f \v \a`、`\xNN`、Go 三位八进制转义产生实际字节，不二次编码。
@@ -157,7 +165,7 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 {"session":"s1","data":"display version","config":{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$"}}
 ```
 
-上例用于 sess_sendline_raw；提示符须按观察结果配置，不能把正文里的括号猜成命令完成。没有自动分页、自动登录、自动 commit/save 或自动确认。
+上例用于 sess_sendline_text；提示符须按观察结果配置，不能把正文里的括号猜成命令完成。没有自动分页、自动登录、自动 commit/save 或自动确认。
 
 默认 collect_output=true：写入成功后按 read_until 收集未读输出，减少工具往返；false 只返回发送回执。**返回的流不归属于本次输入**：可能包括旧的未读输出、回放或自发日志。
 
@@ -182,7 +190,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 输出统一为有效 UTF-8，不默认剥离 ANSI 或改变换行。跨网络包的半个字符在增量读取中保留；EOF、已完成 exec 或显式历史读取按错误策略处理残缺字节。error 策略不会因解码错误关闭连接，可以换策略再读。必要的字节转义作为整体展示，不切碎。
 
-历史保留 1MiB，more 表示后面还有数据；start/end 为原始字节偏移，不是显示字符下标。增量读取推进一个会话游标；read_all/read_tail 不推进。read_all 默认从仍保留的最早位置开始，用 offset=end 分页，不会无限等待未来输出。dropped_bytes 明确报告请求位置之前已被覆盖的字节。显式 close 会丢弃全部缓冲，后续读取失败；远端自然关闭后尚可读取保留数据，直到回收或 close。
+历史保留 1MiB，more 表示后面还有数据；start/end 为原始字节偏移，不是显示字符下标。增量读取推进一个会话游标；read_history/read_tail 不推进。read_history 默认从仍保留的最早位置开始，用 offset=end 分页，不会无限等待未来输出。dropped_bytes 明确报告请求位置之前已被覆盖的字节。显式 close 会丢弃全部缓冲，后续读取失败；远端自然关闭后尚可读取保留数据，直到回收或 close。
 
 ## SSH exec 与连接保护
 

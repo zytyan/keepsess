@@ -185,7 +185,7 @@ func buildDefinitions() map[string]map[string]any {
 	add("sess_list", "List process-local sessions and transport/exec state.", map[string]any{})
 	add("sess_close", "Discard this connection and all buffers. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
 	add("sess_close_all", "Discard every connection and buffer. No terminal output returned.", map[string]any{})
-	for _, kind := range []string{"exec", "send_raw", "send_escaped", "sendline_raw", "sendline_escaped", "read_available", "read_until", "read_tail", "read_all"} {
+	for _, kind := range []string{"exec", "send_text", "send_escaped", "sendline_text", "sendline_escaped", "read_available", "read_until", "read_tail", "read_history"} {
 		p := session()
 		p["config"] = configSchema(true)
 		desc := ""
@@ -194,23 +194,23 @@ func buildDefinitions() map[string]map[string]any {
 		case "exec":
 			p["command"] = str("One SSH exec command; shell state does not persist across commands.")
 			required = append(required, "command")
-			desc = "SSH mode=exec only. Wait for protocol completion using independent exec_total_timeout_ms (default 30000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. Timeout does not stop the command: inspect running and read without replaying. Missing exit status means unknown outcome."
-		case "send_raw", "sendline_raw":
+			desc = "Non-interactive SSH mode=exec only; SSH/Telnet stream sessions are rejected immediately without sending input. Wait for protocol completion using independent exec_total_timeout_ms (default 30000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. Timeout does not stop the command: inspect running and read without replaying. Missing exit status means unknown outcome."
+		case "send_text", "sendline_text":
 			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
 			required = append(required, "data")
-			desc = "Stream only. Encode text and write with bounded deadline; sendline appends line_end. Optional collection observes the unread stream, not output attributed to this input. Never replay sent/unknown input on empty output."
+			desc = "Send encoded text and collect unread output by default; collect_output=false only sends. Stream only. Does not decode escapes; sendline appends line_end. Collection is not attributed to this input. Never replay sent/unknown input on empty output."
 		case "send_escaped", "sendline_escaped":
 			p["data"] = str(`Visible escape text decoded exactly once AFTER JSON decoding. \0 \r \n \t and \xNN are bytes; \uNNNN/\UNNNNNNNN and ordinary Unicode use configured encoding. JSON {"data":"\\x03"} sends Ctrl-C. \\ sends literal backslash. Invalid escapes reject before writing. sendline appends line_end.`)
 			required = append(required, "data")
-			desc = "Stream only. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once."
+			desc = "Decode one escape layer, send and collect unread output by default; collect_output=false only sends. Stream only. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once."
 		case "read_available":
 			desc = "Immediately consume currently available unread output, bounded by max_output_bytes; never wait. A partial encoded character remains unread until completed."
 		case "read_until":
 			desc = "Consume unread and future output until match, total_timeout, idle_timeout, aborted, cancelled, output_limit, closed or SSH exec_finish. Default total 30000ms, idle 500ms; timeouts preserve connection. Pattern match consumes only through match."
 		case "read_tail":
 			p["lines"] = integerSchema("Last N retained lines; default 20; does not move incremental cursor.", 1, 100000)
-			desc = "Read last N retained lines immediately, bounded by output budget. Raw offsets allow paging with read_all; no cursor change."
-		case "read_all":
+			desc = "Read last N retained lines immediately, bounded by output budget. Raw offsets allow paging with read_history; no cursor change."
+		case "read_history":
 			p["offset"] = integerSchema("Absolute raw byte offset; default retained start. Use returned end to page; does not move incremental cursor.", 0, 1<<53)
 			desc = "Read retained history immediately, bounded by output budget, not future output. Dropped bytes are reported. Page with offset=end."
 		}
@@ -226,7 +226,7 @@ func buildDefinitions() map[string]map[string]any {
 	return defs
 }
 func Tools() []any {
-	order := []string{"sess_connect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_send_raw", "sess_send_escaped", "sess_sendline_raw", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_all", "sess_close", "sess_close_all"}
+	order := []string{"sess_connect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_history", "sess_close", "sess_close_all"}
 	out := make([]any, 0, len(order))
 	for _, name := range order {
 		out = append(out, definitions[name])

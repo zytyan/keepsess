@@ -1,3 +1,13 @@
+# 工具命名与 exec 模式限制
+
+- 工具与内部操作统一为 sess_send_text、sess_sendline_text、sess_read_history；15 工具数量不变，旧名称不再注册或接受调用。
+- sess_exec 仅允许非交互 SSH mode=exec；SSH/Telnet stream 在获取读写锁或发送输入前直接报错，无 shell 回退。测试验证读写方向均占用时仍返回模式错误，输入缓冲与会话状态不变。
+- JSON-RPC 测试覆盖新工具发现、旧别名拒绝、两种协议 stream 的 exec 拒绝，以及拒绝后文字发送仍正常。
+- 默认发送并收集输出的说明已前置，Unicode、GBK、Shift-JIS 和字节转义测试保持通过；不增加 ASCII 限制。
+- Go 1.22.1 全量短 race、go vet、skill 校验和三目标 CGO_ENABLED=0 构建通过；Windows/ARM64 仍仅验证编译。
+
+---
+
 # exec 等待与读取配置隔离
 
 - sess_exec 使用独立 exec_total_timeout_ms，默认 30000ms，范围 1..110000ms；read_total_timeout_ms、read_idle_timeout_ms、end_pattern 对 exec 等待无效。

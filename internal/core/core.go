@@ -390,6 +390,9 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if disposed {
 		return Result{}, errors.New("session disposed; use sess_connect")
 	}
+	if kind == "exec" && (s.mode != "exec" || s.protocol != "ssh") {
+		return Result{}, errors.New("sess_exec requires non-interactive SSH mode=exec; stream sessions do not support exec; nothing sent")
+	}
 	cfg, err = applyConfig(cfg, r.Config, true)
 	if err != nil {
 		return Result{}, err
@@ -400,15 +403,17 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if r.Lines < 0 || r.Lines > 100000 {
 		return Result{}, errors.New("lines must be 0..100000")
 	}
-	if kind != "exec" && !strings.HasPrefix(kind, "send") && kind != "read_available" && kind != "read_until" && kind != "read_all" && kind != "read_tail" {
+	switch kind {
+	case "exec", "send_text", "send_escaped", "sendline_text", "sendline_escaped", "read_available", "read_until", "read_history", "read_tail":
+	default:
 		return Result{}, errors.New("unknown operation")
 	}
 	sending := kind == "exec" || strings.HasPrefix(kind, "send")
 	if !sending && (r.Data != "" || r.Command != "" || r.CollectOutput != nil) {
 		return Result{}, errors.New("read tools do not accept input")
 	}
-	if kind != "read_all" && r.Offset != nil {
-		return Result{}, errors.New("offset is only for read_all")
+	if kind != "read_history" && r.Offset != nil {
+		return Result{}, errors.New("offset is only for read_history")
 	}
 	if kind != "read_tail" && r.Lines != 0 {
 		return Result{}, errors.New("lines is only for read_tail")
@@ -433,9 +438,6 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return s.read(ctx, kind, r, cfg), nil
 	}
 	if kind == "exec" {
-		if s.mode != "exec" || s.protocol != "ssh" {
-			return Result{}, errors.New("sess_exec requires SSH mode=exec")
-		}
 		if r.Command == "" || r.Data != "" {
 			return Result{}, errors.New("command required; data is not accepted")
 		}

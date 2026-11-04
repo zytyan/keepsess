@@ -149,12 +149,12 @@ func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	if cancelled["reason"] != "cancelled" || cancelled["connected"] != true {
 		t.Fatal(cancelled)
 	}
-	c.tool(t, "command", "sess_sendline_raw", map[string]any{"session": id, "data": "show version", "config": map[string]any{"end_pattern": "switch> "}})
+	c.tool(t, "command", "sess_sendline_text", map[string]any{"session": id, "data": "show version", "config": map[string]any{"end_pattern": "switch> "}})
 	result := structured(t, c.receive(t, "command", 2*time.Second))
 	if result["reason"] != "match" || !strings.Contains(result["output"].(string), "SwitchOS") {
 		t.Fatal(result)
 	}
-	c.tool(t, "invalid", "sess_send_raw", map[string]any{"session": id, "data": "x", "input_id": "removed"})
+	c.tool(t, "invalid", "sess_send_text", map[string]any{"session": id, "data": "x", "input_id": "removed"})
 	if !c.receive(t, "invalid", time.Second)["result"].(map[string]any)["isError"].(bool) {
 		t.Fatal("unknown argument accepted")
 	}
@@ -233,13 +233,13 @@ func TestToolSchemas(t *testing.T) {
 
 func TestSendJSONToWire(t *testing.T) {
 	cases := []struct{ tool, data, want string }{
-		{"sess_send_raw", `\r`, `\r`},
+		{"sess_send_text", `\r`, `\r`},
 		{"sess_send_escaped", `\r`, "\r"},
 		{"sess_send_escaped", `\x03`, "\x03"},
 		{"sess_send_escaped", `\0`, "\x00"},
 		{"sess_send_escaped", `\\r`, `\r`},
-		{"sess_send_raw", "&#13;", "&#13;"},
-		{"sess_sendline_raw", "", "\r\n"},
+		{"sess_send_text", "&#13;", "&#13;"},
+		{"sess_sendline_text", "", "\r\n"},
 		{"sess_sendline_escaped", `a\t`, "a\t\r\n"},
 	}
 	wire := make(chan string, len(cases))
@@ -277,7 +277,7 @@ func TestSendJSONToWire(t *testing.T) {
 	if v["result"].(map[string]any)["isError"] != false || structured(t, v)["output"] != nil {
 		t.Fatal(v)
 	}
-	c.tool(t, "after-close", "sess_read_all", map[string]any{"session": id})
+	c.tool(t, "after-close", "sess_read_history", map[string]any{"session": id})
 	if c.receive(t, "after-close", time.Second)["result"].(map[string]any)["isError"] != true {
 		t.Fatal("read after close")
 	}
@@ -324,5 +324,62 @@ func TestExecUsesIndependentWaitThroughMCP(t *testing.T) {
 	v = structured(t, c.receive(t, "exec-quiet-drain", 3*time.Second))
 	if v["reason"] != "exec_finish" || v["output"] != "quiet done\n" {
 		t.Fatal(v)
+	}
+}
+
+func TestExecRejectsInteractiveStreamsThroughMCP(t *testing.T) {
+	for _, protocol := range []string{"ssh", "telnet"} {
+		t.Run(protocol, func(t *testing.T) {
+			var addr, key string
+			if protocol == "ssh" {
+				addr, key = testutil.SSHWithShell(t, func(rw io.ReadWriter) { _, _ = io.Copy(io.Discard, rw) })
+			} else {
+				addr = testutil.Listen(t, func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+			}
+			args := connectArgs(addr)
+			args["protocol"] = protocol
+			args["mode"] = "stream"
+			if protocol == "ssh" {
+				args["username"] = "test"
+				args["password"] = "test"
+				args["host_key"] = key
+			}
+			c := harness(t)
+			c.tool(t, "connect-stream", "sess_connect", args)
+			id := structured(t, c.receive(t, "connect-stream", time.Second))["session"].(string)
+			c.tool(t, "invalid-exec", "sess_exec", map[string]any{"session": id, "command": "must-not-execute"})
+			v := c.receive(t, "invalid-exec", time.Second)
+			if v["result"].(map[string]any)["isError"] != true || !strings.Contains(structured(t, v)["error"].(string), "non-interactive SSH mode=exec") {
+				t.Fatal(v)
+			}
+			c.tool(t, "valid-text", "sess_send_text", map[string]any{"session": id, "data": "test", "collect_output": false})
+			if v := structured(t, c.receive(t, "valid-text", time.Second)); v["input_state"] != "sent" || v["connected"] != true {
+				t.Fatal("mode rejection damaged stream", v)
+			}
+		})
+	}
+}
+
+func TestToolNamesAndRemovedAliases(t *testing.T) {
+	names := map[string]bool{}
+	for _, tool := range Tools() {
+		names[tool.(map[string]any)["name"].(string)] = true
+	}
+	for _, name := range []string{"sess_send_text", "sess_sendline_text", "sess_read_history"} {
+		if !names[name] {
+			t.Fatal("missing renamed tool", name)
+		}
+	}
+	server := &Server{Manager: core.NewManager()}
+	defer server.Manager.CloseAll()
+	for _, name := range []string{"sess_send_raw", "sess_sendline_raw", "sess_read_all"} {
+		if names[name] {
+			t.Fatal("legacy alias still exposed", name)
+		}
+		params, _ := json.Marshal(map[string]any{"name": name, "arguments": map[string]any{}})
+		result := server.call(context.Background(), params).(map[string]any)
+		if result["isError"] != true {
+			t.Fatal("removed tool still callable", name)
+		}
 	}
 }

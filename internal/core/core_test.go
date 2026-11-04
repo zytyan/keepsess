@@ -147,11 +147,11 @@ func TestSSHExecExitStreamsAndMissingStatus(t *testing.T) {
 	if v.Reason != "exec_finish" || v.Running || !strings.Contains(v.Output, "second") {
 		t.Fatal(v)
 	}
-	v = run(t, m, "read_all", Request{Session: id})
+	v = run(t, m, "read_history", Request{Session: id})
 	if !strings.Contains(v.Output, "first") || !strings.Contains(v.Output, "second") {
 		t.Fatal(v)
 	}
-	if _, err := m.Operate(context.Background(), "send_raw", Request{Session: id, Data: "x"}); err == nil {
+	if _, err := m.Operate(context.Background(), "send_text", Request{Session: id, Data: "x"}); err == nil {
 		t.Fatal("send accepted in exec mode")
 	}
 }
@@ -187,20 +187,20 @@ func TestSSHAndTelnetDeviceSimulators(t *testing.T) {
 				t.Fatal(v)
 			}
 			for _, step := range []struct{ line, pattern string }{{"enable", `switch# `}, {"configure terminal", `switch\(config\)# `}, {"interface ethernet 1", `switch\(config-if\)# `}, {"end", `switch# `}, {"show running-config", `--More--`}} {
-				v = run(t, m, "sendline_raw", Request{Session: id, Data: step.line, Config: cfg(map[string]any{"end_pattern": step.pattern})})
+				v = run(t, m, "sendline_text", Request{Session: id, Data: step.line, Config: cfg(map[string]any{"end_pattern": step.pattern})})
 				if v.Reason != "match" {
 					t.Fatal(step, v)
 				}
 			}
-			v = run(t, m, "send_raw", Request{Session: id, Data: " ", Config: cfg(map[string]any{"end_pattern": `switch# `})})
+			v = run(t, m, "send_text", Request{Session: id, Data: " ", Config: cfg(map[string]any{"end_pattern": `switch# `})})
 			if v.Reason != "match" || !strings.Contains(v.Output, "description") {
 				t.Fatal(v)
 			}
-			v = run(t, m, "sendline_raw", Request{Session: id, Data: "slow", Config: cfg(map[string]any{"end_pattern": `switch# `})})
+			v = run(t, m, "sendline_text", Request{Session: id, Data: "slow", Config: cfg(map[string]any{"end_pattern": `switch# `})})
 			if v.Reason != "match" || !strings.Contains(v.Output, "slow serial") {
 				t.Fatal(v)
 			}
-			v = run(t, m, "sendline_raw", Request{Session: id, Data: "quit"})
+			v = run(t, m, "sendline_text", Request{Session: id, Data: "quit"})
 			if v.Reason != "closed" || v.Connected {
 				t.Fatal(v)
 			}
@@ -213,13 +213,13 @@ func TestSendVariantsEncodingAndByteEscapes(t *testing.T) {
 		kind, data, encoding string
 		want                 []byte
 	}{
-		{"send_raw", `\r`, "utf-8", []byte(`\r`)},
+		{"send_text", `\r`, "utf-8", []byte(`\r`)},
 		{"send_escaped", `\r\n\0\xFF\t`, "utf-8", []byte{13, 10, 0, 255, 9}},
-		{"sendline_raw", "", "utf-8", []byte{13}},
+		{"sendline_text", "", "utf-8", []byte{13}},
 		{"sendline_escaped", `x\r`, "utf-8", []byte{'x', 13, 13}},
-		{"send_raw", "中文", "gbk", []byte{0xd6, 0xd0, 0xce, 0xc4}},
+		{"send_text", "中文", "gbk", []byte{0xd6, 0xd0, 0xce, 0xc4}},
 		{"send_escaped", `\u4e2d\xFF`, "gbk", []byte{0xd6, 0xd0, 255}},
-		{"send_raw", "日本", "shift-jis", []byte{0x93, 0xfa, 0x96, 0x7b}},
+		{"send_text", "日本", "shift-jis", []byte{0x93, 0xfa, 0x96, 0x7b}},
 	} {
 		wire.Reset()
 		v := run(t, m, tc.kind, Request{Session: s.id, Data: tc.data, CollectOutput: noCollect(), Config: cfg(map[string]any{"encoding": tc.encoding})})
@@ -256,7 +256,7 @@ func TestReadMatchBoundaryBudgetAndHistory(t *testing.T) {
 	var got strings.Builder
 	var off int64
 	for {
-		v = run(t, m, "read_all", Request{Session: s.id, Offset: &off, Config: cfg(map[string]any{"max_output_bytes": 4})})
+		v = run(t, m, "read_history", Request{Session: s.id, Offset: &off, Config: cfg(map[string]any{"max_output_bytes": 4})})
 		got.WriteString(v.Output)
 		off = v.End
 		if !v.More {
@@ -271,7 +271,7 @@ func TestReadMatchBoundaryBudgetAndHistory(t *testing.T) {
 	if v.DroppedBytes == 0 || !v.More {
 		t.Fatal("history loss not reported", v)
 	}
-	v = run(t, m, "read_all", Request{Session: s.id})
+	v = run(t, m, "read_history", Request{Session: s.id})
 	if v.DroppedBytes == 0 {
 		t.Fatal("historical prefix loss not reported", v)
 	}
@@ -332,7 +332,7 @@ func TestReadTimeoutsCancellationAndSnapshots(t *testing.T) {
 	if _, err := m.Operate(context.Background(), "read_available", Request{Session: s.id}); err == nil {
 		t.Fatal("concurrent readers accepted")
 	}
-	v := run(t, m, "send_raw", Request{Session: s.id, Data: "while-reading", CollectOutput: noCollect()})
+	v := run(t, m, "send_text", Request{Session: s.id, Data: "while-reading", CollectOutput: noCollect()})
 	if v.InputState != "sent" || wire.String() != "while-reading" {
 		t.Fatal(v)
 	}
@@ -362,7 +362,7 @@ func TestBlockedWriteBoundedAndCloseDiscards(t *testing.T) {
 	defer b.Close()
 	s.input = a
 	s.closer = a
-	v := run(t, m, "send_raw", Request{Session: s.id, Data: "x", CollectOutput: noCollect(), Config: cfg(map[string]any{"write_timeout_ms": 30})})
+	v := run(t, m, "send_text", Request{Session: s.id, Data: "x", CollectOutput: noCollect(), Config: cfg(map[string]any{"write_timeout_ms": 30})})
 	if v.Reason != "aborted" || v.InputState != "unknown" || v.Connected {
 		t.Fatal(v)
 	}
@@ -371,7 +371,7 @@ func TestBlockedWriteBoundedAndCloseDiscards(t *testing.T) {
 	if err != nil || v.Output != "" || v.Error != "" || v.Reason != "closed" {
 		t.Fatal(v, err)
 	}
-	if _, err = m.Operate(context.Background(), "read_all", Request{Session: s.id}); err == nil {
+	if _, err = m.Operate(context.Background(), "read_history", Request{Session: s.id}); err == nil {
 		t.Fatal("read after explicit close accepted")
 	}
 	_, _ = s.Write([]byte("late"))
@@ -454,7 +454,7 @@ func TestFullTCPBufferWriteDeadline(t *testing.T) {
 	s.input = c
 	s.closer = c
 	s.tcp = c.(*net.TCPConn)
-	v := run(t, m, "send_raw", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), CollectOutput: noCollect(), Config: cfg(map[string]any{"max_input_bytes": MaxInputLimit, "write_timeout_ms": 100})})
+	v := run(t, m, "send_text", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), CollectOutput: noCollect(), Config: cfg(map[string]any{"max_input_bytes": MaxInputLimit, "write_timeout_ms": 100})})
 	if v.InputState != "unknown" || v.Connected || v.Reason != "aborted" {
 		t.Fatal(v)
 	}
@@ -563,7 +563,7 @@ func TestRealTCPQueueThresholdRejectsWithoutWriting(t *testing.T) {
 	s.input = c
 	s.closer = c
 	s.tcp = tcp
-	v := run(t, m, "send_raw", Request{Session: s.id, Data: strings.Repeat("x", 128<<10), CollectOutput: noCollect(), Config: cfg(map[string]any{"max_input_bytes": 128 << 10, "write_timeout_ms": 1000})})
+	v := run(t, m, "send_text", Request{Session: s.id, Data: strings.Repeat("x", 128<<10), CollectOutput: noCollect(), Config: cfg(map[string]any{"max_input_bytes": 128 << 10, "write_timeout_ms": 1000})})
 	if v.InputState != "sent" {
 		t.Fatal(v)
 	}
@@ -571,7 +571,7 @@ func TestRealTCPQueueThresholdRejectsWithoutWriting(t *testing.T) {
 	if err != nil || queued == 0 {
 		t.Fatal("queue did not retain data", queued, err)
 	}
-	v = run(t, m, "send_raw", Request{Session: s.id, Data: "must-not-send", CollectOutput: noCollect(), Config: cfg(map[string]any{"backpressure_bytes": 1})})
+	v = run(t, m, "send_text", Request{Session: s.id, Data: "must-not-send", CollectOutput: noCollect(), Config: cfg(map[string]any{"backpressure_bytes": 1})})
 	if v.InputState != "not_sent" || v.QueuedBytes == nil || *v.QueuedBytes < 1 || v.WrittenBytes != 0 || !v.Connected {
 		t.Fatal(v)
 	}
@@ -731,5 +731,26 @@ func TestSSHExecStillHonorsCancellationAndOutputBudget(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("exec wait ignored cancellation")
+	}
+}
+
+func TestExecImmediatelyRejectsStreamWithoutSending(t *testing.T) {
+	for _, protocol := range []string{"ssh", "telnet"} {
+		t.Run(protocol, func(t *testing.T) {
+			m, s, wire := localSession(t)
+			s.protocol = protocol
+			s.readMu.Lock()
+			defer s.readMu.Unlock()
+			s.writeMu.Lock()
+			defer s.writeMu.Unlock()
+			before := s.lastUse
+			_, err := m.Operate(context.Background(), "exec", Request{Session: s.id, Command: "must-not-execute"})
+			if err == nil || !strings.Contains(err.Error(), "non-interactive SSH mode=exec") || !strings.Contains(err.Error(), "nothing sent") {
+				t.Fatal("expected direct mode rejection", err)
+			}
+			if wire.Len() != 0 || s.active != 0 || s.running || s.lastUse != before {
+				t.Fatal("rejected exec changed stream state")
+			}
+		})
 	}
 }

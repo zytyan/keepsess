@@ -56,7 +56,10 @@ strings such as "30*60*1000", without function calls or arbitrary evaluation.
 
 ## Choose exec or stream
 
-- `sess_exec(session, command, config?)`: SSH mode=exec only. Uses a fresh SSH channel on the
+- `sess_exec(session, command, config?)`: **non-interactive SSH mode=exec only**.
+  SSH mode=stream and all Telnet sessions immediately return a tool error without sending
+  input; there is no fallback to a shell. Use sess_sendline_text/sess_sendline_escaped for
+  interactive streams, never probe the same command with exec first. Uses a fresh SSH channel on the
   persistent transport; shell cwd/variables do not persist. Combined stdout/stderr and protocol
   exit status determine completion, never text markers. If running=true, read the existing
   operation; do not resubmit. Missing exit status is an unknown outcome with warning and no
@@ -71,12 +74,12 @@ strings such as "30*60*1000", without function calls or arbitrary evaluation.
   transport. Output budget, cancellation, connection errors and the separate 110s exec silence
   watchdog still apply. If running=true, read the existing command instead of replaying it.
   Explicit follow-up sess_read_until DOES use read timeouts and end_pattern as usual.
-- Stream send tools: send_raw, send_escaped, sendline_raw, sendline_escaped (all prefixed sess_).
-  They write with bounded deadlines, then collect unread output by default. Set
+- Stream send tools: send_text, send_escaped, sendline_text, sendline_escaped (all prefixed sess_).
+  They send and collect unread output by default, using bounded deadlines. Set
   collect_output=false to return only a send receipt, e.g. when another call is already reading.
   The observed stream is NOT attributed to the latest input. No input IDs or automatic replay.
 
-`send_raw` encodes literal Unicode text with encoding; it does not parse escapes or append bytes.
+`send_text` encodes literal Unicode text with encoding; it does not parse escapes or append bytes.
 `send_escaped` decodes ONE visible escape layer after JSON decoding: \0 \r \n \t \xNN produce
 bytes, ordinary Unicode and \uNNNN/\UNNNNNNNN use encoding. \\ produces a literal backslash;
 Go three-digit octal escapes are also accepted. Unknown/incomplete escapes reject before writing.
@@ -92,16 +95,16 @@ HTML entities remain literal. Unencodable input rejects the entire operation, ne
 This explicit layer supports XML/JSON agent carriers; do not repeatedly pre-decode strings.
 Raw and escaped sendline append configured line_end exactly once, even if input already has an
 ending. Empty data is allowed. line_end is visible escape text decoded at configuration time
-as UTF-8 plus byte escapes: SSH defaults \r, Telnet \r\n. Use raw send for pager space, Tab,
+as UTF-8 plus byte escapes: SSH defaults \r, Telnet \r\n. Use sess_send_text/sess_send_escaped without a line ending for pager space, Tab,
 or controls that must not append an Enter. Never silently change raw bytes to repair CRLF.
 
 ```json
 {"session":"s1","data":"display version","config":{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$"}}
 ```
 
-Use the above with sess_sendline_raw. Supply an observed prompt regex, not a guessed vendor
+Use the above with sess_sendline_text. Supply an observed prompt regex, not a guessed vendor
 mode. Adjust to [~host], [*host], or nested views when observed; a pattern match does not prove
-command success. Use a pager's observed pattern and sess_send_raw data=" " for the next page.
+command success. Use a pager's observed pattern and sess_send_text data=" " for the next page.
 Do not automatically commit/save/discard configurations or answer confirmation questions.
 
 Read input_state before retrying: sent means transport accepted input; not_sent means no new
@@ -116,7 +119,7 @@ within either direction is busy and does not queue input.
 - sess_read_available: immediate unread data, no waiting.
 - sess_read_until: unread plus future data, until the first end condition.
 - sess_read_tail(lines=20): last retained lines; bounded and does not move incremental cursor.
-- sess_read_all(offset?): retained history, not all future output; no cursor change. Page with
+- sess_read_history(offset?): retained history, not all future output; no cursor change. Page with
   offset=end. Neither historical read waits for more bytes.
 
 End reasons: exec_finish (exec only), match, total_timeout, idle_timeout, aborted, cancelled,
@@ -135,7 +138,7 @@ to visible \xNN; to_hex renders <NN>; error reports aborted and leaves the offen
 A decode error does not itself close transport. Override policy to inspect retained data.
 
 max_output_bytes is 1..65536 UTF-8 display bytes, including escaped invalid-byte text. more=true
-means unread bytes remain; use incremental read or read_all offset=end. start/end are RAW byte
+means unread bytes remain; use incremental read or read_history offset=end. start/end are RAW byte
 offsets, independent of encoding. dropped_bytes reports overwritten history (retention 1MiB).
 If minimum_output_bytes is returned, increase output budget to fit the next whole character.
 
