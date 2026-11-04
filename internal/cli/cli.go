@@ -28,6 +28,7 @@ const Help = `sessmcp — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go 
   sessmcp help                         查看用途和子命令
   sessmcp serve [--log PATH]           显式启动 MCP stdio 服务
   sessmcp mcp-skill                    输出 AI 操作指南
+  sessmcp install [FILE] [--client X]  安装二进制、MCP 配置和 skill
   sessmcp install-skill [--dir PATH]   安装 SKILL.md (默认 ./sessmcp-skill)
   sessmcp version                     查看版本
 
@@ -61,6 +62,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	case "mcp-skill":
 		_, e := io.WriteString(out, Skill)
 		return e
+	case "install":
+		return installCommand(args[1:], out, errout)
 	case "install-skill":
 		f := flag.NewFlagSet("install-skill", flag.ContinueOnError)
 		f.SetOutput(errout)

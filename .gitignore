@@ -6,3 +6,7 @@
 *.pem
 *.key
 .env
+
+/.sessmcp/
+*.sessmcp-backup-*
+*.sessmcp-install.lock

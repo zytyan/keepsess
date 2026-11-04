@@ -1,3 +1,13 @@
+# 0.3.1 安装器验证
+
+- 覆盖 Claude Code / Cursor 的 mcpServers JSON、VS Code servers JSONC、Codex mcp_servers TOML。
+- 保留其他服务、自定义日志参数、env、启停设置、注释与 TOML 多行文本；对新 Codex 项设置 120s 客户端工具时限。
+- 二进制、skill、配置一次安装；相同内容重复执行不产生更新/备份，新二进制写入不同内容哈希目录；原配置备份内容完整，Linux 权限 0600。
+- dry-run 零写入；冲突/非法配置拒绝；配置写入失败时回滚先前 skill 更新；file 参数在 flags 前后均可使用。
+- 真实二进制端到端验证四种客户端布局：安装后删除原始下载，仍可从配置路径启动并完成 initialize 与 tools/list（15 个工具）。完整 race、go vet 与 Go 1.22.1 CGO_ENABLED=0 三目标构建通过。客户端 GUI 授权与 Windows/ARM64 运行尚未实测。
+
+---
+
 # 0.3 验证记录
 
 环境：Linux amd64，实际 Go **1.22.1**，发布构建 CGO_ENABLED=0。SSH 使用 x/crypto v0.33.0，字符编码 x/text v0.22.0（go 1.18），Linux TCP 队列查询 x/sys v0.30.0；Telnet 使用内部纯 Go 实现。

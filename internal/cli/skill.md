@@ -11,6 +11,24 @@ Optional audit: `serve --log /private/path/audit.jsonl`. Authentication fields a
 commands and send data are recorded and can contain secrets. Never enable insecure SSH host
 verification without explicit user intent.
 
+## Install only when requested
+
+`sessmcp install [FILE] --client claude|cursor|vscode|codex` installs the executable, MCP entry
+and embedded skill. FILE is the target client config; omitted means the selected client's
+project config. Default client auto/no file uses Claude Code .mcp.json. Standard .cursor/mcp.json,
+.vscode/mcp.json and .codex/config.toml paths are recognized; --client resolves ambiguity.
+Use --dry-run to inspect destinations without writes, --dir for managed binaries, and
+--skill-dir for a nonstandard skill location. Custom/global config paths need the intended
+skill directory explicitly when it differs from project defaults.
+
+The installer preserves other servers, comments, existing sessmcp serve arguments/env and
+permission settings; changed files get private backups. It copies the executable into a
+content-addressed directory, so the original download can be moved. It does not start services
+or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
+must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
+sessmcp entries fail before writes. Never publish config backups that may contain secrets.
+All 15 tools are discovered through MCP tools/list, not individually registered.
+
 ## Connect and configure
 
 `sess_connect` requires protocol, host and port. SSH takes username and password/keyfile,
