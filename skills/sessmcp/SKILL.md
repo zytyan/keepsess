@@ -25,7 +25,7 @@ commands, line and data may still contain secrets.
 Prefer `line` without newline characters for a single console command:
 
 ```json
-{"session":"HANDLE","line":"display version","input_id":"inspect-version-1","waitfor":"(?m)(<[^>\r\n]+>|\\[[^\r\n]*\\])\\s*$","wait":"30s"}
+{"session":"s1","line":"display version","input_id":"inspect-version-1","waitfor":"(?m)(<[^>\r\n]+>|\\[[^\r\n]*\\])\\s*$","wait":"30s"}
 ```
 
 `line` appends the selected Enter exactly once: SSH defaults to CR, Telnet defaults to CRLF.
@@ -47,7 +47,7 @@ Read the receipt before deciding what to do next:
 | input_state | Meaning | Action |
 |---|---|---|
 | sent | Transport accepted input; device completion is not implied | Read output, then sess_read if needed |
-| not_sent | Busy/backpressure rejected this input before sending | Read prior operation; do not queue more input |
+| not_sent | Busy or input size limit rejected this input before sending | Wait for the active call, or reduce input/configure max_input_bytes |
 | unknown | Send failed/timed out and may have partially executed | Inspect remote state before another input |
 | duplicate | Existing input_id was recognized; no new input was sent | Inspect output; poll sess_read |
 | none | This call sent no input (read/list/connect) | input_seq refers to the latest session input |
@@ -75,9 +75,21 @@ Results are incremental and share one per-session cursor. For retained history u
 tail=N, or offset=end to page. History is at most 1MiB; response output at most 64KiB. Inspect more,
 truncated and retained_from. Explicit all/tail/offset do not move the default cursor.
 
-Respect backpressure: at most one small command per prompt; input max 4096 bytes. New ordinary
-input is rejected if the preceding write produced no output; Ctrl-C/Ctrl-D/Escape remain available.
-An echo is not proof the device has completed the command. Never queue bulk serial input.
+Session handles are short process-local IDs (s1, s2), never reused until restart.
+Input defaults to 4096 bytes including Enter; set max_input_bytes on connect (0 uses default, up to 1MiB).
+Use the handle actually returned by sess_connect; restart requires a new connection and handle.
+After a complete Write, new input is permitted without output or a prompt. Write completion
+means transport acceptance, not an empty TCP send queue, peer receipt, or remote execution.
+There is no OS-specific TCP-full query: Write waits for capacity when needed.
+TCP/SSH flow control blocks writes on Linux
+and Windows; write timeout is at most 10s and bounded by wait from call start. Timeout or
+cancellation during a write closes the connection with unknown input state. Concurrent
+same-session calls return busy without queuing. Output backlog is reported independently.
+Do not replay a sent/unknown input merely because output is empty.
+
+SSH and Telnet explicitly enable TCP keepalive with a 15s period through the Go 1.22 API.
+Actual probe/failure timing depends on the OS. Probes do not send console input, prove command
+completion, or refresh the 110s endpoint output-silence clock.
 
 Use sess_list to inspect connections, sess_close to release them or abort a blocked connection.
 Cancellation stops waiting, not the remote command. On connected=false, reconnect and inspect state

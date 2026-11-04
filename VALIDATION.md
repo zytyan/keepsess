@@ -7,7 +7,7 @@
 - `GOTOOLCHAIN=go1.22.1 SESSMCP_LONG_TEST=1 go test -race ./... -count=1 -timeout 4m -v` 通过。
 - 实际无输出半开 TCP 端点经 JSON-RPC stdio 调用，**110.00350824 秒**返回 endpoint_idle 错误；等待过程中另一个 ping 及时返回。
 - stdout 消费者不读取：**3.00 秒**触发独立输出超时，无 stdio 死锁。
-- 后续新增阻塞输入/无确认输入反压测试，并再次通过全套短测试与 race。
+- 后续新增阻塞输入超时、静默端点写完后继续输入测试，并再次通过全套短测试与 race。
 - 真实 SSH 协议服务验证 exit-status 0/7、双流、增量、后台命令不重复提交、主机密钥校验、交互 shell。
 - 新增独立 Telnet 线上字节测试：分包 IAC、字面 IAC、重复协商/拒绝、禁用后重启选项、终端类型与窗口大小、子协商转义/超限/损坏、半截控制序列前的输出、应用写入和协商回复超时。
 - SSH / Telnet 交换机模拟器验证模式切换、分页、ANSI、分包提示符、慢速串口式输出。
@@ -16,3 +16,13 @@
 构建命令与 CI 详见 README.md、scripts/build.sh、docs/ci.yml（模板，未启用 Actions）。日志中的时间是本次实测，CI 重跑允许正常调度偏差，但必须小于 120 秒。
 
 本次现场反馈更新另外验证：SSH 缺失退出状态后保留 transport 并可继续执行；一个 SSH 输入只出现一次线上字节；CR/LF 分别触发 Enter 的模拟终端产生双警告而单 CR 仅一次；延迟输出通过 sess_read 取回；input_id 重试去重、改变输入拒绝、部分发送状态未知时仍不重放；新参数经 MCP JSON 解码与 schema 暴露。仍未连接真实华为设备，具体 diagnose 双警告根因未证实。
+
+
+2026-11-04 背压与会话更新：
+
+- 删除依赖回显的输入限制及 running=true 的交互背压提示；不主动查询 TCP 队列，依据完整 Write 返回放行下一次调用。
+- 真实本地 TCP 套接字缩小发送/接收缓冲，验证发送堵塞后有界超时、断连、unknown 状态及 input_id 去重；net.Pipe 验证阻塞、busy 和恢复后再次写入。
+- 验证 8192 字节自定义输入限制、超限不发送、非法配置拒绝、短句柄 s1/s2 关闭后不复用。
+- SSH/Telnet 显式设置 TCP keepalive 周期参数 15s；未通过抓包验证探测时序，Windows 未运行实测。
+- Go 1.22.1 全量短测试和 race 通过；一次 race 首轮出现既有输出静默计时用例调度抖动，复跑通过，后续 keepalive 更新后的全量 race 也通过。
+- CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 构建通过。

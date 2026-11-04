@@ -47,7 +47,7 @@ SSH 连接示例：
 随后调用 `sess_exec`：
 
 ```json
-{"session":"HANDLE","command":"uname -a","wait":"30s"}
+{"session":"s1","command":"uname -a","wait":"30s"}
 ```
 
 若提前返回且 `running:true`，使用 `sess_read` 等待原命令；不要重新提交。非零退出码通过 `exit_code` 返回，与传输故障区分。若通道关闭但未返回 exit-status/exit-signal，返回 `reason:exit_status_missing` 和 warning，保留输出、令 exit_code 缺省并保留 transport；不会把未知结果当作成功，也不会仅为缺失状态而断开整个连接。SSH 规范将退出状态报告作为建议行为，未返回它不等于 transport 断链。后续网络设备命令应使用交互模式，不能自动补执行已经输出结果的命令。
@@ -63,7 +63,7 @@ SSH 连接设置 `interactive:true`；Telnet 连接天然是交互式。Telnet �
 查看 connect 返回的初始输出，必要时用 sess_read 等待提示符；随后调用 sess_interact：
 
 ```json
-{"session":"HANDLE","line":"show version","input_id":"show-version-1","waitfor":"(?m)switch[#>]\\s*$","timeout":"800ms","wait":"30s"}
+{"session":"s1","line":"show version","input_id":"show-version-1","waitfor":"(?m)switch[#>]\\s*$","timeout":"800ms","wait":"30s"}
 ```
 
 推荐 `line`（不含 CR/LF），自动添加一个选定的 Enter 序列：SSH 默认 CR，Telnet 默认 CRLF；可用 `enter:"cr"`、`"lf"` 或 `"crlf"` 覆盖。部分前台 CLI 把 CR、LF 分别视为 Enter，CRLF 有可能触发空行回放，所以 SSH 设备先使用默认 CR。`data` 保留原样，不自动追加或规范化换行；适用于补全、控制字符和分页空格，与 line 互斥。内部 Telnet 编解码负责 IAC 转义。
@@ -98,6 +98,7 @@ SSH 连接设置 `interactive:true`；Telnet 连接天然是交互式。Telnet �
 
 额外边界：
 
+- **TCP keepalive**：SSH/Telnet 默认显式启用，周期参数 15s，使用 Go 1.22 跨平台 API（Linux/Windows）；具体探测与失效判定由系统实现。TCP 探测不产生终端输入，也不刷新业务输出静默计时。
 - **端点 stdout/stderr 静默 110s**：交互会话或运行中 exec 断开并错误返回；不受更长 wait 影响。空闲的普通 SSH transport 不因未执行命令而关闭。
 - **单个 RPC 上限 115s**：即使端点持续输出，也必须返回。此时远端命令可能仍在运行，继续读取并检查状态。
 - 连接、SSH 握手/建通道、输入写入上限 **10s**；输入阶段还受本次 wait 剩余时间约束。若发送阶段超时则关闭连接，明确提示输入可能部分执行，需先检查状态再重试。
@@ -109,7 +110,9 @@ SSH 连接设置 `interactive:true`；Telnet 连接天然是交互式。Telnet �
 
 默认返回增量输出，同会话使用一个共享游标。`all:true` 返回保留历史，`tail:100` 选择保留历史的最后 100 行；`offset` 是绝对字节偏移，可配合结果的 `end` 分页。这三种显式读取不推进默认游标。历史最多 1 MiB，单次输出最多 64 KiB；`truncated` / `retained_from` 报告已丢弃历史，`more:true` 表示还可以读取更多。all 的含义是全部**仍保留**的历史，超过响应上限需要分页。
 
-输入最大 4096 字节；同会话只允许一个正在等待/发送的操作，竞争立即返回 busy。对于交互终端，上一笔输入没有产生任何输出时拒绝继续发送普通输入，防止慢串口的内核/设备缓冲持续积压；Ctrl-C、Ctrl-D、Escape 单字符仍可发送。观察到新输出后仍应等到提示符再发送下一条命令：TCP 写成功不表示设备已处理。结果的 `backpressure` / `hint` 明确提示限流；输出积压也会提示降低远端详细程度。
+单条输入默认最大 4096 字节，可通过 `sess_connect.max_input_bytes` 配置（包含 line 自动追加的 Enter，0 使用默认值，最高 1 MiB）。同会话只允许一个正在等待/发送的操作，竞争立即返回 busy，不排队。交互输入在底层 Write 完整返回后即可继续发送，不要求回显或提示符，也不因 running=true 报背压。Write 表示本地传输接受字节，不代表 TCP 发送队列已清空、对端已收到或设备执行完成；不主动查询 TCP 是否满，而由 Go Write 在需要时等待可写。TCP 缓冲满或 SSH 窗口耗尽时等待写入，超过写入期限（最多 10s，且不超过 wait）或取消则关闭连接，返回 input_state=unknown，禁止自动重放。此路径使用纯 Go 网络接口，兼容 Linux/Windows。输出积压通过 more/truncated 和 backpressure 提示，仍允许下一条输入。
+
+Session 使用短句柄 `s1`、`s2`，进程内递增且关闭后不复用；重启后须重新连接并使用新返回的句柄。句柄不是认证凭据。
 
 最多 32 会话、32 工具 worker、64 个输出帧；单个输入 JSON 帧最多 128 KiB。stdio 请求读取、远端操作与输出写入独立调度。长命令不会阻塞其他连接、ping、取消或关闭；库操作即使未响应 context，独立 RPC 看门狗也会结束响应，其 worker 配额在真正结束前不会释放。
 
@@ -150,3 +153,12 @@ GOTOOLCHAIN=go1.22.1 sh scripts/build.sh
 相关协议/API：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[Go SSH](https://pkg.go.dev/golang.org/x/crypto/ssh)、[Telnet RFC 854](https://www.rfc-editor.org/rfc/rfc854)、[终端类型 RFC 1091](https://www.rfc-editor.org/rfc/rfc1091)、[窗口尺寸 RFC 1073](https://www.rfc-editor.org/rfc/rfc1073)。
 
 现场反馈排查与已验证边界见 [docs/field-report.md](docs/field-report.md)。SSH 状态语义参考 [RFC 4254 §6.10](https://www.rfc-editor.org/rfc/rfc4254.html#section-6.10)。
+
+
+例如，连接时把单条输入上限设为 16 KiB：
+
+```json
+{"protocol":"telnet","address":"switch.example:23","max_input_bytes":16384}
+```
+
+后续调用的 `session` 必须使用本次 `sess_connect` 实际返回的短句柄；示例中的 `s1` 只是示意。

@@ -3,9 +3,7 @@ package core
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,16 +14,20 @@ import (
 )
 
 const (
-	HistoryLimit = 1 << 20
-	ResultLimit  = 64 << 10
-	InputLimit   = 4096
-	IdleLimit    = 110 * time.Second
-	CallLimit    = 115 * time.Second
-	IOLimit      = 10 * time.Second
+	HistoryLimit  = 1 << 20
+	ResultLimit   = 64 << 10
+	InputLimit    = 4096
+	MaxInputLimit = 1 << 20
+	IdleLimit     = 110 * time.Second
+	CallLimit     = 115 * time.Second
+	IOLimit       = 10 * time.Second
+	// TCPKeepAlive uses the portable Go 1.22 API on Linux and Windows.
+	TCPKeepAlive = 15 * time.Second
 	MaxSessions  = 32
 )
 
 type Options struct {
+	MaxInputBytes int    `json:"max_input_bytes,omitempty"`
 	Protocol      string `json:"protocol"`
 	Address       string `json:"address"`
 	User          string `json:"user,omitempty"`
@@ -89,8 +91,7 @@ type Session struct {
 	inputOrder          []string
 	warning             string
 	exitMissing         bool
-	awaiting            bool
-	sentAt              int64
+	maxInputBytes       int
 	id                  string
 	interactive         bool
 	mu                  sync.Mutex
@@ -111,6 +112,7 @@ type Session struct {
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
+	nextID   uint64
 	opening  int
 }
 
@@ -125,19 +127,23 @@ func (m *Manager) Get(id string) (*Session, error) {
 	return s, nil
 }
 func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
+	if o.MaxInputBytes < 0 || o.MaxInputBytes > MaxInputLimit {
+		return Result{}, fmt.Errorf("max_input_bytes must be 0..%d (0 uses default %d)", MaxInputLimit, InputLimit)
+	}
+	if o.MaxInputBytes == 0 {
+		o.MaxInputBytes = InputLimit
+	}
 	m.mu.Lock()
 	if len(m.sessions)+m.opening >= MaxSessions {
 		m.mu.Unlock()
 		return Result{}, errors.New("session limit reached; close unused sessions")
 	}
 	m.opening++
+	m.nextID++
+	id := fmt.Sprintf("s%d", m.nextID)
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.opening--; m.mu.Unlock() }()
-	b := make([]byte, 16)
-	if _, e := rand.Read(b); e != nil {
-		return Result{}, e
-	}
-	s := &Session{protocol: o.Protocol, id: hex.EncodeToString(b), interactive: o.Interactive || o.Protocol == "telnet", last: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	s := &Session{protocol: o.Protocol, id: id, maxInputBytes: o.MaxInputBytes, interactive: o.Interactive || o.Protocol == "telnet", last: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
 	var e error
 	switch o.Protocol {
 	case "ssh":
@@ -395,11 +401,15 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 			return finish(v), nil
 		}
 	}
-	if len(input) > InputLimit {
+	limit := s.maxInputBytes
+	if limit == 0 {
+		limit = InputLimit
+	}
+	if len(input) > limit {
 		v := s.status()
 		v.Reason = "backpressure"
 		v.Backpressure = true
-		v.Hint = "Input rejected (maximum 4096 bytes). Send a small command, await prompt/echo, then continue. Never paste bulk data to a slow serial endpoint."
+		v.Hint = fmt.Sprintf("Input rejected (maximum %d bytes, including Enter). Configure max_input_bytes when connecting or split the input.", limit)
 		return finish(v), nil
 	}
 	s.mu.Lock()
@@ -421,14 +431,6 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 	}
 	if input != "" {
 		s.mu.Lock()
-		control := len(input) == 1 && (input[0] == 3 || input[0] == 4 || input[0] == 27)
-		if s.interactive && s.awaiting && s.total <= s.sentAt && !control {
-			s.mu.Unlock()
-			v := s.snapshot(r, "backpressure")
-			v.Backpressure = true
-			v.Hint = "Previous input has produced no output yet. Poll sess_read before sending more; Ctrl-C/Ctrl-D/Escape remain available. Avoid accumulating serial input."
-			return finish(v), nil
-		}
 		s.inputSeq++
 		s.inputBytes = len(input)
 		operationSeq = s.inputSeq
@@ -445,10 +447,6 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 			s.inputOrder = append(s.inputOrder, r.InputID)
 		}
 		inputState = "unknown"
-		if s.interactive {
-			s.awaiting = true
-			s.sentAt = s.total
-		}
 		s.running = true
 		if kind == "exec" {
 			s.exit = nil
@@ -534,7 +532,6 @@ func (m *Manager) Run(ctx context.Context, kind string, r Request) (Result, erro
 			if reason == "waitfor" && s.interactive {
 				s.mu.Lock()
 				s.running = false
-				s.awaiting = false
 				s.mu.Unlock()
 			}
 			return finish(s.snapshot(r, reason)), nil
@@ -607,10 +604,6 @@ func (s *Session) snapshot(r Request, reason string) Result {
 	if s.exitMissing && s.connected {
 		v.NextAction = "inspect_output"
 		v.Hint += " SSH channel closed without exit status; success is unknown. For network devices, connect with interactive=true; do not replay automatically."
-	}
-	if s.interactive && s.running {
-		v.Backpressure = true
-		v.Hint += " Slow terminal: send at most one small command per prompt; avoid bulk input."
 	}
 	return v
 }

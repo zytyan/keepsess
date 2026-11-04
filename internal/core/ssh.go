@@ -59,7 +59,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	if len(auth) == 0 {
 		return errors.New("SSH password or key_file required")
 	}
-	c, e := (&net.Dialer{Timeout: IOLimit}).DialContext(ctx, "tcp", o.Address)
+	c, e := (&net.Dialer{Timeout: IOLimit, KeepAlive: TCPKeepAlive}).DialContext(ctx, "tcp", o.Address)
 	if e != nil {
 		return e
 	}

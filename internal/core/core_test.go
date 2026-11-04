@@ -208,7 +208,7 @@ func TestInputWriteDeadlineAndBackpressure(t *testing.T) {
 			t.Fatal("uncertain input replayed", v)
 		}
 	})
-	t.Run("unacknowledged input rejected", func(t *testing.T) {
+	t.Run("silent endpoint allows next completed write", func(t *testing.T) {
 		addr := testutil.Listen(t, func(c net.Conn) {
 			b := make([]byte, 32)
 			for {
@@ -224,12 +224,12 @@ func TestInputWriteDeadlineAndBackpressure(t *testing.T) {
 		}
 		id := v.Session
 		v = run(t, m, "interact", Request{Session: id, Data: "first", Wait: "20ms"})
-		if !v.Backpressure || !v.Connected {
+		if v.Backpressure || !v.Connected || v.InputState != "sent" {
 			t.Fatal(v)
 		}
 		v = run(t, m, "interact", Request{Session: id, Data: "second", Wait: "20ms"})
-		if v.Reason != "backpressure" {
-			t.Fatalf("queued more data: %+v", v)
+		if v.Backpressure || v.InputState != "sent" || v.InputSeq != 2 {
+			t.Fatalf("completed write prevented further input: %+v", v)
 		}
 		v = run(t, m, "interact", Request{Session: id, Data: "\x03", Wait: "20ms"})
 		if v.Reason == "backpressure" {
@@ -378,5 +378,118 @@ func TestLineValidation(t *testing.T) {
 		if _, e := m.Run(context.Background(), "interact", r); e == nil {
 			t.Fatal("accepted malformed input", r)
 		}
+	}
+}
+
+func TestWriteDrainAllowsNextInput(t *testing.T) {
+	m := manager(t)
+	a, b := net.Pipe()
+	defer b.Close()
+	s := &Session{id: "drain", interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: a, closer: a}
+	m.sessions[s.id] = s
+	done := make(chan Result, 1)
+	go func() {
+		v, _ := m.Run(context.Background(), "interact", Request{Session: s.id, Data: "first", Wait: "200ms"})
+		done <- v
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.mu.Lock()
+		seq := s.inputSeq
+		s.mu.Unlock()
+		if seq == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("write never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	v := run(t, m, "interact", Request{Session: s.id, Data: "rejected"})
+	if v.Reason != "busy" || v.InputState != "not_sent" {
+		t.Fatal(v)
+	}
+	buf := make([]byte, 5)
+	if _, e := io.ReadFull(b, buf); e != nil || string(buf) != "first" {
+		t.Fatal(string(buf), e)
+	}
+	if v = <-done; v.InputState != "sent" || v.Backpressure {
+		t.Fatal(v)
+	}
+	go func() { _, _ = io.ReadFull(b, buf) }()
+	v = run(t, m, "interact", Request{Session: s.id, Data: "again", Wait: "20ms"})
+	if v.InputState != "sent" || v.InputSeq != 2 || v.Backpressure {
+		t.Fatal(v)
+	}
+}
+
+func TestShortSessionIDsAndConfiguredInputLimit(t *testing.T) {
+	addr := testutil.Listen(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
+	m := manager(t)
+	o := Options{Protocol: "telnet", Address: addr, MaxInputBytes: 8192}
+	v, e := m.Connect(context.Background(), o)
+	if e != nil || v.Session != "s1" {
+		t.Fatal(v, e)
+	}
+	id := v.Session
+	v = run(t, m, "interact", Request{Session: id, Data: strings.Repeat("x", 8192), Wait: "20ms"})
+	if v.InputState != "sent" {
+		t.Fatal(v)
+	}
+	v = run(t, m, "interact", Request{Session: id, Data: strings.Repeat("x", 8193), Wait: "20ms"})
+	if v.InputState != "not_sent" || !v.Backpressure || v.InputSeq != 1 {
+		t.Fatal(v)
+	}
+	_, _ = m.Close(id)
+	v, e = m.Connect(context.Background(), o)
+	if e != nil || v.Session != "s2" {
+		t.Fatal(v, e)
+	}
+	for _, n := range []int{-1, MaxInputLimit + 1} {
+		o.MaxInputBytes = n
+		if _, e = m.Connect(context.Background(), o); e == nil {
+			t.Fatal("invalid limit accepted", n)
+		}
+	}
+}
+
+// Use portable socket buffer controls rather than OS-specific TCP queue queries.
+func TestTCPFullSendBufferDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan *net.TCPConn, 1)
+	go func() {
+		c, e := listener.Accept()
+		if e == nil {
+			accepted <- c.(*net.TCPConn)
+		}
+	}()
+	c, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	peer := <-accepted
+	defer peer.Close()
+	if err = peer.SetReadBuffer(1024); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.(*net.TCPConn).SetWriteBuffer(1024); err != nil {
+		t.Fatal(err)
+	}
+	m := manager(t)
+	s := &Session{id: "tcpfull", maxInputBytes: MaxInputLimit, interactive: true, connected: true, last: time.Now(), notify: make(chan struct{}, 1), done: make(chan struct{}), input: c, closer: c}
+	m.sessions[s.id] = s
+	start := time.Now()
+	v := run(t, m, "interact", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), Wait: "100ms", InputID: "full"})
+	if v.Reason != "io_error" || v.Connected || v.InputState != "unknown" || time.Since(start) > time.Second {
+		t.Fatalf("full TCP buffer escaped deadline: %+v", v)
+	}
+	v = run(t, m, "interact", Request{Session: s.id, Data: strings.Repeat("x", MaxInputLimit), InputID: "full"})
+	if v.InputState != "duplicate" {
+		t.Fatal("uncertain write replayed", v)
 	}
 }

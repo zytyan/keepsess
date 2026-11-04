@@ -114,24 +114,24 @@ func schema(props map[string]any, required ...string) any {
 }
 func str(desc string) any { return map[string]any{"type": "string", "description": desc} }
 func Tools() []any {
-	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "address": str("host:port; IPv6 [host]:port"), "user": str("SSH username"), "password": str("SSH password; redacted in audit"), "key_file": str("Local SSH private key path"), "key_passphrase": str("Private key passphrase; redacted in audit"), "known_hosts": str("Local known_hosts path"), "host_key": str("Pinned SHA256 host-key fingerprint"), "insecure": map[string]any{"type": "boolean", "description": "Explicitly skip host-key verification (lab only)"}, "interactive": map[string]any{"type": "boolean", "description": "Default false: standard SSH MUST prefer exec for immediate exit-status. True for switch/router foreground shells."}}
+	connect := map[string]any{"max_input_bytes": map[string]any{"type": "integer", "minimum": 0, "maximum": core.MaxInputLimit, "description": "Per-input byte limit including Enter; 0/omitted defaults to 4096; maximum 1MiB."}, "protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "address": str("host:port; IPv6 [host]:port"), "user": str("SSH username"), "password": str("SSH password; redacted in audit"), "key_file": str("Local SSH private key path"), "key_passphrase": str("Private key passphrase; redacted in audit"), "known_hosts": str("Local known_hosts path"), "host_key": str("Pinned SHA256 host-key fingerprint"), "insecure": map[string]any{"type": "boolean", "description": "Explicitly skip host-key verification (lab only)"}, "interactive": map[string]any{"type": "boolean", "description": "Default false: standard SSH MUST prefer exec for immediate exit-status. True for switch/router foreground shells."}}
 	out := []any{map[string]any{"name": "sess_connect", "description": "Create persistent SSH/Telnet connection. Prefer non-interactive SSH exec on standard servers. Telnet is plaintext; use on trusted networks. No automatic reconnect or command replay.", "inputSchema": schema(connect, "protocol", "address")}}
 	for _, kind := range []string{"exec", "interact", "read"} {
-		p := map[string]any{"session": str("Handle returned by sess_connect"), "wait": str("Fixed time from call start; default 5s. Examples 100ms,30s,1min. Can exceed 115s but hard call cap is 115s."), "waitfor": str("Go RE2 regex matched against new combined stdout/stderr; OR with wait/timeout/SSH exit"), "timeout": str("Time since last stdout/stderr refresh, not since last input (e.g. 100ms). OR with wait/waitfor."), "all": map[string]any{"type": "boolean", "description": "Read retained history, at most 64KiB per result; use offset=end to paginate"}, "tail": map[string]any{"type": "integer", "minimum": 0, "maximum": 100000, "description": "Last N retained lines (64KiB response cap)"}, "offset": map[string]any{"type": "integer", "minimum": 0, "description": "Absolute byte offset for paging; dropped history is reported"}}
+		p := map[string]any{"session": str("Short process-local handle returned by sess_connect, e.g. s1; never reused within this server process"), "wait": str("Fixed time from call start; default 5s. Examples 100ms,30s,1min. Can exceed 115s but hard call cap is 115s."), "waitfor": str("Go RE2 regex matched against new combined stdout/stderr; OR with wait/timeout/SSH exit"), "timeout": str("Time since last stdout/stderr refresh, not since last input (e.g. 100ms). OR with wait/waitfor."), "all": map[string]any{"type": "boolean", "description": "Read retained history, at most 64KiB per result; use offset=end to paginate"}, "tail": map[string]any{"type": "integer", "minimum": 0, "maximum": 100000, "description": "Last N retained lines (64KiB response cap)"}, "offset": map[string]any{"type": "integer", "minimum": 0, "description": "Absolute byte offset for paging; dropped history is reported"}}
 		desc := "Wait/read without sending input; an empty output after sent input never means failure or permission to resend; default incremental output. Check more/truncated/end, connected/error, running/exit_code. Hard deadline 115s; endpoint idle 110s disconnects."
 		req := []string{"session"}
 		if kind == "exec" {
-			p["command"] = str("SSH exec command, max 4096 bytes; new SSH channel on persistent transport. Shell state does not persist across exec calls.")
+			p["command"] = str("SSH exec command, bounded by connection max_input_bytes; new SSH channel on persistent transport. Shell state does not persist across exec calls.")
 			req = append(req, "command")
 			p["input_id"] = str("Unique ID for one logical input, max 128 bytes. Reuse same ID and input for retries to suppress duplicate sends in this session's last 128 IDs; never change the input under an existing ID.")
 			desc = "Preferred for standard SSH: start command and return immediately on SSH exit-status (combined stdout/stderr); OR wait/waitfor/timeout. If running=true, poll sess_read, never resubmit the command."
 		}
 		if kind == "interact" {
-			p["data"] = str("Exact raw input, max 4096 bytes. Prefer line for a command; for pager send a space. SSH raw Enter is usually \\r; CRLF can trigger two Enters on some terminals. Empty data polls.")
+			p["data"] = str("Exact raw input, bounded by connection max_input_bytes. Prefer line for a command; for pager send a space. SSH raw Enter is usually \\r; CRLF can trigger two Enters on some terminals. Empty data polls.")
 			p["line"] = str("Recommended: one command without CR/LF; appends exactly the selected Enter sequence. Mutually exclusive with data. SSH defaults cr; Telnet defaults crlf.")
 			p["enter"] = map[string]any{"type": "string", "enum": []string{"cr", "lf", "crlf"}, "description": "Only with line. SSH device consoles: prefer cr; adjust only when device needs a different sequence."}
 			p["input_id"] = str("Unique ID per logical input, max 128 bytes. Reusing same ID and input suppresses retransmission within the last 128 IDs in this session, including uncertain/failed sends. No guarantee after reconnect/eviction.")
-			desc = "Send to persistent Telnet or interactive SSH shell. Use waitfor prompt/pager or timeout for silent terminals; any wait condition returns. Use line for one command and input_id for retry deduplication. If input_state=sent or unknown, poll sess_read even if output is empty. Respect backpressure; never queue bulk input."
+			desc = "Send to persistent Telnet or interactive SSH shell. Use waitfor prompt/pager or timeout for silent terminals; any wait condition returns. Use line for one command and input_id for retry deduplication. If input_state=sent or unknown, poll sess_read even if output is empty. Successful Write permits the next input even without output; it does not prove remote execution. Same-session concurrent calls return busy."
 		}
 		out = append(out, map[string]any{"name": "sess_" + kind, "description": desc, "inputSchema": schema(p, req...)})
 	}
@@ -153,7 +153,9 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 	incoming := make(chan line, 1)
 	go func() {
 		scan := bufio.NewScanner(in)
-		scan.Buffer(make([]byte, 4096), 128<<10)
+		// JSON can encode each input byte as six characters (\u00xx).
+		// Keep room for a maximum-size input plus the RPC envelope.
+		scan.Buffer(make([]byte, 4096), 6*core.MaxInputLimit+(128<<10))
 		for scan.Scan() {
 			b := append([]byte(nil), scan.Bytes()...)
 			select {

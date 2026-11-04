@@ -33,7 +33,10 @@ const Help = `sessmcp — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go 
 普通 SSH 优先 sess_exec，以 SSH 退出状态返回；交换机/路由器使用
 sess_interact 和 waitfor 正则、wait 固定时间、timeout 输出静默时间。
 等待条件任一满足即返回，默认 wait=5s，单次上限 115s，端点静默 110s 报错断开。
-默认增量输出；all/tail/offset 可读取保留历史。慢端点返回反压提示。
+默认增量输出；all/tail/offset 可读取保留历史。输出积压明确提示。
+交互写完即可继续输入，不要求回显；同会话并发返回 busy，不排队。
+连接参数 max_input_bytes 配置单条输入上限（默认 4096，最高 1MiB，含 Enter）。
+session 使用 s1、s2 等进程内短句柄；TCP keepalive 默认启用，周期参数 15s。
 单条交互命令优先 line（SSH 默认 CR）；空输出先 sess_read，不要重发。
 MCP 配置: {"command":"/path/to/sessmcp","args":["serve"]}
 --log 写入 0600 JSONL 审计；认证字段脱敏，命令/line/data 仍可能含敏感信息。

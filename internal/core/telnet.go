@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Session) connectTelnet(ctx context.Context, o Options) error {
-	raw, e := (&net.Dialer{Timeout: IOLimit}).DialContext(ctx, "tcp", o.Address)
+	raw, e := (&net.Dialer{Timeout: IOLimit, KeepAlive: TCPKeepAlive}).DialContext(ctx, "tcp", o.Address)
 	if e != nil {
 		return e
 	}
