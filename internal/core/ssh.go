@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"time"
@@ -113,48 +112,12 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 			}
 		}()
 	} else {
-		s.exec = func(command string) error {
-			sh, e := client.NewSession()
-			if e != nil {
-				return e
+		s.newExec = func() (execChannel, error) {
+			sh, err := client.NewSession()
+			if err != nil {
+				return nil, err
 			}
-			sh.Stdout = s
-			sh.Stderr = s
-			if e = sh.Start(command); e != nil {
-				_ = sh.Close()
-				return e
-			}
-			go func() {
-				e := sh.Wait()
-				_ = sh.Close()
-				code := 0
-				var exit *ssh.ExitError
-				var missing *ssh.ExitMissingError
-				if e != nil {
-					if errors.As(e, &missing) {
-						s.mu.Lock()
-						s.exit = nil
-						s.completed = true
-						s.warning = "SSH channel closed without exit-status/exit-signal; command outcome is unknown"
-						s.running = false
-						s.mu.Unlock()
-						s.signal()
-						return
-					} else if errors.As(e, &exit) {
-						code = exit.ExitStatus()
-					} else {
-						s.disconnect(fmt.Sprintf("SSH command transport error: %v; reconnect", e))
-						return
-					}
-				}
-				s.mu.Lock()
-				s.exit = &code
-				s.completed = true
-				s.running = false
-				s.mu.Unlock()
-				s.signal()
-			}()
-			return nil
+			return &sshExecChannel{Session: sh}, nil
 		}
 	}
 	_ = c.SetDeadline(time.Time{})
@@ -167,4 +130,12 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		}
 	}()
 	return nil
+}
+
+// The task owns its channel and output sink; channels share only the transport.
+type sshExecChannel struct{ *ssh.Session }
+
+func (sh *sshExecChannel) start(command string, out *Session) error {
+	sh.Stdout, sh.Stderr = out, out
+	return sh.Start(command)
 }

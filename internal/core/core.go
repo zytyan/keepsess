@@ -20,7 +20,6 @@ const (
 	MaxInputLimit = 1 << 20
 	MaxSessions   = 32
 	CallLimit     = 115 * time.Second
-	IdleLimit     = 110 * time.Second
 	IOLimit       = 10 * time.Second
 )
 
@@ -43,6 +42,8 @@ func (o Options) address() string { return net.JoinHostPort(o.Host, strconv.Itoa
 
 type Request struct {
 	Session       string      `json:"session"`
+	Handle        string      `json:"handle,omitempty"`
+	Signal        string      `json:"signal,omitempty"`
 	Data          string      `json:"data,omitempty"`
 	Command       string      `json:"command,omitempty"`
 	CollectOutput *bool       `json:"collect_output,omitempty"`
@@ -53,29 +54,35 @@ type Request struct {
 
 // Result separates local send receipts from observed stream output; stream sent is not a device acknowledgement.
 type Result struct {
-	Session            string `json:"session"`
-	Output             string `json:"output,omitempty"`
-	Reason             string `json:"reason,omitempty"`
-	Connected          bool   `json:"connected"`
-	Running            bool   `json:"running,omitempty"`
-	InputState         string `json:"input_state,omitempty"`
-	InputBytes         int    `json:"input_bytes,omitempty"`
-	WrittenBytes       int    `json:"written_bytes,omitempty"`
-	ExitCode           *int   `json:"exit_code,omitempty"`
-	Warning            string `json:"warning,omitempty"`
-	Error              string `json:"error,omitempty"`
-	NextAction         string `json:"next_action,omitempty"`
-	Start              int64  `json:"start,omitempty"`
-	End                int64  `json:"end,omitempty"`
-	More               bool   `json:"more,omitempty"`
-	DroppedBytes       int64  `json:"dropped_bytes,omitempty"`
-	MinimumOutputBytes int    `json:"minimum_output_bytes,omitempty"`
-	QueuedBytes        *int   `json:"queued_bytes,omitempty"`
+	Session            string        `json:"session"`
+	Handle             string        `json:"handle,omitempty"`
+	State              string        `json:"state,omitempty"`
+	Comment            string        `json:"comment,omitempty"`
+	ExitSignal         string        `json:"exit_signal,omitempty"`
+	Signal             *SignalResult `json:"signal,omitempty"`
+	Output             string        `json:"output,omitempty"`
+	Reason             string        `json:"reason,omitempty"`
+	Connected          bool          `json:"connected"`
+	Running            bool          `json:"running,omitempty"`
+	InputState         string        `json:"input_state,omitempty"`
+	InputBytes         int           `json:"input_bytes,omitempty"`
+	WrittenBytes       int           `json:"written_bytes,omitempty"`
+	ExitCode           *int          `json:"exit_code,omitempty"`
+	Warning            string        `json:"warning,omitempty"`
+	Error              string        `json:"error,omitempty"`
+	NextAction         string        `json:"next_action,omitempty"`
+	Start              int64         `json:"start,omitempty"`
+	End                int64         `json:"end,omitempty"`
+	More               bool          `json:"more,omitempty"`
+	DroppedBytes       int64         `json:"dropped_bytes,omitempty"`
+	MinimumOutputBytes int           `json:"minimum_output_bytes,omitempty"`
+	QueuedBytes        *int          `json:"queued_bytes,omitempty"`
 }
 type Session struct {
 	id, protocol, mode                      string
 	mu                                      sync.Mutex
-	readMu, writeMu, configMu               sync.Mutex
+	readMu, configMu, execMu                sync.Mutex
+	writeMu                                 sync.RWMutex
 	config                                  Config
 	options                                 Options
 	reconnecting                            bool
@@ -91,12 +98,16 @@ type Session struct {
 	closer                                  io.Closer
 	tcp                                     *net.TCPConn
 	input                                   io.Writer
-	exec                                    func(string) error
+	newExec                                 func() (execChannel, error)
+	tasks                                   map[string]*Task
+	handle, state, exitSignal               string
+	lastSignal                              *SignalResult
 }
 type Manager struct {
 	mu         sync.Mutex
 	sessions   map[string]*Session
 	nextID     uint64
+	nextTask   uint64
 	opening    int
 	generation uint64
 	pending    map[string]context.CancelFunc
@@ -206,6 +217,12 @@ func (s *Session) disconnect(why string) {
 		s.running = false
 		s.failure = why
 		c := s.closer
+		for _, task := range s.tasks {
+			task.out.disconnect(why)
+		}
+		if s.handle != "" && !s.completed {
+			s.state = "unknown"
+		}
 		s.mu.Unlock()
 		close(s.done)
 		s.signal()
@@ -216,7 +233,10 @@ func (s *Session) disconnect(why string) {
 }
 func (s *Session) status() Result { s.mu.Lock(); defer s.mu.Unlock(); return s.statusLocked() }
 func (s *Session) statusLocked() Result {
-	r := Result{Session: s.id, Connected: s.connected && !s.disposed, Running: s.running, ExitCode: s.exit, Warning: s.warning, Error: s.failure}
+	r := Result{Session: s.id, Handle: s.handle, State: s.state, ExitSignal: s.exitSignal, Signal: s.lastSignal, Connected: s.connected && !s.disposed, Running: s.runningLocked(), ExitCode: s.exit, Warning: s.warning, Error: s.failure}
+	if s.handle != "" {
+		r.More = s.cursor < s.total
+	}
 	if !s.connected {
 		r.NextAction = "sess_reconnect"
 		if s.disposed {
@@ -233,19 +253,17 @@ func (s *Session) touch(delta int) {
 }
 func (s *Session) expire(now time.Time) bool {
 	s.mu.Lock()
-	stale := s.mode == "exec" && s.running && now.Sub(s.last) >= IdleLimit
-	unused := s.active == 0 && !s.running && s.config.SessionIdleTimeoutMS > 0 && now.Sub(s.lastUse) >= s.config.Duration(s.config.SessionIdleTimeoutMS)
+	s.pruneTasksLocked(now)
+	unused := s.active == 0 && !s.runningLocked() && s.config.SessionIdleTimeoutMS > 0 && now.Sub(s.lastUse) >= s.config.Duration(s.config.SessionIdleTimeoutMS)
 	if unused {
 		s.disposed = true
 		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
 		s.cursor = s.total
+		s.discardTasksLocked()
 	}
 	s.mu.Unlock()
-	if stale {
-		s.disconnect("endpoint_idle: SSH exec silent for 110s; reconnect and inspect")
-	}
 	if unused {
 		s.disconnect("")
 	}
@@ -288,6 +306,7 @@ func (m *Manager) Close(id string) (Result, error) {
 	s.buf = nil
 	s.base = s.total
 	s.cursor = s.total
+	s.discardTasksLocked()
 	s.mu.Unlock()
 	s.disconnect("")
 	return Result{Session: id, Reason: "closed", Connected: false}, nil
@@ -308,6 +327,7 @@ func (m *Manager) CloseAll() {
 		s.buf = nil
 		s.base = s.total
 		s.cursor = s.total
+		s.discardTasksLocked()
 		s.mu.Unlock()
 		s.disconnect("")
 	}
@@ -403,8 +423,16 @@ func (s *Session) setKeepalive(ms int64) error {
 	return nil
 }
 func (m *Manager) Operate(parent context.Context, kind string, r Request) (Result, error) {
-	ctx, cancel := context.WithTimeout(parent, CallLimit)
+	deadline := time.Now().Add(CallLimit)
+	ctx, cancel := context.WithDeadline(parent, deadline)
 	defer cancel()
+	ctx = context.WithValue(ctx, callDeadlineKey{}, deadline)
+	if r.Handle != "" || strings.HasPrefix(kind, "task_") {
+		return m.operateTask(ctx, kind, r)
+	}
+	if r.Signal != "" {
+		return Result{}, errors.New("signal is only for sess_task_signal")
+	}
 	s, err := m.Get(r.Session)
 	if err != nil {
 		return Result{}, err
@@ -448,6 +476,12 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if kind != "read_tail" && r.Lines != 0 {
 		return Result{}, errors.New("lines is only for read_tail")
 	}
+	if kind == "exec" {
+		return m.startTask(ctx, s, r, cfg)
+	}
+	if !sending && s.mode == "exec" {
+		return Result{}, errors.New("exec output requires handle; use sess_task_list to find retained tasks")
+	}
 	if sending && cfg.ReadOnly {
 		v := s.status()
 		v.InputState = "not_sent"
@@ -473,22 +507,13 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if !sending {
 		return s.read(ctx, kind, r, cfg), nil
 	}
-	if kind == "exec" {
-		if r.Command == "" || r.Data != "" {
-			return Result{}, errors.New("command required; data is not accepted")
-		}
-	} else {
-		if s.mode != "stream" {
-			return Result{}, errors.New("send tools require mode=stream; use sess_exec")
-		}
-		if r.Command != "" {
-			return Result{}, errors.New("send tools accept data, not command")
-		}
+	if s.mode != "stream" {
+		return Result{}, errors.New("send tools require mode=stream; use sess_exec")
+	}
+	if r.Command != "" {
+		return Result{}, errors.New("send tools accept data, not command")
 	}
 	payload := r.Data
-	if kind == "exec" {
-		payload = r.Command
-	}
 	b, err := encodeInput(payload, strings.HasSuffix(kind, "_escaped"), cfg.Encoding)
 	if err != nil {
 		return Result{}, err
@@ -509,9 +534,6 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return result, nil
 	}
 	waitKind := "read_until"
-	if kind == "exec" {
-		waitKind = "exec_wait"
-	}
 	v := s.read(ctx, waitKind, Request{Session: r.Session}, cfg)
 	v.InputState = result.InputState
 	v.InputBytes = result.InputBytes
@@ -530,17 +552,12 @@ func (s *Session) write(ctx context.Context, kind string, b []byte, c Config) Re
 		return v
 	}
 	s.mu.Lock()
-	running := s.running
 	readOnly := s.config.ReadOnly
 	s.mu.Unlock()
 	// Recheck the live guard while holding writeMu: an operation may have
 	// captured its config before a concurrent sess_configure enabled it.
 	if readOnly {
 		v.Error = "read_only: application input disabled; nothing sent; change explicitly with sess_configure"
-		return v
-	}
-	if kind == "exec" && running {
-		v.Error = "busy: previous exec still running; nothing sent"
 		return v
 	}
 	if c.BackpressureBytes > 0 {
@@ -568,38 +585,20 @@ func (s *Session) write(ctx context.Context, kind string, b []byte, c Config) Re
 		err error
 	}
 	done := make(chan written, 1)
-	s.mu.Lock()
-	if kind == "exec" {
-		s.running = true
-		s.completed = false
-		s.exit = nil
-		s.warning = ""
-		s.last = time.Now()
-	}
-	s.mu.Unlock()
 	go func() {
-		if kind == "exec" {
-			err := s.exec(string(b))
-			n := 0
-			if err == nil {
-				n = len(b)
-			}
-			done <- written{n, err}
+		var n int
+		var err error
+		if writer, ok := s.input.(interface {
+			WriteWithTimeout([]byte, time.Duration) (int, error)
+		}); ok {
+			n, err = writer.WriteWithTimeout(b, c.Duration(c.WriteTimeoutMS))
 		} else {
-			var n int
-			var err error
-			if writer, ok := s.input.(interface {
-				WriteWithTimeout([]byte, time.Duration) (int, error)
-			}); ok {
-				n, err = writer.WriteWithTimeout(b, c.Duration(c.WriteTimeoutMS))
-			} else {
-				n, err = s.input.Write(b)
-			}
-			if n != len(b) && err == nil {
-				err = io.ErrShortWrite
-			}
-			done <- written{n, err}
+			n, err = s.input.Write(b)
 		}
+		if n != len(b) && err == nil {
+			err = io.ErrShortWrite
+		}
+		done <- written{n, err}
 	}()
 	timer := time.NewTimer(c.Duration(c.WriteTimeoutMS))
 	defer timer.Stop()
@@ -668,7 +667,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 		m.mu.Unlock()
 		return Result{}, errors.New("session disposed; use sess_connect")
 	}
-	if old.active != 0 || old.running || old.reconnecting {
+	if old.active != 0 || old.runningLocked() || old.reconnecting {
 		old.mu.Unlock()
 		m.mu.Unlock()
 		return Result{}, errors.New("busy: session operation or exec in progress; reconnect refused")
@@ -684,6 +683,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	old.mu.Lock()
 	old.buf = nil
 	old.base, old.cursor = old.total, old.total
+	old.discardTasksLocked()
 	old.mu.Unlock()
 	next := &Session{id: id, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
 		last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}

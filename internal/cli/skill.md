@@ -27,7 +27,7 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-All 16 tools are discovered through MCP tools/list, not individually registered.
+All 21 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
 
@@ -67,7 +67,7 @@ sess_reconnect({"session":"s1"}) closes the old transport and reuses its private
 connection parameters plus CURRENT session config (including read_only and connect_timeout_ms).
 The handle remains s1. SSH authentication runs normally; key/known_hosts paths are reread.
 It NEVER sends terminal Enter, Telnet credentials, setup commands or historical application
-input. It discards old buffers/cursors; new output starts at offset 0 and remains unread.
+input. It discards all old task handles and buffers/cursors; new output starts at offset 0 and remains unread.
 Persistent shell cwd/environment, device view and terminal login state are not restored.
 Read and inspect the new stream before deciding what to send.
 
@@ -85,7 +85,7 @@ sess_configure: {"session":"s1","config":{"read_only":true}}. It cannot be overr
 ANY operation's config (true and false are both rejected). When enabled, all four send tools
 and sess_exec return input_state=not_sent with error starting "read_only:"; no application
 input is written and no output is consumed. Reads, get_config, list and close remain available.
-Protocol negotiation and TCP keepalive continue normally.
+Manual signals are rejected and automatic timeout TERM reports skipped_read_only. Protocol negotiation and TCP keepalive continue normally.
 
 If an application write is in progress, a configure patch containing read_only returns busy
 and applies NONE of the patch. Retry configure explicitly after the write finishes. Successful
@@ -117,11 +117,44 @@ do not guarantee the console server broadcasts output or permits concurrent conn
   range 1..110000), measured from collection after command startup; startup still has
   write_timeout_ms and the whole RPC cap remains 115s. Set config.exec_total_timeout_ms for a
   different execution wait, not a read timeout. Quiet commands and prompt-like text must not
-  end the exec wait. collect_output=false skips waiting and returns a send receipt.
-  The independent deadline returns total_timeout without killing the command or closing
-  transport. Output budget, cancellation, connection errors and the separate 110s exec silence
-  watchdog still apply. If running=true, read the existing command instead of replaying it.
-  Explicit follow-up sess_read_until DOES use read timeouts and end_pattern as usual.
+  end the exec wait. collect_output=false returns a process-local task handle (task1, task22, ...)
+  after startup, without an execution wait or background runtime timer. Async tasks may run
+  concurrently with each other AND with sync calls. Only simultaneous collect_output=true exec
+  calls on one session exclude each other: busy/not_sent, no queue. Every sync call releases
+  its slot when it returns, even if its program has not exited.
+  term_on_timeout defaults true: exec/task_wait completion timeout attempts TERM once and
+  returns a handle without waiting for exit. Override false to wait without signalling.
+  Read timeouts, collection cancellation, output limits and decode errors NEVER send TERM.
+  Signal sent means only request write completion, not remote delivery/exit or process-tree
+  termination. No automatic KILL, retry or replay. Signals have a 1s write bound within the
+  115s RPC budget; stalled setup/control writes may close the shared transport to unblock I/O,
+  affecting all tasks with explicitly unknown outcomes. Ordinary timeouts preserve transport.
+  Sync exec_finish with all output returned omits handle (including nonzero exit status).
+  Early returns, uncertain startup and remaining output return handle. All executions retain
+  bounded records discoverable through sess_task_list. There is no exec silence watchdog.
+
+Task operations (21 tools total):
+- sess_task_list(session?): list retained tasks; no output consumption.
+- sess_task_status(handle): immediate state, exit information, more, latest signal; no consumption.
+- sess_task_wait(handle, config?): completion wait plus incremental collection; uses exec_total_timeout_ms
+  and term_on_timeout, ignoring read timeouts/patterns. Never launches input or takes the sync exec slot.
+- sess_task_signal(handle, signal): bounded SSH signal, e.g. TERM/INT/KILL (without SIG prefix).
+  read_only blocks manual and automatic signals. request_state is sent/not_sent/unknown,
+  skipped_read_only or skipped_finished. Inspect state again to establish completion.
+- sess_task_release(handle): delete a completed idle record and its output. Live, unknown and
+  actively accessed tasks return busy. Close the connection to discard all associated handles;
+  this does not guarantee remote program exit.
+
+Each task owns a separate output buffer and cursor. All four read tools accept exactly one of
+session (stream) or handle (exec); never guess a task from a connection ID. Read config remains
+independent of completion wait config. One reader per task; status/signals may run during waits.
+State is starting/running/finished/unknown. finished means channel completion; missing exit
+status remains an unknown outcome with warning. exit_signal is reported separately from exit_code.
+Limits: 8 unfinished tasks/16 retained records per connection; 64 unfinished/128 retained
+records globally; 1MiB history per task. Completed records expire after 30min and can be evicted
+sooner at capacity, oldest first, excluding active operations. Unknown/live tasks are not evicted
+for capacity. Missing/expired handles fail explicitly; never replay because a handle expired.
+
 - Stream send tools: send_text, send_escaped, sendline_text, sendline_escaped (all prefixed sess_).
   They send and collect unread output by default, using bounded deadlines. Set
   collect_output=false to return only a send receipt, e.g. when another call is already reading.
@@ -210,6 +243,12 @@ busy and does not queue input. Never replay sent/unknown input merely because ou
 
 ## Read and manage output
 
+Empty collected output includes comment explaining no new output, a timeout, completion,
+partial encoded bytes, an insufficient output budget, a historical gap or an error/closure.
+This is an observation, not proof the device sent nothing, the command did not execute, or
+login succeeded. No such comment is generated for collect_output=false receipts. Inspect
+reason/state/exit information and never resend input or append Enter solely on empty output.
+
 - sess_read_available: immediate unread data, no waiting.
 - sess_read_until: unread plus future data, until the first end condition.
 - sess_read_tail(lines=20): last retained lines; bounded and does not move incremental cursor.
@@ -220,7 +259,7 @@ End reasons: exec_finish (exec only), match, total_timeout, idle_timeout, aborte
 output_limit, closed. Immediate reads need no reason when current data is exhausted. Total
 clock starts at read invocation; idle starts then and resets on endpoint bytes. These read
 conditions apply to read tools and stream-send collection, not sess_exec. Its total_timeout
-is instead governed by exec_total_timeout_ms. Timeouts leave
+is instead governed by exec_total_timeout_ms and may attempt TERM as described above. Ordinary read timeouts leave
 connections open. end_pattern matches DECODED unread output, including bytes received before
 this send; it does not match reason/error fields. Match consumes only through the match, leaving
 later output unread. Never infer input/output pairing or successful execution from it.
@@ -244,6 +283,6 @@ writes and SSH flow control. TCP acceptance/queue drain is not remote command co
 Use sess_list to inspect state. sess_close discards one session and all buffers; sess_close_all
 discards every session. Neither returns terminal output; subsequent reads fail. Read first if
 output matters. Unused sessions reclaim automatically after session_idle_timeout_ms; remote
-closure may happen earlier. A running SSH exec has a separate 110s no-output watchdog. If
+closure may happen earlier. Running tasks prevent idle session reclamation; quiet exec tasks have no silence watchdog. If
 connected=false, explicitly use sess_reconnect on a retained handle, or sess_connect if the handle
 was closed/expired. Inspect remote state before retrying side effects.

@@ -77,7 +77,7 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		v := s.statusLocked()
 		s.mu.Unlock()
 		if disposed {
-			return Result{Session: s.id, Reason: "closed", Connected: false}
+			return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
 		}
 		now := time.Now()
 		idleSince := last
@@ -108,6 +108,8 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		}
 		if reason == "" {
 			switch {
+			case failure != "" && v.State == "unknown":
+				reason = "aborted"
 			case d.err != nil:
 				reason = "aborted"
 				v.Error = d.err.Error()
@@ -149,7 +151,7 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 			s.mu.Lock()
 			if s.disposed {
 				s.mu.Unlock()
-				return Result{Session: s.id, Reason: "closed", Connected: false}
+				return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
 			}
 			// If the producer overtook the snapshot, report that loss on the next read.
 			if !history {
@@ -157,7 +159,37 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 			}
 			v.Connected = s.connected
 			v.Running = s.running
+			v.State, v.ExitCode, v.ExitSignal, v.Warning = s.state, s.exit, s.exitSignal, s.warning
+			v.More = end < s.total
+			if v.Error == "" {
+				v.Error = s.failure
+			}
+			if !s.connected {
+				v.NextAction = "sess_reconnect"
+			}
 			s.mu.Unlock()
+			if v.Output == "" {
+				switch {
+				case v.Error != "":
+					v.Comment = "No output returned because the operation encountered an error; inspect error and state before continuing."
+				case !v.Connected || v.Reason == "closed":
+					v.Comment = "No output available from the closed connection. Empty output does not establish the remote command outcome."
+				case v.Reason == "cancelled":
+					v.Comment = "Output collection was cancelled without returning text. This does not imply the command stopped or was not executed."
+				case d.limited:
+					v.Comment = "Output bytes are available, but max_output_bytes is too small to return the next complete character or byte escape."
+				case len(raw) > 0 && consumed == 0:
+					v.Comment = "The call is valid. Partial encoded bytes were received; no complete text is available yet."
+				case v.Reason == "exec_finish":
+					v.Comment = "The command channel finished. This read returned no output; inspect exit_code, exit_signal and warning for its outcome."
+				case history:
+					v.Comment = "The call is valid. No retained output is available in the requested range; inspect dropped_bytes for history loss."
+				case v.Reason == "total_timeout" || v.Reason == "idle_timeout":
+					v.Comment = "The call is valid. No returnable output was observed during this wait. Do not resend input or add Enter solely because output is empty."
+				default:
+					v.Comment = "The call is valid. No new returnable output is available; earlier output may already have been consumed. Empty output does not establish execution or authentication success."
+				}
+			}
 			return v
 		}
 		select {

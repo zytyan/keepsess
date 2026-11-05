@@ -129,7 +129,7 @@ func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	}
 	c.send(t, "list", "tools/list", map[string]any{})
 	v = c.receive(t, "list", time.Second)
-	if len(v["result"].(map[string]any)["tools"].([]any)) != 16 {
+	if len(v["result"].(map[string]any)["tools"].([]any)) != 21 {
 		t.Fatal("tool discovery")
 	}
 	c.tool(t, "connect", "sess_connect", connectArgs(addr))
@@ -231,6 +231,85 @@ func TestToolSchemas(t *testing.T) {
 	}
 }
 
+func TestStdioTaskLifecycleAndConcurrentWait(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	c := harness(t)
+	args := connectArgs(addr)
+	args["protocol"], args["mode"], args["username"], args["password"], args["host_key"] = "ssh", "exec", "test", "test", key
+	c.tool(t, "connect", "sess_connect", args)
+	session := structured(t, c.receive(t, "connect", time.Second))["session"]
+	c.tool(t, "async", "sess_exec", map[string]any{"session": session, "command": "hang", "collect_output": false})
+	a := structured(t, c.receive(t, "async", time.Second))
+	handle, ok := a["handle"].(string)
+	if !ok || handle != "task1" || a["comment"] != nil {
+		t.Fatal(a)
+	}
+	c.tool(t, "wait", "sess_task_wait", map[string]any{"handle": handle, "config": map[string]any{"term_on_timeout": false}})
+	c.tool(t, "status", "sess_task_status", map[string]any{"handle": handle})
+	v := structured(t, c.receive(t, "status", time.Second))
+	if v["state"] != "running" || v["output"] != nil {
+		t.Fatal(v)
+	}
+	c.tool(t, "sync", "sess_exec", map[string]any{"session": session, "command": "both"})
+	v = structured(t, c.receive(t, "sync", time.Second))
+	if v["reason"] != "exec_finish" || v["handle"] != nil {
+		t.Fatal(v)
+	}
+	c.tool(t, "signal", "sess_task_signal", map[string]any{"handle": handle, "signal": "TERM"})
+	v = structured(t, c.receive(t, "signal", time.Second))
+	if v["signal"].(map[string]any)["request_state"] != "sent" {
+		t.Fatal(v)
+	}
+	c.send(t, "", "notifications/cancelled", map[string]any{"requestId": "wait"})
+	v = structured(t, c.receive(t, "wait", time.Second))
+	if v["reason"] != "cancelled" || v["handle"] != handle || v["comment"] == nil {
+		t.Fatal(v)
+	}
+	for i, args := range []map[string]any{
+		{"session": session},
+		{"session": session, "handle": handle},
+		{"session": "", "handle": handle},
+		{},
+	} {
+		id := fmt.Sprintf("invalid-read-%d", i)
+		c.tool(t, id, "sess_read_available", args)
+		if c.receive(t, id, time.Second)["result"].(map[string]any)["isError"] != true {
+			t.Fatal("ambiguous/missing target accepted", args)
+		}
+	}
+	c.tool(t, "live-release", "sess_task_release", map[string]any{"handle": handle})
+	if c.receive(t, "live-release", time.Second)["result"].(map[string]any)["isError"] != true {
+		t.Fatal("running task released")
+	}
+	c.tool(t, "list", "sess_task_list", map[string]any{"session": session})
+	list := structured(t, c.receive(t, "list", time.Second))["tasks"].([]any)
+	if len(list) != 2 {
+		t.Fatal(list)
+	}
+	var finished string
+	for _, item := range list {
+		task := item.(map[string]any)
+		if task["state"] == "finished" {
+			finished = task["handle"].(string)
+		}
+	}
+	c.tool(t, "history", "sess_read_history", map[string]any{"handle": finished})
+	v = structured(t, c.receive(t, "history", time.Second))
+	if !strings.Contains(v["output"].(string), "stdout") || !strings.Contains(v["output"].(string), "stderr") {
+		t.Fatal(v)
+	}
+	c.tool(t, "release", "sess_task_release", map[string]any{"handle": finished})
+	if v = structured(t, c.receive(t, "release", time.Second)); v["reason"] != "released" {
+		t.Fatal(v)
+	}
+	c.tool(t, "close", "sess_close", map[string]any{"session": session})
+	c.receive(t, "close", time.Second)
+	c.tool(t, "gone", "sess_task_status", map[string]any{"handle": handle})
+	if c.receive(t, "gone", time.Second)["result"].(map[string]any)["isError"] != true {
+		t.Fatal("handle survived close")
+	}
+}
+
 func TestSendJSONToWire(t *testing.T) {
 	cases := []struct{ tool, data, want string }{
 		{"sess_send_text", `\r`, `\r`},
@@ -310,7 +389,7 @@ func TestExecUsesIndependentWaitThroughMCP(t *testing.T) {
 	if conf["exec_total_timeout_ms"] != float64(1000) || conf["read_total_timeout_ms"] != float64(1) || conf["end_pattern"] != "first" {
 		t.Fatal(conf)
 	}
-	c.tool(t, "exec-drain", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": 1000, "read_idle_timeout_ms": 0, "end_pattern": ""}})
+	c.tool(t, "exec-drain", "sess_read_until", map[string]any{"handle": v["handle"], "config": map[string]any{"read_total_timeout_ms": 1000, "read_idle_timeout_ms": 0, "end_pattern": ""}})
 	v = structured(t, c.receive(t, "exec-drain", 2*time.Second))
 	if v["reason"] != "exec_finish" || !strings.Contains(v["output"].(string), "second") {
 		t.Fatal(v)
@@ -320,7 +399,7 @@ func TestExecUsesIndependentWaitThroughMCP(t *testing.T) {
 	if v["input_state"] != "sent" || v["reason"] != nil || v["running"] != true {
 		t.Fatal(v)
 	}
-	c.tool(t, "exec-quiet-drain", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_total_timeout_ms": 2000, "read_idle_timeout_ms": 0, "end_pattern": ""}})
+	c.tool(t, "exec-quiet-drain", "sess_read_until", map[string]any{"handle": v["handle"], "config": map[string]any{"read_total_timeout_ms": 2000, "read_idle_timeout_ms": 0, "end_pattern": ""}})
 	v = structured(t, c.receive(t, "exec-quiet-drain", 3*time.Second))
 	if v["reason"] != "exec_finish" || v["output"] != "quiet done\n" {
 		t.Fatal(v)

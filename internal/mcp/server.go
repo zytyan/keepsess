@@ -85,6 +85,13 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 			return toolResult(nil, fmt.Errorf("missing required argument %q", k))
 		}
 	}
+	if strings.HasPrefix(args.Name, "sess_read_") {
+		_, hasSession := keys["session"]
+		_, hasHandle := keys["handle"]
+		if hasSession == hasHandle {
+			return toolResult(nil, errors.New("provide exactly one of session (stream) or handle (exec task)"))
+		}
+	}
 	if s.Audit != nil {
 		var record any
 		_ = json.Unmarshal(p, &record)
@@ -130,6 +137,15 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		}
 		v, e := s.Manager.Close(r.Session)
 		return toolResult(v, e)
+	case "sess_task_list":
+		var r struct {
+			Session string `json:"session,omitempty"`
+		}
+		if e := strict(args.Arguments, &r); e != nil {
+			return toolResult(nil, e)
+		}
+		v, e := s.Manager.TaskList(r.Session)
+		return toolResult(map[string]any{"tasks": v}, e)
 	case "sess_list":
 		return toolResult(map[string]any{"sessions": s.Manager.List()}, nil)
 	case "sess_close_all":
@@ -161,8 +177,8 @@ func configSchema(override bool) any {
 		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms" || k == "read_only") {
 			continue
 		}
-		if k == "read_only" {
-			props[k] = map[string]any{"type": "boolean", "description": desc, "default": false}
+		if k == "read_only" || k == "term_on_timeout" {
+			props[k] = map[string]any{"type": "boolean", "description": desc, "default": k == "term_on_timeout"}
 		} else if strings.HasSuffix(k, "_ms") || strings.HasSuffix(k, "_bytes") {
 			props[k] = map[string]any{"description": desc + " Integer or arithmetic string, e.g. 30*60*1000. No eval/calls.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "maxLength": 128}}}
 		} else {
@@ -184,14 +200,34 @@ func buildDefinitions() map[string]map[string]any {
 	}
 	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "host": str("Hostname or IP; IPv6 without brackets"), "port": integerSchema("TCP port", 1, 65535), "username": str("SSH username"), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("Local SSH private key path"), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Optional local known_hosts path enables verification; never automatically discovered or written. Used unless host_key or insecure=true takes precedence."), "host_key": str("Optional pinned SHA256 SSH host-key fingerprint enables verification; takes precedence over known_hosts unless insecure=true."), "insecure": map[string]any{"type": "boolean", "description": "Compatibility flag: true skips verification even when host_key/known_hosts is supplied. By default verification is skipped unless those fields are supplied; false alone does not enable it."}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec for independent non-interactive commands; use stream for interactive Bash/shell, console logins and network devices. Telnet always stream; never use sess_exec there."}, "config": configSchema(false)}
 	add("sess_connect", "Create a persistent connection and short handle; no terminal output consumed. SSH exec has exit status; stream is bidirectional with no input/output attribution. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.", connect, "protocol", "host", "port")
-	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
+	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
 	p := session()
 	p["config"] = configSchema(false)
 	add("sess_configure", "Atomically patch session settings; omitted fields unchanged. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
 	add("sess_get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
 	add("sess_list", "List process-local sessions and transport/exec state.", map[string]any{})
-	add("sess_close", "Discard this connection and all buffers. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
+	add("sess_close", "Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
 	add("sess_close_all", "Discard every connection and buffer. No terminal output returned.", map[string]any{})
+	add("sess_task_list", "List retained exec tasks, optionally filtered by session. Does not consume output. Handles are process-local task1, task2, ... and never reused. Finished records expire after 30 minutes and may be evicted earlier at retention limits.", session())
+	for _, kind := range []string{"status", "wait", "signal", "release"} {
+		p := map[string]any{"handle": str("Exec task handle, e.g. task22. Not a connection session ID.")}
+		required := []string{"handle"}
+		desc := ""
+		switch kind {
+		case "status":
+			desc = "Immediately inspect task state, exit_code/exit_signal/warning, unread output (more), and latest signal request. Does not consume output. Missing exit status is unknown outcome even if state=finished."
+		case "wait":
+			p["config"] = configSchema(true)
+			desc = "Wait for this task's completion and consume incremental output. Uses exec_total_timeout_ms and term_on_timeout, ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Timeout attempts TERM by default and retains handle. Cancellation/output_limit do not signal. One reader per task."
+		case "signal":
+			p["signal"] = map[string]any{"type": "string", "enum": []string{"ABRT", "ALRM", "FPE", "HUP", "ILL", "INT", "KILL", "PIPE", "QUIT", "SEGV", "TERM", "USR1", "USR2"}, "description": "SSH signal name without SIG prefix. sent confirms only the request write, not delivery or program exit. read_only blocks signals."}
+			required = append(required, "signal")
+			desc = "Send one bounded SSH signal request to a running task, independent of output collection. Does not guarantee exit or terminate a process tree. No automatic escalation/retry. Stalled transport writes close the shared connection and report unknown outcomes."
+		case "release":
+			desc = "Delete a finished task record and retained output. Running/unknown tasks and active operations return busy; use signal to request termination and inspect completion first. Connection close discards all associated handles without guaranteeing remote exit."
+		}
+		add("sess_task_"+kind, desc, p, required...)
+	}
 	for _, kind := range []string{"exec", "send_text", "send_escaped", "sendline_text", "sendline_escaped", "read_available", "read_until", "read_tail", "read_history"} {
 		p := session()
 		p["config"] = configSchema(true)
@@ -201,7 +237,7 @@ func buildDefinitions() map[string]map[string]any {
 		case "exec":
 			p["command"] = str("One SSH exec command; shell state does not persist across commands.")
 			required = append(required, "command")
-			desc = "Non-interactive SSH mode=exec only. NEVER use for interactive Bash/shell, console login or Telnet; use stream send/read. SSH/Telnet stream sessions are rejected immediately without sending input. Wait for protocol completion using independent exec_total_timeout_ms (default 30000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. Timeout does not stop the command: inspect running and read without replaying. Missing exit status means unknown outcome."
+			desc = "Non-interactive SSH mode=exec only. NEVER use for interactive Bash/shell, console login or Telnet; use stream send/read. SSH/Telnet stream sessions are rejected immediately without sending input. Wait for protocol completion using independent exec_total_timeout_ms (default 30000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
 		case "send_text", "sendline_text":
 			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
 			required = append(required, "data")
@@ -224,16 +260,24 @@ func buildDefinitions() map[string]map[string]any {
 		if kind == "exec" || strings.HasPrefix(kind, "send") {
 			collection := "Default true: after writing collect with read_until. False returns only a send receipt. Per-call config never changes session settings."
 			if kind == "exec" {
-				collection = "Default true: wait for SSH completion with exec_total_timeout_ms, independent of read settings/patterns. False returns only a send receipt. Per-call config never changes session settings."
+				collection = "Default true: wait for SSH completion with exec_total_timeout_ms, independent of read settings/patterns. False returns a task handle and startup receipt; no execution wait or background timeout. Per-call config never changes session settings."
 			}
 			p["collect_output"] = map[string]any{"type": "boolean", "default": true, "description": collection}
 		}
+		if strings.HasPrefix(kind, "read_") {
+			p["handle"] = str("Read one exec task. Provide exactly one of handle (exec output) or session (stream output).")
+			required = nil
+			desc += " Exec tasks require handle; stream reads require session, never both. Ordinary read timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success."
+		}
 		add("sess_"+kind, desc, p, required...)
+		if strings.HasPrefix(kind, "read_") {
+			defs["sess_"+kind]["inputSchema"].(map[string]any)["oneOf"] = []any{map[string]any{"required": []string{"session"}}, map[string]any{"required": []string{"handle"}}}
+		}
 	}
 	return defs
 }
 func Tools() []any {
-	order := []string{"sess_connect", "sess_reconnect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_history", "sess_close", "sess_close_all"}
+	order := []string{"sess_connect", "sess_reconnect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_task_list", "sess_task_status", "sess_task_wait", "sess_task_signal", "sess_task_release", "sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_history", "sess_close", "sess_close_all"}
 	out := make([]any, 0, len(order))
 	for _, name := range order {
 		out = append(out, definitions[name])
@@ -439,7 +483,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec only for non-interactive SSH mode=exec. Interactive shells, console login and all Telnet use mode=stream send/read; never exec. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec uses independent exec_total_timeout_ms (30000ms), ignoring read timeouts and end_pattern. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec; change explicitly with sess_configure, never per-call config. sess_reconnect explicitly reuses connection parameters/current config and handle, discards old output, never replays application input; busy during active operations. close discards buffers and reconnect parameters."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec only for non-interactive SSH mode=exec. Interactive shells, console login and all Telnet use mode=stream send/read; never exec. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec/task_wait use independent exec_total_timeout_ms (30000ms), ignoring read settings. term_on_timeout defaults true: completion timeout attempts TERM, never guarantees exit. Sync calls release their slot on return; only sync calls exclude each other. Async exec returns taskN and can run concurrently with any exec. Use task_list/status/wait/signal/release and handle-based read tools for exec. Normal sync completion omits handle when all output was returned. There is no exec silence timeout. Read timeouts never send TERM. Empty collected output includes comment, never proof of execution/authentication. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec/signals; change explicitly with sess_configure, never per-call config. sess_reconnect explicitly reuses connection parameters/current config and handle, discards old output, never replays application input; busy during active operations. close discards buffers and reconnect parameters."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

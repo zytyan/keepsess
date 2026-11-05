@@ -21,11 +21,11 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 当前提供下列 16 个工具（含 sess_reconnect）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 当前提供下列 21 个工具（含 sess_reconnect）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；16 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；21 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
@@ -78,7 +78,12 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 | 旧名 | 新名 |
 |---|---|
-| sess_send_raw | sess_send_text |
+| sess_send_raw | sess_task_list | session?；列出保留任务与状态，不消费输出 |
+| sess_task_status | handle；立即查询任务状态、退出信息、未读输出及最近信号请求 |
+| sess_task_wait | handle、config?；等待任务完成并收集增量输出，超时默认尝试 TERM |
+| sess_task_signal | handle、signal；有界发送 TERM/INT/KILL 等 SSH 信号，不保证退出 |
+| sess_task_release | handle；释放已结束且无活动操作的任务记录和输出；运行中/未知状态返回 busy |
+| sess_send_text |
 | sess_sendline_raw | sess_sendline_text |
 | sess_read_all | sess_read_history |
 
@@ -94,14 +99,14 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
 | sess_sendline_text | 同 text，追加一次配置的 line_end |
 | sess_sendline_escaped | 同 escaped，追加一次配置的 line_end |
-| sess_read_available | session、config?；立即读取未读数据，不等待 |
-| sess_read_until | session、config?；按匹配、超时等条件结束读取 |
-| sess_read_tail | session、lines?、config?；最后 N 行，默认 20，不移动增量游标 |
-| sess_read_history | session、offset?、config?；立即分页读取保留历史，不移动增量游标 |
+| sess_read_available | session 或 handle（二选一）、config?；立即读取未读数据，不等待 |
+| sess_read_until | session 或 handle（二选一）、config?；按匹配、超时等条件结束读取 |
+| sess_read_tail | session 或 handle（二选一）、lines?、config?；最后 N 行，默认 20，不移动增量游标 |
+| sess_read_history | session 或 handle（二选一）、offset?、config?；立即分页读取保留历史，不移动增量游标 |
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
 
-每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；所有后续操作明确指定 session。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
+每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
 SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互式 Bash/shell、console 登录流程和任何 Telnet 会话都禁止使用 sess_exec；请使用 mode=stream 的 sess_sendline_text/sess_sendline_escaped 和 read 工具。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
 
@@ -123,7 +128,7 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 
 重连丢弃旧缓冲和游标，从新连接的偏移 0 开始；新连接欢迎信息保留供显式 read，不消费、不返回终端正文。不发送回车、Telnet 用户名/密码、初始化命令或历史输入；SSH 协议认证正常执行。不保证 shell 目录/环境、设备视图或终端登录状态恢复，重连后应先读取观察。
 
-有读写、配置更新、其他重连或运行中 exec 时返回 busy，旧连接不受影响。连接失败返回 connected=false 和明确错误，保留原参数与配置，可再次显式重连；绝不自动重试。取消或连接超时也保留句柄。close/close_all 会取消进行中的重连并彻底释放参数，已关闭或回收的句柄不能重连，须重新 connect。read_only 会保留，仍禁止应用输入；串口服务端能否恢复原设备状态取决于其实现。
+有读写、任务操作、配置更新、其他重连或活跃 exec 时返回 busy，旧连接不受影响。重连会清空全部旧任务 handle 与历史；断线后仍未知的远端程序不自动重放。连接失败返回 connected=false 和明确错误，保留原参数与配置，可再次显式重连；绝不自动重试。取消或连接超时也保留句柄。close/close_all 会取消进行中的重连并彻底释放参数，已关闭或回收的句柄不能重连，须重新 connect。read_only 会保留，仍禁止应用输入；串口服务端能否恢复原设备状态取决于其实现。
 
 ## 配置
 
@@ -131,13 +136,14 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 
 | 配置项 | 默认值 | 语义 |
 |---|---|---|
-| read_only | false | 会话级输入保护，禁止 send 和 exec；只能通过 connect/configure 设置，不能单次覆盖 |
+| read_only | false | 会话级输入保护，禁止 send、exec 及手动/自动信号；只能通过 connect/configure 设置，不能单次覆盖 |
 | connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入 config |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
 | session_idle_timeout_ms | 1800000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
 | read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |
 | read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 sess_exec |
-| exec_total_timeout_ms | 30000 | sess_exec 命令启动后等待协议完成的独立总时限，1..110000ms；不受 read 超时与 end_pattern 影响 |
+| exec_total_timeout_ms | 30000 | sess_exec/task_wait 等待协议完成的独立总时限，1..110000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
+| term_on_timeout | true | 完成等待超时尝试一次 TERM；可单次覆盖；普通 read 超时、取消等待和输出上限不触发 |
 | tcp_keepalive_ms | 15000 | 系统 TCP keepalive 周期参数，0 禁用，最高一天；实际探测与失效时序取决于 OS |
 | line_end | SSH `\r`，Telnet `\r\n` | 可见转义文本，配置时按 UTF-8 与字节转义解码一次，最多 1024 字节；可为空 |
 | encoding | utf-8 | utf-8、gbk、shift-jis；支持 utf8、sjis、shift_jis 等别名 |
@@ -164,7 +170,7 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 {"session":"s1","config":{"read_only":true}}
 ```
 
-上例用于 sess_configure。开启后四个 send 工具与 sess_exec 返回 `input_state=not_sent`、`error` 以 `read_only:` 开头，不发送应用输入、不消费输出；读取、查看配置、列出会话、关闭连接仍可用。SSH/Telnet 协议协商与系统 keepalive 不受影响。
+上例用于 sess_configure。开启后四个 send 工具与 sess_exec 返回 `input_state=not_sent`、`error` 以 `read_only:` 开头，不发送应用输入、不消费输出；手动信号被拒绝，自动 TERM 报 skipped_read_only；读取、查看配置、列出会话、关闭连接仍可用。SSH/Telnet 协议协商与系统 keepalive 不受影响。
 
 read_only 不能在任意操作的 config 中覆盖，无论 true 或 false 都拒绝。修改 read_only 时若应用写入正在进行，整份 configure 返回 busy 且不修改任何配置；待写入结束后显式重试。开启成功后，先前操作即使持有旧配置，也必须通过写入前的最新只读检查。不会停止已启动的远端命令，其后续输出仍可读取。
 
@@ -230,13 +236,13 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 
 ## 读取与结果
 
-read_available 立即返回当前未读数据；read_until 从未读游标开始，等待后续数据。读写可并行，同会话一次只允许一个读取者和一个写入者，竞争直接报 busy，无无限队列。collect_output=true 的发送必须先获得读取权，否则不发送。
+read_available 立即返回当前未读数据；read_until 从未读游标开始，等待后续数据。stream 读写可并行，同会话一次只允许一个读取者和一个写入者，竞争直接报 busy，无无限队列。collect_output=true 的 stream 发送必须先获得读取权，否则不发送。exec 的四个 read 工具必须传 handle，每个任务独立缓冲和增量游标；不同任务可并行读取，同一任务读取竞争返回 busy。session 与 handle 不可同时传入，不根据连接猜测任务。
 
 | reason | 含义 |
 |---|---|
 | exec_finish | SSH exec channel 完成，不保证成功；有可靠协议退出状态才给 exit_code |
 | match | 观察到结束正则，仅消费到匹配末尾，后面的字节留待下次读取 |
-| total_timeout | 达到读取总时限，或 sess_exec 的独立等待总时限；不关闭连接 |
+| total_timeout | 达到读取总时限，或 exec/task_wait 完成等待时限；后者默认尝试 TERM，正常超时不关闭连接 |
 | idle_timeout | 本次读取期间无新字节达到静默时限，不关闭连接 |
 | aborted | 网络、协议或输出解码错误，附 error；connected 指明连接是否还在 |
 | cancelled | 调用方取消；读取取消保留连接，发送期间取消则断连且 input_state=unknown |
@@ -247,7 +253,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 输出统一为有效 UTF-8，不默认剥离 ANSI 或改变换行。跨网络包的半个字符在增量读取中保留；EOF、已完成 exec 或显式历史读取按错误策略处理残缺字节。error 策略不会因解码错误关闭连接，可以换策略再读。必要的字节转义作为整体展示，不切碎。
 
-历史保留 1MiB，more 表示后面还有数据；start/end 为原始字节偏移，不是显示字符下标。增量读取推进一个会话游标；read_history/read_tail 不推进。read_history 默认从仍保留的最早位置开始，用 offset=end 分页，不会无限等待未来输出。dropped_bytes 明确报告请求位置之前已被覆盖的字节。显式 close 会丢弃全部缓冲，后续读取失败；远端自然关闭后尚可读取保留数据，直到回收或 close。
+每个 stream/exec 任务历史保留 1MiB，more 表示后面还有数据；start/end 为原始字节偏移，不是显示字符下标。增量读取推进对应 stream/任务的游标；read_history/read_tail 不推进。read_history 默认从仍保留的最早位置开始，用 offset=end 分页，不会无限等待未来输出。dropped_bytes 明确报告请求位置之前已被覆盖的字节。显式 close 会丢弃全部缓冲，后续读取失败；远端自然关闭后尚可读取保留数据，直到回收或 close。
 
 ## SSH exec 与连接保护
 
@@ -259,13 +265,33 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 {"session":"s1","command":"sleep 2; uname -a","config":{"exec_total_timeout_ms":60000}}
 ```
 
-独立总时限到达仍返回 reason=total_timeout；它只结束本次等待，不停止远端命令或断开 transport。running=true 时用 sess_read_until/sess_read_available 继续读取，不重发命令。**随后显式调用的 read 工具照常使用 read 配置**；例如 read_until 仍可按 500ms 静默返回。collect_output=false 跳过执行等待读取，只返回发送回执。
+`collect_output=true`（默认）在同一连接内只允许一个同步 exec 调用，竞争立即返回 busy/not_sent，不排队。同步调用返回时释放名额，包括超时、取消和 output_limit；旧程序仍运行也不阻止下一次同步调用。`collect_output=false` 启动后返回 `handle: "task22"` 与发送回执，不等完成，不启动后台运行计时器；异步任务彼此可并行，也可与同步任务并行。资源上限与服务器 channel 限制仍可能拒绝新任务。
 
-输出预算、取消、关闭、网络/解码错误及后台 SSH exec 的 110s 静默保护继续生效，不能把 output_limit/total_timeout/cancelled 当作命令完成。只有 exec_finish 表示协议 channel 已结束，成功与否还须看 exit_code；缺失退出状态仍是未知结果。
+每次 exec 使用独立 SSH channel，合并该任务的 stdout/stderr，按协议退出状态判断完成。cwd、环境不跨命令保留。正常同步完成且输出全部返回时省略 handle；非零退出码也属于完成。提前返回、启动结果不确定或仍有输出时返回 handle，后续按 handle 管理。完成记录仍可在 task_list 找到。缺失 exit-status/exit-signal 返回 warning 与缺省 exit_code，不能假定成功；exit-signal 单独返回 exit_signal，不把合成数字当作远端退出码。
 
-sess_exec 每次新建 SSH channel，在持久 transport 上执行命令，合并 stdout/stderr。exec 的 cwd、环境不跨命令保留。运行中返回 running=true 时，用 read_until/read_available 继续读，不重新提交。缺失 exit-status/exit-signal 返回 exec_finish、warning 和缺省 exit_code，不能假定成功，也不因此关闭 transport。
+完成等待超时返回 reason=total_timeout。**term_on_timeout 默认 true**：sess_exec 与 sess_task_wait 在超时后尝试发送一次 TERM，然后返回 handle，不等程序退出、不自动升级 KILL、不重放。设 false 仅结束等待。TERM 请求的 `signal.request_state=sent` 只表示请求已写出，不证明远端处理或程序/子进程树退出。可能返回 not_sent、unknown、skipped_read_only、skipped_finished，并附具体错误。信号写入限时 1s，包含在整个 RPC 115s 预算内；实际完成等待还受剩余 RPC 预算约束。半开连接导致 channel 建立或控制写入卡住时，必须关闭共享 transport 才能解除底层阻塞，会明确报告所有受影响任务的未知结果。
 
-每个 RPC 硬上限 115s；各连接、写入、读取配置均有界。stream 无活动调用时不因 110s 无输出关闭；默认 30min 无操作回收连接和缓冲。后台 SSH exec 独立受到 110s 无输出保护，轮询不重置。TCP keepalive 不刷新业务输出计时，也不能保证远端终端程序健康。
+普通 sess_read_until 仍使用 read 的 total/idle/end_pattern 配置，超时**绝不触发 TERM**。取消等待、输出上限和解码错误不发信号。sess_task_wait 不占同步 exec 名额，等待期间可并行查询状态和发信号；同一任务只允许一个输出读取者。
+
+任务状态：starting（启动中）、running（尚未观察到结束）、finished（channel 完成，成功与否看退出信息）、unknown（启动/连接故障导致远端结果未知）。task_status 不消费输出，more 表示还有未读字节，signal 是最近一次信号请求信息。task_release 仅删除已结束且无活动操作的记录；运行中或未知任务返回 busy。close/close_all 丢弃全部关联 handle 和缓冲，但不保证远端程序停止。
+
+示例调用顺序（handle 使用实际返回值）：
+
+```text
+sess_exec({"session":"s1","command":"long-job","collect_output":false})
+sess_task_status({"handle":"task22"})
+sess_read_available({"handle":"task22"})
+sess_task_wait({"handle":"task22","config":{"exec_total_timeout_ms":10000,"term_on_timeout":false}})
+sess_task_signal({"handle":"task22","signal":"TERM"})
+sess_task_wait({"handle":"task22"})
+sess_task_release({"handle":"task22"})
+```
+
+每连接最多 8 个未完成任务、16 条保留记录；全局最多 64 个未完成任务、128 条记录。运行中/未知任务不自动淘汰以腾出容量；完成记录保留 30min，达到容量时可提前淘汰最旧且无活动操作的完成记录。读取被淘汰的 handle 明确报 unknown or expired，不切换到其他任务、不重放。会话被关闭、重连或回收时任务记录一起清理。
+
+**exec 不再有 110 秒无输出保护。** 无活动调用且无活跃任务的会话默认 30min 回收，可设 session_idle_timeout_ms=0 禁用；安静的后台任务不因无输出被关闭。连接/握手/写入截止时间、单次调用上限、TCP keepalive 继续有效。
+
+收集输出但返回空文本时附 `comment`，区分无新数据、等待超时、命令已结束、历史范围为空、不完整字符、输出预算不足及错误/关闭。它解释本次观察，不保证设备没有发送内容，不证明执行或认证成功。collect_output=false 不收集输出，也不会误报“设备没有返回”。结构化 reason/state/退出信息与发送回执仍是判断依据。
 
 Linux 使用 SIOCOUTQ/TIOCOUTQ 查询 TCP 排队字节，包含未确认数据；SSH 测量的是整个加密 transport，不能推断某条命令的积压。Windows 当前明确不支持此查询，非零 backpressure_bytes 被拒绝，get_config 会报告能力。两平台普通发送仍使用 Write/SSH 窗口流控和超时。队列低于阈值只是允许尝试写入，不保证整条消息立刻写完或远端已处理。
 

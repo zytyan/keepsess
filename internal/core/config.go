@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	TermOnTimeout           bool   `json:"term_on_timeout"`
 	ReadOnly                bool   `json:"read_only"`
 	ConnectTimeoutMS        int64  `json:"connect_timeout_ms"`
 	WriteTimeoutMS          int64  `json:"write_timeout_ms"`
@@ -46,13 +47,14 @@ type ConfigResult struct {
 }
 
 var configDescriptions = map[string]string{
-	"read_only":                  "Session-only input guard; default false. Reject send and exec before application writes. Protocol negotiation/keepalive remain enabled. Change explicitly with sess_configure; not a security boundary and does not stop an already running command.",
+	"read_only":                  "Session-only input guard; default false. Reject send, exec and manual/automatic signals before application writes. Protocol negotiation/keepalive remain enabled. Change explicitly with sess_configure; not a security boundary and does not stop an already running command.",
 	"connect_timeout_ms":         "Connect/reconnect, authentication and initial shell setup deadline. Updating an established session stores the value for its next explicit sess_reconnect; a new sess_connect needs its own config.",
 	"write_timeout_ms":           "Write/channel setup deadline; failed writes close transport and may have executed. Maximum 110000ms.",
 	"session_idle_timeout_ms":    "Reclaim session and buffers after no operations; 0 disables. Active readers/writers or running exec are excluded.",
 	"read_total_timeout_ms":      "Total read deadline from read start; 1..110000ms. Does not close transport. Ignored by sess_exec.",
 	"read_idle_timeout_ms":       "Read silence deadline from read start, reset by endpoint bytes; 0 disables. Default 500ms. Ignored by sess_exec.",
-	"exec_total_timeout_ms":      "sess_exec collection deadline after command startup; default 30000ms, 1..110000ms. Independent of read timeouts and end_pattern. Timeout returns without stopping the command; inspect running and read without replaying.",
+	"exec_total_timeout_ms":      "sess_exec/sess_task_wait completion wait deadline; default 30000ms, 1..110000ms. Independent of read settings. No background runtime timer for collect_output=false.",
+	"term_on_timeout":            "Default true: attempt TERM on exec/task_wait completion timeout, then return the handle. Delivery and exit are not guaranteed. Read timeouts, output limits and cancellation do not signal. read_only blocks signals. Per-call overrides do not alter session config.",
 	"tcp_keepalive_ms":           "OS TCP keepalive period, 0 disables. Actual probe/failure timing depends on OS.",
 	"line_end":                   "Visible escape text decoded once to bytes and appended by sendline; \\0 is NUL. Empty appends nothing.",
 	"encoding":                   "Text encoding: utf-8, gbk or shift-jis; byte escapes bypass encoding.",
@@ -69,7 +71,7 @@ func DefaultConfig(protocol string) Config {
 	if protocol == "telnet" {
 		end = `\r\n`
 	}
-	return Config{ConnectTimeoutMS: 10000, WriteTimeoutMS: 10000, SessionIdleTimeoutMS: 1800000, ReadTotalTimeoutMS: 30000, ReadIdleTimeoutMS: 500, ExecTotalTimeoutMS: 30000, TCPKeepaliveMS: 15000, LineEnd: end, Encoding: "utf-8", InputEncodeErrorAction: "error", OutputDecodeErrorAction: "to_escape_bytes", MaxInputBytes: 4096, MaxOutputBytes: 8192}
+	return Config{TermOnTimeout: true, ConnectTimeoutMS: 10000, WriteTimeoutMS: 10000, SessionIdleTimeoutMS: 1800000, ReadTotalTimeoutMS: 30000, ReadIdleTimeoutMS: 500, ExecTotalTimeoutMS: 30000, TCPKeepaliveMS: 15000, LineEnd: end, Encoding: "utf-8", InputEncodeErrorAction: "error", OutputDecodeErrorAction: "to_escape_bytes", MaxInputBytes: 4096, MaxOutputBytes: 8192}
 }
 func (c Config) Duration(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
 func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
@@ -82,6 +84,12 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 		}
 		var err error
 		switch k {
+		case "term_on_timeout":
+			if strings.TrimSpace(string(v)) == "null" {
+				err = errors.New("null is not a config value")
+			} else {
+				err = json.Unmarshal(v, &c.TermOnTimeout)
+			}
 		case "read_only":
 			if strings.TrimSpace(string(v)) == "null" {
 				err = errors.New("null is not a config value")
@@ -275,7 +283,7 @@ func configInfo(id string, c Config) ConfigResult {
 		}
 		fields[k] = ConfigField{v, configDescriptions[k], unit}
 	}
-	return ConfigResult{Session: id, Config: c, Fields: fields, Capabilities: map[string]any{"tcp_queue_query": queueSupported(), "tcp_queue_metric": queueMetric(), "encodings": []string{"utf-8", "gbk", "shift-jis"}, "hard_call_limit_ms": int(CallLimit / time.Millisecond), "history_bytes": HistoryLimit, "connect_timeout_applies": "connect_and_reconnect; reconnect uses current session config"}}
+	return ConfigResult{Session: id, Config: c, Fields: fields, Capabilities: map[string]any{"tcp_queue_query": queueSupported(), "tcp_queue_metric": queueMetric(), "encodings": []string{"utf-8", "gbk", "shift-jis"}, "hard_call_limit_ms": int(CallLimit / time.Millisecond), "history_bytes": HistoryLimit, "connect_timeout_applies": "connect_and_reconnect; reconnect uses current session config", "max_running_tasks_per_session": MaxRunningTasks, "max_retained_tasks_per_session": MaxTasks, "max_running_tasks_global": MaxGlobalRunningTasks, "max_retained_tasks_global": MaxGlobalTasks, "task_retention_ms": int(TaskRetention / time.Millisecond), "signal_write_limit_ms": int(SignalLimit / time.Millisecond)}}
 }
 
 func ConfigDescriptions() map[string]string {

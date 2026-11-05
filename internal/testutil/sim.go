@@ -117,6 +117,15 @@ func TelnetSwitch(t *testing.T) string {
 }
 func SSH(t *testing.T) (string, string) { return SSHWithShell(t, Switch) }
 func SSHWithShell(t *testing.T, shell func(io.ReadWriter)) (string, string) {
+	return sshServer(t, shell, nil)
+}
+
+// SSHWithExec runs a real SSH protocol server with a custom command handler.
+// The handler receives the channel after the exec request was acknowledged.
+func SSHWithExec(t *testing.T, exec func(string, ssh.Channel, <-chan *ssh.Request)) (string, string) {
+	return sshServer(t, Switch, exec)
+}
+func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request)) (string, string) {
 	t.Helper()
 	_, key, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
@@ -166,6 +175,10 @@ func SSHWithShell(t *testing.T, shell func(io.ReadWriter)) (string, string) {
 							return
 						}
 						_ = req.Reply(true, nil)
+						if exec != nil {
+							exec(p.Command, ch, reqs)
+							return
+						}
 						code := uint32(0)
 						switch p.Command {
 						case "both":

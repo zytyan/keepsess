@@ -140,15 +140,16 @@ func TestSSHExecExitStreamsAndMissingStatus(t *testing.T) {
 	if v.Reason != "total_timeout" || !v.Running || !strings.Contains(v.Output, "first") {
 		t.Fatal(v)
 	}
-	busy := run(t, m, "exec", Request{Session: id, Command: "both"})
-	if busy.InputState != "not_sent" || !strings.Contains(busy.Error, "busy") {
-		t.Fatal(busy)
+	handle := v.Handle
+	next := run(t, m, "exec", Request{Session: id, Command: "both"})
+	if next.Reason != "exec_finish" || next.Handle != "" {
+		t.Fatal(next)
 	}
-	v = run(t, m, "read_until", Request{Session: id})
+	v = run(t, m, "read_until", Request{Handle: handle})
 	if v.Reason != "exec_finish" || v.Running || !strings.Contains(v.Output, "second") {
 		t.Fatal(v)
 	}
-	v = run(t, m, "read_history", Request{Session: id})
+	v = run(t, m, "read_history", Request{Handle: handle})
 	if !strings.Contains(v.Output, "first") || !strings.Contains(v.Output, "second") {
 		t.Fatal(v)
 	}
@@ -671,12 +672,13 @@ func TestSSHExecIndependentDeadlineThenExplicitRead(t *testing.T) {
 	if info.Config.ExecTotalTimeoutMS != 5000 || info.Config.ReadTotalTimeoutMS != 1 || info.Config.ReadIdleTimeoutMS != 1 || info.Config.EndPattern != "first" {
 		t.Fatal("override changed config", info)
 	}
+	handle := v.Handle
 	// An explicit read is still a read: its own timeout must remain effective.
-	v = run(t, m, "read_until", Request{Session: id})
+	v = run(t, m, "read_until", Request{Handle: handle})
 	if v.Reason != "total_timeout" || !v.Running || !v.Connected {
 		t.Fatal("explicit read ignored read settings", v)
 	}
-	v = run(t, m, "read_until", Request{Session: id, Config: cfg(map[string]any{"read_total_timeout_ms": 1000, "read_idle_timeout_ms": 0, "end_pattern": ""})})
+	v = run(t, m, "read_until", Request{Handle: handle, Config: cfg(map[string]any{"read_total_timeout_ms": 1000, "read_idle_timeout_ms": 0, "end_pattern": ""})})
 	if v.Reason != "exec_finish" || v.Running || v.ExitCode == nil || !strings.Contains(v.Output, "second") {
 		t.Fatal(v)
 	}
@@ -692,7 +694,7 @@ func TestSSHExecStillHonorsCancellationAndOutputBudget(t *testing.T) {
 	if v.Reason != "output_limit" || !v.Running || !v.Connected || v.Output != "first" {
 		t.Fatal(v)
 	}
-	v = run(t, m, "read_until", Request{Session: id})
+	v = run(t, m, "read_until", Request{Handle: v.Handle})
 	if v.Reason != "exec_finish" {
 		t.Fatal(v)
 	}
@@ -703,7 +705,7 @@ func TestSSHExecStillHonorsCancellationAndOutputBudget(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		s.mu.Lock()
-		running := s.running
+		running := s.runningLocked()
 		s.mu.Unlock()
 		if running {
 			break

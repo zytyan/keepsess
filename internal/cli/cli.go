@@ -32,18 +32,21 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
 
-16 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
-read_available/read_until/read_tail/read_history、close/close_all（均带 sess_ 前缀）。
+21 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
+read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release、close/close_all（均带 sess_ 前缀）。
 sess_exec 仅用于非交互 SSH mode=exec；stream 直接报错，使用 sendline_text/escaped。
 交互式 Bash/shell、console 登录和全部 Telnet 使用 mode=stream 的 send/read，禁止 sess_exec。
 读取默认总时限 30000ms、静默时限 500ms；config 可持久设置或按调用覆盖。
-exec 使用独立 exec_total_timeout_ms（默认 30000ms），不受 read 超时/end_pattern 影响。
+exec/task_wait 使用 exec_total_timeout_ms（默认 30000ms）；term_on_timeout 默认 true，超时尝试 TERM，不保证退出。
+同步调用互斥，返回即释放名额；异步返回 taskN，可与同步/异步并行，无后台运行时限。
+正常同步完成且输出返回完毕时省略 handle；exec 后续 read 必须用 handle，stream 用 session。
+普通 read 超时、取消等待和输出上限不发 TERM；exec 不再因 110s 无输出关闭。
 send_text 编码文字；send_escaped 显式解码一层转义；sendline 追加配置结尾。
 发送默认顺便收集未读流，collect_output=false 仅发送；不归因输入输出，不自动重放。
 reconnect 显式复用参数与当前配置，保留句柄、清空旧输出，不重放输入；close 后不能重连。
-read_only 默认 false；true 禁止 send/exec，只能通过 connect/configure 设置，不能按调用覆盖。
+read_only 默认 false；true 禁止 send/exec/信号，只能通过 connect/configure 设置，不能按调用覆盖。
 sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确或 shell 就绪。
-空输出/start=end 时认证状态未知；有界只读等待，不重发密码或补发回车。
+空输出附 comment 解释当前观察，不证明设备未发送或执行/认证成功；start=end 时认证状态未知；有界只读等待，不重发密码或补发回车。
 默认增量输出 8KiB，上限 64KiB；history 1MiB；close 丢弃连接和缓冲，无正文。
 读写可并行，同方向竞争 busy，不无限排队；RPC 上限 115s，写入超时断连。
 空闲会话默认 30min 回收，可禁用；session 使用 s1、s2 等短句柄。
