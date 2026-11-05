@@ -33,7 +33,10 @@ All 15 tools are discovered through MCP tools/list, not individually registered.
 
 `sess_connect` requires protocol, host and port. SSH takes username and password/keyfile,
 plus known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
-consoles. Telnet only supports stream and is plaintext. Always use the actual short session
+consoles AND interactive shells, including interactive Bash. Telnet only supports stream and is plaintext.
+Never use sess_exec for an interactive shell, a console login, or any Telnet session. Selecting
+SSH transport does not make an interactive session an exec session. Do not use exec as a probe
+or fallback when a stream is silent. Always use the actual short session
 handle returned (s1, s2, ...); do not select a session implicitly. IDs are not reused in-process.
 Connect returns no terminal output and does not consume the greeting.
 
@@ -55,6 +58,13 @@ be 1..110000ms; exec_total_timeout_ms has the same range. One RPC is capped at 1
 strings such as "30*60*1000", without function calls or arbitrary evaluation.
 
 ## Choose exec or stream
+
+| Task | Connection and tools |
+|---|---|
+| Independent non-interactive SSH command with protocol exit status | SSH mode=exec; sess_exec |
+| Interactive Bash/shell, persistent cwd/environment, login dialog, switch/console | SSH mode=stream; sess_sendline_text/sess_sendline_escaped and read tools |
+| Any Telnet connection, including username/password input | mode=stream; send/read tools only, NEVER sess_exec |
+
 
 - `sess_exec(session, command, config?)`: **non-interactive SSH mode=exec only**.
   SSH mode=stream and all Telnet sessions immediately return a tool error without sending
@@ -85,14 +95,22 @@ bytes, ordinary Unicode and \uNNNN/\UNNNNNNNN use encoding. \\ produces a litera
 Go three-digit octal escapes are also accepted. Unknown/incomplete escapes reject before writing.
 HTML entities remain literal. Unencodable input rejects the entire operation, never partial text.
 
-| JSON arguments for an escaped send | Wire bytes |
-|---|---|
-| `{"session":"s1","data":"\\r"}` | CR (0D) |
-| `{"session":"s1","data":"\\x03"}` | Ctrl-C (03) |
-| `{"session":"s1","data":"\\0"}` | NUL (00) |
-| `{"session":"s1","data":"\\\\r"}` | literal backslash + r |
+| Logical data value for sess_send_escaped | JSON arguments (serialization example) | Wire bytes |
+|---|---|---|
+| `\r` (one visible backslash) | `{"session":"s1","data":"\\r"}` | CR (0D) |
+| `\x03` | `{"session":"s1","data":"\\x03"}` | Ctrl-C (03) |
+| `\0` | `{"session":"s1","data":"\\0"}` | NUL (00) |
+| `\\r` (two visible backslashes) | `{"session":"s1","data":"\\\\r"}` | literal backslash + r |
 
-This explicit layer supports XML/JSON agent carriers; do not repeatedly pre-decode strings.
+The model's native tool-call format is not necessarily JSON. DeepSeek V4.1's public DSML
+reference uses raw parameter text for string="true": its data body should contain visible
+\x03, not the extra backslash needed in the JSON serialization example. Objects/arrays marked
+string="false" still use JSON. The serving layer/agent performs serialization; do not manually
+copy JSON's doubled backslashes into an as-is string parameter. Valid JSON encode/decode pairs
+preserve the logical value. keepsess then decodes ONE escape layer for escaped sends only;
+text sends do not decode it. DSML is XML-like, not a promise to decode HTML entities: &#13;
+remains five literal characters. Never repeatedly pre-decode strings or assume an agent's
+additional transformations without inspecting that agent.
 Raw and escaped sendline append configured line_end exactly once, even if input already has an
 ending. Empty data is allowed. line_end is visible escape text decoded at configuration time
 as UTF-8 plus byte escapes: SSH defaults \r, Telnet \r\n. Use sess_send_text/sess_send_escaped without a line ending for pager space, Tab,
@@ -107,12 +125,50 @@ mode. Adjust to [~host], [*host], or nested views when observed; a pattern match
 command success. Use a pager's observed pattern and sess_send_text data=" " for the next page.
 Do not automatically commit/save/discard configurations or answer confirmation questions.
 
-Read input_state before retrying: sent means transport accepted input; not_sent means no new
-input was written; unknown means partial execution is possible. written_bytes is a confirmed
-lower bound when unknown, not evidence of zero delivery. Never replay sent/unknown input merely
-because output is empty. Timeout or cancellation during a write closes transport; cancellation
-during collection only stops the read. One writer and one reader may run concurrently; contention
-within either direction is busy and does not queue input.
+## Send receipts and silent login are not authentication results
+
+Keep input_state="sent"; for stream sends it means LOCAL write completion, not device acceptance. Renaming it
+to accepted would suggest an acknowledgement the stream protocol cannot provide.
+
+| Receipt | What it proves | What it does NOT prove |
+|---|---|---|
+| sent (stream) | Local writer completed the full application input | Peer delivery, device application processing, successful authentication, or shell readiness |
+| sent (exec) | SSH exec channel start request succeeded | Command completion, exit success, or a terminal login result |
+| not_sent | This attempt wrote no new application input | The outcome of any earlier attempt |
+| unknown | Write/setup failed, timed out or was cancelled; partial delivery/execution is possible | That zero bytes reached the peer |
+
+input_bytes counts intended application bytes after encoding/escapes, including line_end;
+written_bytes counts bytes accepted by the local writer, excluding SSH/Telnet framing. In
+unknown state it is only a confirmed lower bound; 0/omission is not proof of zero delivery.
+TCP queue drain, keepalive, connected=true or even a TCP acknowledgement cannot establish
+that the terminal application accepted the password. A stream offers no per-input delivery
+or authentication acknowledgement, and output is not attributed to the latest input.
+
+After sending a username/password, output="" or absent output with start==end means this read
+consumed no raw output bytes. It does not distinguish a correct password with a silent shell,
+a password still pending, a device waiting for a different protocol step, or a failed delivery.
+Two empty reads provide no authentication verdict. Echo may be disabled (especially passwords).
+Check reason/error/more too: an incomplete encoded character may remain unread.
+
+Do NOT label login successful/failed, automatically resend the username/password, change
+CR/LF, or send an extra Enter because output is empty. An Enter is NEW input that can submit
+an empty password or replay a command. Prefer one bounded read with no input, an observed
+prompt/failure regex, and idle timeout disabled when a quiet device needs more time:
+
+```json
+{"session":"s1","config":{"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$"}}
+```
+
+Use this with sess_read_until; the regex is illustrative and must match the actual device's
+observed text. Match only proves that text appeared; console replay/old unread output can
+also match, so a prompt is not protocol-level confirmation of this password attempt. If the
+bounded read is still empty, report: "local write completed; remote delivery/authentication/
+shell readiness unknown" and inspect the endpoint/console service or ask for evidence before
+another login input. Do not endlessly poll or reconnect-and-replay credentials as a guess.
+
+Timeout or cancellation during a write closes transport; cancellation during collection only
+stops the read. One writer and one reader may run concurrently; same-direction contention is
+busy and does not queue input. Never replay sent/unknown input merely because output is empty.
 
 ## Read and manage output
 

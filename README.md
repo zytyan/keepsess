@@ -102,7 +102,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；所有后续操作明确指定 session。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
-SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互模式使用 sess_sendline_text/sess_sendline_escaped。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认校验主机密钥：使用 known_hosts 或 host_key（SHA256 指纹），只有显式 insecure=true 才跳过。
+SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互式 Bash/shell、console 登录流程和任何 Telnet 会话都禁止使用 sess_exec；请使用 mode=stream 的 sess_sendline_text/sess_sendline_escaped 和 read 工具。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认校验主机密钥：使用 known_hosts 或 host_key（SHA256 指纹），只有显式 insecure=true 才跳过。
 
 ```json
 {"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","known_hosts":"/private/known_hosts","mode":"exec"}
@@ -169,7 +169,36 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 
 默认 collect_output=true：写入成功后按 read_until 收集未读输出，减少工具往返；false 只返回发送回执。**返回的流不归属于本次输入**：可能包括旧的未读输出、回放或自发日志。
 
-input_state 为 sent、not_sent 或 unknown；input_bytes 是计划发送字节数，written_bytes 是已确认写入字节数，unknown 时仅是下界。sent 不代表远端已执行，unknown 也不代表零字节送达。没有 input_id，不自动重试或重放；空输出不是重发依据。零值计数字段可以省略。
+### 发送回执不等于设备接受或认证成功
+
+保留 `input_state=sent`，其严格含义为“**本地写入已完成**”。不改为 `accepted`，因为终端流没有设备应用层确认，accepted 更容易被误解为“设备已接受用户名/密码”。这不是设备认证结果字段。
+
+| 字段或状态 | 能证明 | 不能证明 |
+|---|---|---|
+| sent（stream） | 本地 writer 完整接受本次应用输入 | 设备收到/处理输入、密码正确、登录成功或 shell 就绪 |
+| sent（exec） | SSH exec channel 启动请求成功 | 命令完成、退出码为零或某个终端内的登录结果 |
+| not_sent | 本次尝试未写入新的应用字节 | 之前输入是否已经执行 |
+| unknown | 写入/启动失败、超时或取消，可能已经部分发送或执行 | 零字节送达 |
+| input_bytes | 编码/转义后的计划输入长度，包含 line_end | 物理 TCP 包大小或执行次数 |
+| written_bytes | 本地 writer 确认接受的应用字节数，不含 SSH/Telnet 协议开销 | 远端应用实际消费字节数；unknown 时只能作为已确认下界 |
+
+`sent` 甚至不应笼统解释为“字节已写入 TCP socket”：SSH 还有 channel/流控等传输层。TCP 队列清空、TCP ACK、keepalive 或 connected=true 都不能证明终端程序接受密码。unknown 时 written_bytes=0 或字段省略也不能证明没有送达。接口没有 input_id，不自动重试或重放。
+
+发送用户名/密码后，`output` 为空或省略，且 `start == end`，只表示**本次读取没有消费原始输出字节**。它不说明“密码错误”“登录成功”“一定没送到”或“shell 已准备好”。连续两次空读取也无法区分这些情况；关闭回显的 shell 和密码输入本来就可能静默。检查 reason/error/more：输出可能在此前已读取，也可能存在尚未组成完整字符的未读字节。
+
+不要因空输出重发用户名/密码、换 ID 重试、猜测改 CR/LF 或额外按回车。回车是新输入，可能提交空密码或触发上一命令回放。正常发送后收集静默 500ms 返回不代表执行失败；可改用一次有界、只读等待，而不是多轮空轮询：
+
+```json
+{"session":"s1","config":{"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$"}}
+```
+
+上例用于 sess_read_until；仅示意等待设备提示符、重新询问密码或失败文本，正则必须按实际观察到的设备输出配置。end_pattern 匹配只是观察到文本，旧未读内容或 console 回放也可能命中，不能把它当作本次密码认证的协议确认。若等待后仍无输出，应报告“本地写入已完成，远端是否收到、是否通过认证和 shell 是否就绪仍未知”，再检查端点/console 服务、已知结束符要求或请求现场证据。不要无限轮询或重连后自动重放凭据。
+
+### 模型参数值与 JSON 展示转义
+
+模型不一定直接生成 MCP JSON。DeepSeek V4.1 的公开参考实现生成 DSML，字符串参数 string="true" 的正文原样保留，服务解析层再用 json.dumps 组装 API arguments，agent 再构造 MCP JSON-RPC；对象/数组等 string="false" 的参数正文仍使用 JSON。参见[官方编码说明](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/encoding/README.md)和[解析器实现](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/encoding/encoding.py)。具体 agent 是否另有转换，须查看其实现。
+
+以 sess_send_escaped 发送 Ctrl-C 为例：逻辑 data 值是四个可见字符 `\x03`；DSML 字符串参数正文写 `\x03`，等价 JSON 参数表示为 `{"data":"\\x03"}`。正常 JSON 序列化/反序列化保留逻辑值；最后由 keepsess 显式解码为一个 03 字节。不要把 JSON 示例里的额外反斜杠直接照搬进原样字符串参数，不要多次预解码。DSML 的 XML 样式不代表 HTML 实体会被解码，`&#13;` 仍是五个字符；不能仅凭最终输入错误就推断模型或 agent 哪一层有问题。
 
 ## 读取与结果
 

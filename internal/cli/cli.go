@@ -35,11 +35,13 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
 15 个工具：connect/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、close/close_all（均带 sess_ 前缀）。
 sess_exec 仅用于非交互 SSH mode=exec；stream 直接报错，使用 sendline_text/escaped。
-交换机/console 使用 mode=stream，Telnet 只支持 stream。
+交互式 Bash/shell、console 登录和全部 Telnet 使用 mode=stream 的 send/read，禁止 sess_exec。
 读取默认总时限 30000ms、静默时限 500ms；config 可持久设置或按调用覆盖。
 exec 使用独立 exec_total_timeout_ms（默认 30000ms），不受 read 超时/end_pattern 影响。
 send_text 编码文字；send_escaped 显式解码一层转义；sendline 追加配置结尾。
 发送默认顺便收集未读流，collect_output=false 仅发送；不归因输入输出，不自动重放。
+sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确或 shell 就绪。
+空输出/start=end 时认证状态未知；有界只读等待，不重发密码或补发回车。
 默认增量输出 8KiB，上限 64KiB；history 1MiB；close 丢弃连接和缓冲，无正文。
 读写可并行，同方向竞争 busy，不无限排队；RPC 上限 115s，写入超时断连。
 空闲会话默认 30min 回收，可禁用；session 使用 s1、s2 等短句柄。

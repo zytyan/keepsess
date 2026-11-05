@@ -1,3 +1,13 @@
+# 发送回执与静默登录说明
+
+- 同步两份 skill、README、CLI 帮助及 MCP tools/list/initialize 描述：交互式 Bash/shell、console 登录和任意 Telnet 均不使用 sess_exec。
+- 保留 input_state=sent，不改为 accepted；明确 stream 本地写入与远端送达/认证/shell 就绪的区别，exec 启动回执与完成状态分开说明。
+- 补充 output 为空/start=end、密码不回显、连续空读取的证据限制，以及不补发回车/不重发凭据的一次有界只读等待示例。
+- 澄清 DSML 原样字符串参数与 JSON 展示层转义，逻辑参数值与执行字节的区别；没有调用真实模型 API 或特定设备验证认证行为。
+- 验证通过：CLI/MCP race 测试、go vet ./...、Linux amd64/arm64 与 Windows amd64 交叉构建、skill 校验及两份 skill 一致性；登录示例正则经 Go RE2 编译和代表性提示文本匹配检查。
+
+---
+
 # 工具命名与 exec 模式限制
 
 - 工具与内部操作统一为 sess_send_text、sess_sendline_text、sess_read_history；15 工具数量不变，旧名称不再注册或接受调用。

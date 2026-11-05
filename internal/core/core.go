@@ -50,6 +50,8 @@ type Request struct {
 	Lines         int         `json:"lines,omitempty"`
 	Offset        *int64      `json:"offset,omitempty"`
 }
+
+// Result separates local send receipts from observed stream output; stream sent is not a device acknowledgement.
 type Result struct {
 	Session            string `json:"session"`
 	Output             string `json:"output,omitempty"`
