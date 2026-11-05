@@ -32,7 +32,7 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
 
-15 个工具：connect/configure/get_config/list、exec、四种 send/sendline、
+16 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、close/close_all（均带 sess_ 前缀）。
 sess_exec 仅用于非交互 SSH mode=exec；stream 直接报错，使用 sendline_text/escaped。
 交互式 Bash/shell、console 登录和全部 Telnet 使用 mode=stream 的 send/read，禁止 sess_exec。
@@ -40,6 +40,7 @@ sess_exec 仅用于非交互 SSH mode=exec；stream 直接报错，使用 sendli
 exec 使用独立 exec_total_timeout_ms（默认 30000ms），不受 read 超时/end_pattern 影响。
 send_text 编码文字；send_escaped 显式解码一层转义；sendline 追加配置结尾。
 发送默认顺便收集未读流，collect_output=false 仅发送；不归因输入输出，不自动重放。
+reconnect 显式复用参数与当前配置，保留句柄、清空旧输出，不重放输入；close 后不能重连。
 read_only 默认 false；true 禁止 send/exec，只能通过 connect/configure 设置，不能按调用覆盖。
 sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确或 shell 就绪。
 空输出/start=end 时认证状态未知；有界只读等待，不重发密码或补发回车。

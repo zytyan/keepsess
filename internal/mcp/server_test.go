@@ -129,7 +129,7 @@ func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	}
 	c.send(t, "list", "tools/list", map[string]any{})
 	v = c.receive(t, "list", time.Second)
-	if len(v["result"].(map[string]any)["tools"].([]any)) != 15 {
+	if len(v["result"].(map[string]any)["tools"].([]any)) != 16 {
 		t.Fatal("tool discovery")
 	}
 	c.tool(t, "connect", "sess_connect", connectArgs(addr))
@@ -424,5 +424,37 @@ func TestReadOnlyMCPObservation(t *testing.T) {
 	c.tool(t, "ro-send-ok", "sess_sendline_text", map[string]any{"session": id, "data": "show version", "config": map[string]any{"end_pattern": "switch> "}})
 	if v = c.receive(t, "ro-send-ok", time.Second); structured(t, v)["input_state"] != "sent" || v["result"].(map[string]any)["isError"] != false {
 		t.Fatal(v)
+	}
+}
+
+func TestMCPReconnectPreservesHandleAndReadOnly(t *testing.T) {
+	c := harness(t)
+	args := connectArgs(testutil.TelnetSwitch(t))
+	args["config"] = map[string]any{"read_only": true}
+	c.tool(t, "rc-connect", "sess_connect", args)
+	id := structured(t, c.receive(t, "rc-connect", time.Second))["session"].(string)
+	c.tool(t, "rc-read-old", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"end_pattern": "switch> "}})
+	c.receive(t, "rc-read-old", time.Second)
+	c.tool(t, "rc-reconnect", "sess_reconnect", map[string]any{"session": id})
+	msg := c.receive(t, "rc-reconnect", time.Second)
+	v := structured(t, msg)
+	if msg["result"].(map[string]any)["isError"] != false || v["session"] != id || v["connected"] != true || v["output"] != nil {
+		t.Fatal(msg)
+	}
+	c.tool(t, "rc-config", "sess_get_config", map[string]any{"session": id})
+	v = structured(t, c.receive(t, "rc-config", time.Second))
+	if v["config"].(map[string]any)["read_only"] != true || v["password"] != nil {
+		t.Fatal(v)
+	}
+	c.tool(t, "rc-read-new", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"end_pattern": "switch> "}})
+	v = structured(t, c.receive(t, "rc-read-new", time.Second))
+	if !strings.Contains(v["output"].(string), "Welcome") {
+		t.Fatal(v)
+	}
+	c.tool(t, "rc-close", "sess_close", map[string]any{"session": id})
+	c.receive(t, "rc-close", time.Second)
+	c.tool(t, "rc-closed", "sess_reconnect", map[string]any{"session": id})
+	if msg = c.receive(t, "rc-closed", time.Second); msg["result"].(map[string]any)["isError"] != true {
+		t.Fatal(msg)
 	}
 }

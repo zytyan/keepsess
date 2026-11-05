@@ -77,6 +77,8 @@ type Session struct {
 	mu                                      sync.Mutex
 	readMu, writeMu, configMu               sync.Mutex
 	config                                  Config
+	options                                 Options
+	reconnecting                            bool
 	buf                                     []byte
 	base, total, cursor                     int64
 	last, lastUse                           time.Time
@@ -149,6 +151,8 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	ctx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
 	defer stop()
 	s := &Session{id: id, protocol: o.Protocol, mode: o.Mode, config: cfg, last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	s.options = o
+	s.options.Config = nil // Retain connection credentials privately, not a caller-owned config map.
 	if o.Protocol == "ssh" {
 		err = s.connectSSH(ctx, o)
 	} else {
@@ -214,7 +218,10 @@ func (s *Session) status() Result { s.mu.Lock(); defer s.mu.Unlock(); return s.s
 func (s *Session) statusLocked() Result {
 	r := Result{Session: s.id, Connected: s.connected && !s.disposed, Running: s.running, ExitCode: s.exit, Warning: s.warning, Error: s.failure}
 	if !s.connected {
-		r.NextAction = "sess_connect"
+		r.NextAction = "sess_reconnect"
+		if s.disposed {
+			r.NextAction = "sess_connect"
+		}
 	}
 	return r
 }
@@ -230,6 +237,7 @@ func (s *Session) expire(now time.Time) bool {
 	unused := s.active == 0 && !s.running && s.config.SessionIdleTimeoutMS > 0 && now.Sub(s.lastUse) >= s.config.Duration(s.config.SessionIdleTimeoutMS)
 	if unused {
 		s.disposed = true
+		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
 		s.cursor = s.total
@@ -263,20 +271,25 @@ func (m *Manager) watch(s *Session) {
 }
 
 func (m *Manager) Close(id string) (Result, error) {
-	s, err := m.Get(id)
-	if err != nil {
-		return Result{}, err
+	m.mu.Lock()
+	s := m.sessions[id]
+	if s == nil {
+		m.mu.Unlock()
+		return Result{}, errors.New("unknown session; use sess_connect")
 	}
+	delete(m.sessions, id)
+	if cancel := m.pending[id]; cancel != nil {
+		cancel()
+	}
+	m.mu.Unlock()
 	s.mu.Lock()
 	s.disposed = true
+	s.options = Options{}
 	s.buf = nil
 	s.base = s.total
 	s.cursor = s.total
 	s.mu.Unlock()
 	s.disconnect("")
-	m.mu.Lock()
-	delete(m.sessions, id)
-	m.mu.Unlock()
 	return Result{Session: id, Reason: "closed", Connected: false}, nil
 }
 func (m *Manager) CloseAll() {
@@ -291,6 +304,7 @@ func (m *Manager) CloseAll() {
 	for _, s := range ss {
 		s.mu.Lock()
 		s.disposed = true
+		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
 		s.cursor = s.total
@@ -333,7 +347,9 @@ func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 	if err != nil {
 		return ConfigResult{}, err
 	}
-	s.configMu.Lock()
+	if !s.configMu.TryLock() {
+		return ConfigResult{}, errors.New("busy: configure or reconnect in progress")
+	}
 	defer s.configMu.Unlock()
 	// Serialize guard changes with application writes, without an unbounded wait.
 	// A successful configure guarantees any preceding write has finished.
@@ -396,7 +412,11 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	s.mu.Lock()
 	cfg := s.config
 	disposed := s.disposed
+	reconnecting := s.reconnecting
 	s.mu.Unlock()
+	if reconnecting {
+		return Result{}, errors.New("busy: reconnect in progress; nothing sent")
+	}
 	if disposed {
 		return Result{}, errors.New("session disposed; use sess_connect")
 	}
@@ -615,4 +635,103 @@ func (s *Session) keepalivePeriod() time.Duration {
 		return -1
 	}
 	return s.config.Duration(s.config.TCPKeepaliveMS)
+}
+
+// Reconnect replaces the transport instance, never reusing old readers or buffers.
+// Connection parameters remain private; no application input is replayed.
+func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
+	ctx, cancel := context.WithTimeout(parent, CallLimit)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	old, err := m.Get(id)
+	if err != nil {
+		return Result{}, err
+	}
+	if !old.configMu.TryLock() {
+		return Result{}, errors.New("busy: configure or reconnect in progress")
+	}
+	defer old.configMu.Unlock()
+	if !old.readMu.TryLock() {
+		return Result{}, errors.New("busy: read in progress; reconnect refused")
+	}
+	defer old.readMu.Unlock()
+	if !old.writeMu.TryLock() {
+		return Result{}, errors.New("busy: write in progress; reconnect refused")
+	}
+	defer old.writeMu.Unlock()
+	m.mu.Lock()
+	old.mu.Lock()
+	if m.sessions[id] != old || old.disposed {
+		old.mu.Unlock()
+		m.mu.Unlock()
+		return Result{}, errors.New("session disposed; use sess_connect")
+	}
+	if old.active != 0 || old.running || old.reconnecting {
+		old.mu.Unlock()
+		m.mu.Unlock()
+		return Result{}, errors.New("busy: session operation or exec in progress; reconnect refused")
+	}
+	o, cfg := old.options, old.config
+	old.reconnecting = true
+	old.active++ // Prevent idle collection while establishing the replacement.
+	generation := m.generation
+	m.pending[id] = cancel
+	old.mu.Unlock()
+	m.mu.Unlock()
+	old.disconnect("")
+	old.mu.Lock()
+	old.buf = nil
+	old.base, old.cursor = old.total, old.total
+	old.mu.Unlock()
+	next := &Session{id: id, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
+		last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	dialCtx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
+	if o.Protocol == "ssh" {
+		err = next.connectSSH(dialCtx, o)
+	} else {
+		err = next.connectTelnet(dialCtx, o)
+	}
+	if err == nil {
+		err = dialCtx.Err()
+	}
+	stop()
+	if err != nil {
+		next.disconnect("reconnect failed: " + err.Error())
+	}
+	// Publish only if close/close_all has not invalidated this handle in the meantime.
+	m.mu.Lock()
+	delete(m.pending, id)
+	valid := generation == m.generation && m.sessions[id] == old
+	old.mu.Lock()
+	old.disposed = true
+	old.options = Options{}
+	old.buf = nil
+	old.mu.Unlock()
+	if valid {
+		next.mu.Lock()
+		next.lastUse = time.Now()
+		next.mu.Unlock()
+		m.sessions[id] = next
+	}
+	m.mu.Unlock()
+	if !valid {
+		next.mu.Lock()
+		next.disposed = true
+		next.options = Options{}
+		next.buf = nil
+		next.mu.Unlock()
+		next.disconnect("")
+		return Result{}, errors.New("reconnect cancelled by close; use sess_connect")
+	}
+	go m.watch(next)
+	v := next.status()
+	if err != nil {
+		v.Reason = "aborted"
+		if errors.Is(err, context.Canceled) {
+			v.Reason = "cancelled"
+		}
+	}
+	return v, nil
 }

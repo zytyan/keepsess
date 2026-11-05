@@ -21,11 +21,11 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-版本 0.3.0 重构为下列 15 个工具。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 当前提供下列 16 个工具（含 sess_reconnect）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；15 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；16 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
@@ -85,6 +85,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | 工具 | 参数与用途 |
 |---|---|
 | sess_connect | protocol、host、port；可选 username/password/keyfile、SSH 主机校验、mode、config |
+| sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
 | sess_configure | session、config；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
@@ -112,6 +113,18 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 {"protocol":"telnet","host":"switch.example","port":23,"config":{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000}}
 ```
 
+### 显式重连
+
+```json
+{"session":"s1"}
+```
+
+上例用于 sess_reconnect：先关闭旧传输连接，再使用原地址、SSH 认证方式、主机校验参数、mode 和当前会话配置建立连接，成功后仍使用 s1。connect_timeout_ms 的当前值用于本次重连。私钥与 known_hosts 文件按原路径重新读取；密码等必要参数仅保留在进程内，不出现在 get_config/list 或重连工具结果中。
+
+重连丢弃旧缓冲和游标，从新连接的偏移 0 开始；新连接欢迎信息保留供显式 read，不消费、不返回终端正文。不发送回车、Telnet 用户名/密码、初始化命令或历史输入；SSH 协议认证正常执行。不保证 shell 目录/环境、设备视图或终端登录状态恢复，重连后应先读取观察。
+
+有读写、配置更新、其他重连或运行中 exec 时返回 busy，旧连接不受影响。连接失败返回 connected=false 和明确错误，保留原参数与配置，可再次显式重连；绝不自动重试。取消或连接超时也保留句柄。close/close_all 会取消进行中的重连并彻底释放参数，已关闭或回收的句柄不能重连，须重新 connect。read_only 会保留，仍禁止应用输入；串口服务端能否恢复原设备状态取决于其实现。
+
 ## 配置
 
 连接时 config、sess_configure.config 与操作的 config 使用同一套校验。未知字段、null、非法正则、超范围值整体拒绝，不部分生效。调用开始时快照配置；read_only 在实际写入前重新检查，其余配置修改不会影响当前调用。操作中的 config 不改变会话默认配置。
@@ -119,7 +132,7 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 | 配置项 | 默认值 | 语义 |
 |---|---|---|
 | read_only | false | 会话级输入保护，禁止 send 和 exec；只能通过 connect/configure 设置，不能单次覆盖 |
-| connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改仅保存值，重新 connect 时显式复用该 config 才生效 |
+| connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入 config |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
 | session_idle_timeout_ms | 1800000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
 | read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |

@@ -47,7 +47,7 @@ type ConfigResult struct {
 
 var configDescriptions = map[string]string{
 	"read_only":                  "Session-only input guard; default false. Reject send and exec before application writes. Protocol negotiation/keepalive remain enabled. Change explicitly with sess_configure; not a security boundary and does not stop an already running command.",
-	"connect_timeout_ms":         "Connect, authentication and initial shell setup deadline. On an established session this is stored only; explicitly reuse config on a new connect.",
+	"connect_timeout_ms":         "Connect/reconnect, authentication and initial shell setup deadline. Updating an established session stores the value for its next explicit sess_reconnect; a new sess_connect needs its own config.",
 	"write_timeout_ms":           "Write/channel setup deadline; failed writes close transport and may have executed. Maximum 110000ms.",
 	"session_idle_timeout_ms":    "Reclaim session and buffers after no operations; 0 disables. Active readers/writers or running exec are excluded.",
 	"read_total_timeout_ms":      "Total read deadline from read start; 1..110000ms. Does not close transport. Ignored by sess_exec.",
@@ -275,7 +275,7 @@ func configInfo(id string, c Config) ConfigResult {
 		}
 		fields[k] = ConfigField{v, configDescriptions[k], unit}
 	}
-	return ConfigResult{Session: id, Config: c, Fields: fields, Capabilities: map[string]any{"tcp_queue_query": queueSupported(), "tcp_queue_metric": queueMetric(), "encodings": []string{"utf-8", "gbk", "shift-jis"}, "hard_call_limit_ms": int(CallLimit / time.Millisecond), "history_bytes": HistoryLimit, "connect_timeout_applies": "connect_only; explicitly reuse config for a new connection"}}
+	return ConfigResult{Session: id, Config: c, Fields: fields, Capabilities: map[string]any{"tcp_queue_query": queueSupported(), "tcp_queue_metric": queueMetric(), "encodings": []string{"utf-8", "gbk", "shift-jis"}, "hard_call_limit_ms": int(CallLimit / time.Millisecond), "history_bytes": HistoryLimit, "connect_timeout_applies": "connect_and_reconnect; reconnect uses current session config"}}
 }
 
 func ConfigDescriptions() map[string]string {

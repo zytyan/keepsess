@@ -113,7 +113,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		}
 		v, e := s.Manager.Configure(r.Session, r.Config)
 		return toolResult(v, e)
-	case "sess_get_config", "sess_close":
+	case "sess_get_config", "sess_close", "sess_reconnect":
 		var r struct {
 			Session string `json:"session"`
 		}
@@ -122,6 +122,10 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		}
 		if args.Name == "sess_get_config" {
 			v, e := s.Manager.GetConfig(r.Session)
+			return toolResult(v, e)
+		}
+		if args.Name == "sess_reconnect" {
+			v, e := s.Manager.Reconnect(ctx, r.Session)
 			return toolResult(v, e)
 		}
 		v, e := s.Manager.Close(r.Session)
@@ -179,7 +183,8 @@ func buildDefinitions() map[string]map[string]any {
 		return map[string]any{"session": str("Short handle returned by sess_connect, e.g. s1. Always target an explicit session.")}
 	}
 	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "host": str("Hostname or IP; IPv6 without brackets"), "port": integerSchema("TCP port", 1, 65535), "username": str("SSH username"), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("Local SSH private key path"), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Optional local known_hosts path enables verification; never automatically discovered or written. Used unless host_key or insecure=true takes precedence."), "host_key": str("Optional pinned SHA256 SSH host-key fingerprint enables verification; takes precedence over known_hosts unless insecure=true."), "insecure": map[string]any{"type": "boolean", "description": "Compatibility flag: true skips verification even when host_key/known_hosts is supplied. By default verification is skipped unless those fields are supplied; false alone does not enable it."}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec for independent non-interactive commands; use stream for interactive Bash/shell, console logins and network devices. Telnet always stream; never use sess_exec there."}, "config": configSchema(false)}
-	add("sess_connect", "Create a persistent connection and short handle; no terminal output consumed. SSH exec has exit status; stream is bidirectional with no input/output attribution. No reconnect/replay. Telnet is plaintext.", connect, "protocol", "host", "port")
+	add("sess_connect", "Create a persistent connection and short handle; no terminal output consumed. SSH exec has exit status; stream is bidirectional with no input/output attribution. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.", connect, "protocol", "host", "port")
+	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
 	p := session()
 	p["config"] = configSchema(false)
 	add("sess_configure", "Atomically patch session settings; omitted fields unchanged. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
@@ -228,7 +233,7 @@ func buildDefinitions() map[string]map[string]any {
 	return defs
 }
 func Tools() []any {
-	order := []string{"sess_connect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_history", "sess_close", "sess_close_all"}
+	order := []string{"sess_connect", "sess_reconnect", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_history", "sess_close", "sess_close_all"}
 	out := make([]any, 0, len(order))
 	for _, name := range order {
 		out = append(out, definitions[name])
@@ -434,7 +439,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec only for non-interactive SSH mode=exec. Interactive shells, console login and all Telnet use mode=stream send/read; never exec. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec uses independent exec_total_timeout_ms (30000ms), ignoring read timeouts and end_pattern. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec; change explicitly with sess_configure, never per-call config. close discards buffers."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec only for non-interactive SSH mode=exec. Interactive shells, console login and all Telnet use mode=stream send/read; never exec. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec uses independent exec_total_timeout_ms (30000ms), ignoring read timeouts and end_pattern. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec; change explicitly with sess_configure, never per-call config. sess_reconnect explicitly reuses connection parameters/current config and handle, discards old output, never replays application input; busy during active operations. close discards buffers and reconnect parameters."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

@@ -1,6 +1,6 @@
 # 0.3 接口迁移与现场反馈
 
-当前可调用的 15 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
+当前可调用的 16 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
 
 0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode/config；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。普通 stream 空闲回收独立为 30min，可禁用。
 

@@ -1,3 +1,14 @@
+# 显式重连
+
+- 新增第 16 个工具 sess_reconnect(session)，复用私有原连接参数与当前配置（包括 read_only、connect_timeout_ms），保留句柄，不自动重试或重放应用输入。
+- 替换整个连接实例，丢弃旧缓冲/游标，新欢迎信息保持未读；失败、超时或取消保留参数供显式重试。旧协程不写入新连接历史。
+- 读写、配置、其他重连及运行中 exec 返回 busy；close/close_all 取消进行中的重连并防止句柄复活。关闭/回收时清除保留的参数；get_config/list/reconnect 结果不包含认证字段。
+- 新增真实 SSH exec/stream、Telnet 不重放与历史隔离、只读与配置保留、失败重试、当前连接超时、取消、busy、close/close_all 取消，以及 MCP 端到端测试。
+- 完整 go test -race ./...、go vet ./...、Linux amd64/arm64 与 Windows amd64 交叉构建、skill 校验和副本一致性检查通过。可选 110s 静默测试未重跑；未验证真实共享串口服务器的状态恢复。
+- README、CLI、MCP 描述、现场说明入口、开发约束与两份 skill 已同步。
+
+---
+
 # SSH 主机密钥默认行为
 
 - 默认不校验主机密钥，不自动读取/写入 known_hosts；显式 host_key 或 known_hosts 才启用校验，失败不回退。

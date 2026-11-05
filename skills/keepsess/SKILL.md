@@ -27,7 +27,7 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-All 15 tools are discovered through MCP tools/list, not individually registered.
+All 16 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
 
@@ -52,14 +52,31 @@ host_key, known_hosts, default skip. insecure=false alone does not enable verifi
 returns effective values, descriptions, units and capabilities, without credentials. All send,
 exec and read tools accept a config object for that call only; active operations retain their
 snapshot except the live read_only guard, which is rechecked before writing. read_only, connect_timeout_ms, session_idle_timeout_ms and tcp_keepalive_ms cannot be overridden
-per operation. Changing connect_timeout on an established session only stores the value; explicitly reuse
-that config on a new connect.
+per operation. Changing connect_timeout on an established session stores it for the next
+sess_reconnect; explicitly pass that config again for a new sess_connect.
 
 Defaults: read total 30000ms; read idle 500ms; exec total 30000ms; connect/write 10000ms; unused session 1800000ms;
 TCP keepalive 15000ms; max input 4096 bytes; max output 8192 bytes; encoding utf-8; end_pattern
 empty (disabled). Idle read/session timeout and keepalive accept 0 to disable; total read must
 be 1..110000ms; exec_total_timeout_ms has the same range. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
 strings such as "30*60*1000", without function calls or arbitrary evaluation.
+
+## Explicit reconnect
+
+sess_reconnect({"session":"s1"}) closes the old transport and reuses its private original
+connection parameters plus CURRENT session config (including read_only and connect_timeout_ms).
+The handle remains s1. SSH authentication runs normally; key/known_hosts paths are reread.
+It NEVER sends terminal Enter, Telnet credentials, setup commands or historical application
+input. It discards old buffers/cursors; new output starts at offset 0 and remains unread.
+Persistent shell cwd/environment, device view and terminal login state are not restored.
+Read and inspect the new stream before deciding what to send.
+
+Active reads/writes/configure/reconnect or running exec return busy without disconnecting.
+Failed/cancelled/timed-out reconnect retains the disconnected handle and parameters for an
+EXPLICIT retry, never automatic replay. close/close_all cancel an in-progress reconnect and
+release the handle/parameters; a closed/expired handle needs a new sess_connect. Credentials
+are private process memory, absent from list/get_config/reconnect results. Reconnect does not
+imply device state reset; a console server may still expose the same downstream terminal.
 
 ## Read-only observation
 
@@ -228,4 +245,5 @@ Use sess_list to inspect state. sess_close discards one session and all buffers;
 discards every session. Neither returns terminal output; subsequent reads fail. Read first if
 output matters. Unused sessions reclaim automatically after session_idle_timeout_ms; remote
 closure may happen earlier. A running SSH exec has a separate 110s no-output watchdog. If
-connected=false, reconnect with sess_connect and inspect remote state before retrying side effects.
+connected=false, explicitly use sess_reconnect on a retained handle, or sess_connect if the handle
+was closed/expired. Inspect remote state before retrying side effects.
