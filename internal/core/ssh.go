@@ -34,7 +34,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 			return e
 		}
 	default:
-		return errors.New("SSH requires known_hosts or host_key SHA256 fingerprint; insecure=true is explicit opt-in")
+		host = ssh.InsecureIgnoreHostKey()
 	}
 	auth := []ssh.AuthMethod{}
 	if o.Password != "" {

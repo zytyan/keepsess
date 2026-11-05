@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -874,5 +875,52 @@ func TestReadOnlySSHExecConnect(t *testing.T) {
 	v = run(t, m, "exec", Request{Session: id, Command: "both"})
 	if v.Reason != "exec_finish" || v.ExitCode == nil || *v.ExitCode != 0 {
 		t.Fatal(v)
+	}
+}
+
+func TestSSHDefaultSkipsHostVerification(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	// An unusable default file must not be automatically consulted or modified.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	path := filepath.Join(home, ".ssh", "known_hosts")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("invalid known_hosts content\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, insecure := range []bool{false, true} {
+		o.Insecure = insecure
+		id := connect(t, m, o)
+		if v := run(t, m, "exec", Request{Session: id, Command: "both"}); v.Reason != "exec_finish" || v.ExitCode == nil || *v.ExitCode != 0 {
+			t.Fatal(v)
+		}
+	}
+	// Explicit verification still fails closed; it must not fall back to default skip.
+	o.Insecure = false
+	o.KnownHosts = path
+	if _, err := m.Connect(context.Background(), o); err == nil {
+		t.Fatal("invalid explicit known_hosts accepted")
+	}
+	o.KnownHosts = filepath.Join(home, "missing")
+	if _, err := m.Connect(context.Background(), o); err == nil {
+		t.Fatal("missing explicit known_hosts accepted")
+	}
+	o.HostKey = key
+	connect(t, m, o) // Pinned fingerprint takes precedence over the missing file.
+	o.HostKey = "SHA256:bad"
+	if _, err := m.Connect(context.Background(), o); err == nil {
+		t.Fatal("wrong explicit pin accepted")
+	}
+	o.Insecure = true
+	connect(t, m, o) // Preserve the existing explicit bypass precedence.
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(content, after) {
+		t.Fatal("default known_hosts modified", err)
 	}
 }

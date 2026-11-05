@@ -102,10 +102,10 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；所有后续操作明确指定 session。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
-SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互式 Bash/shell、console 登录流程和任何 Telnet 会话都禁止使用 sess_exec；请使用 mode=stream 的 sess_sendline_text/sess_sendline_escaped 和 read 工具。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认校验主机密钥：使用 known_hosts 或 host_key（SHA256 指纹），只有显式 insecure=true 才跳过。
+SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互式 Bash/shell、console 登录流程和任何 Telnet 会话都禁止使用 sess_exec；请使用 mode=stream 的 sess_sendline_text/sess_sendline_escaped 和 read 工具。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
 
 ```json
-{"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","known_hosts":"/private/known_hosts","mode":"exec"}
+{"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","mode":"exec"}
 ```
 
 ```json

@@ -8,8 +8,8 @@ description: Operate persistent SSH exec or SSH/Telnet console streams through k
 Start MCP stdio with `keepsess serve`. Use `keepsess version` or MCP initialize to check the
 build identity; the 0.3 API replaces sess_interact/sess_read and old wait/input_id parameters.
 Optional audit: `serve --log /private/path/audit.jsonl`. Authentication fields are redacted;
-commands and send data are recorded and can contain secrets. Never enable insecure SSH host
-verification without explicit user intent.
+commands and send data are recorded and can contain secrets. SSH host-key verification is optional and skipped by default;
+provide known_hosts or host_key explicitly when verification is required.
 
 ## Install only when requested
 
@@ -32,13 +32,17 @@ All 15 tools are discovered through MCP tools/list, not individually registered.
 ## Connect and configure
 
 `sess_connect` requires protocol, host and port. SSH takes username and password/keyfile,
-plus known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
+and optionally known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
 consoles AND interactive shells, including interactive Bash. Telnet only supports stream and is plaintext.
 Never use sess_exec for an interactive shell, a console login, or any Telnet session. Selecting
 SSH transport does not make an interactive session an exec session. Do not use exec as a probe
 or fallback when a stream is silent. Always use the actual short session
 handle returned (s1, s2, ...); do not select a session implicitly. IDs are not reused in-process.
 Connect returns no terminal output and does not consume the greeting.
+SSH skips host-key verification by default and does not read/write known_hosts automatically.
+Provide host_key or known_hosts explicitly to enable verification; failures are errors. Legacy
+insecure=true explicitly skips verification even with verification fields. Priority: insecure=true,
+host_key, known_hosts, default skip. insecure=false alone does not enable verification.
 
 ```json
 {"protocol":"telnet","host":"switch.example","port":23,"config":{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000}}

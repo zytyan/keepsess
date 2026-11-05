@@ -1,3 +1,13 @@
+# SSH 主机密钥默认行为
+
+- 默认不校验主机密钥，不自动读取/写入 known_hosts；显式 host_key 或 known_hosts 才启用校验，失败不回退。
+- 保留原优先级：insecure=true > host_key > known_hosts > 默认跳过。insecure=false 本身不启用校验。
+- 新增真实 SSH 测试覆盖默认连接执行、默认文件不自动使用/修改、显式无效/缺失文件、正确/错误指纹及兼容优先级。
+- 完整 go test -race ./...、go vet ./...、Linux amd64/arm64 与 Windows amd64 交叉构建、skill 校验及内嵌副本一致性检查通过。可选 110s 静默测试未重跑。
+- README、CLI、MCP 参数描述、开发约束和两份 skill 已同步。
+
+---
+
 # 会话只读配置
 
 - 新增 read_only 布尔配置，默认 false；connect/configure 可设置，get_config 返回值和说明，所有操作级覆盖（包括 true）都拒绝。

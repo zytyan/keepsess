@@ -19,3 +19,5 @@
 - 单次调用双警告不能直接定性为输入重复发送；要区分线上字节、终端 Enter 解释、回显与增量输出。未实测真实设备时不得声称已复现特定厂商问题。
 
 - read_only 默认 false，仅 connect/configure 可设置，操作级覆盖一律拒绝。开启后 send/exec 返回 not_sent 与 read_only 错误，不消费输出。修改与应用写入同步，写入中返回 busy 且配置整体不变；写入前重查当前只读状态。协议协商/keepalive 继续，已运行命令不停止；防误操作，不作为权限边界。
+
+- SSH 主机密钥默认不校验，不自动读写 known_hosts；显式 host_key/known_hosts 才启用且失败报错。兼容优先级 insecure=true > host_key > known_hosts > 默认跳过；insecure=false 本身不启用校验。

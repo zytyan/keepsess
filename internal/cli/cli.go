@@ -49,7 +49,7 @@ sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确�
 TCP keepalive 默认 15000ms；Linux 支持 TCP 队列阈值，Windows 明确报告不支持。
 MCP 配置: {"command":"/path/to/keepsess","args":["serve"]}
 --log 写入 0600 JSONL 审计；认证字段脱敏，command/data 仍可能含敏感信息。
-Telnet 为明文；SSH 默认验证主机密钥。连接只在本次服务进程内持久化。
+Telnet 为明文；SSH 默认不验证主机密钥，显式 known_hosts/host_key 可启用。连接只在本次服务进程内持久化。
 `
 
 func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer) error {
