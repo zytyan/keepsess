@@ -1,3 +1,14 @@
+# 会话只读配置
+
+- 新增 read_only 布尔配置，默认 false；connect/configure 可设置，get_config 返回值和说明，所有操作级覆盖（包括 true）都拒绝。
+- 开启后四种 send 与 SSH exec 返回 not_sent/read_only，既不发送应用输入，也不消费输出；读取、查询、关闭及必要协议协商/keepalive 保持可用。
+- 切换与应用写入互斥：写入中 configure 返回 busy，整份 patch 不生效；实际写入前检查实时只读状态，防止旧快照绕过。已运行命令不停止。
+- 新增核心和 MCP 测试，覆盖默认值、非法类型、覆盖拒绝、四种发送、SSH exec、读写恢复、旧配置检查、并发切换原子性及 MCP 错误标记与 Telnet 旁观读取。
+- 修正已有 SSH 测试模拟器：hang 等待 channel 关闭，不能把非交互 exec 的 stdin EOF 误认为命令结束。
+- 完整 go test -race ./...、go vet ./...、Linux amd64/arm64 与 Windows amd64 交叉构建、skill 校验及副本一致性检查通过；只读测试和 SSH 取消测试重复 5 次通过。未设置 SESSMCP_LONG_TEST，未重跑可选 110s 静默等待测试。同步 README、CLI、MCP 描述、开发约束及内嵌/独立 skill。未验证真实串口服务器的多人广播行为。
+
+---
+
 # 发送回执与静默登录说明
 
 - 同步两份 skill、README、CLI 帮助及 MCP tools/list/initialize 描述：交互式 Bash/shell、console 登录和任意 Telnet 均不使用 sess_exec。

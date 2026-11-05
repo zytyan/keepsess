@@ -383,3 +383,46 @@ func TestToolNamesAndRemovedAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyConfigSchemas(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		s := configSchema(override).(map[string]any)
+		p := s["properties"].(map[string]any)
+		v, exists := p["read_only"]
+		if exists == override {
+			t.Fatalf("read_only presence for override=%v: %v", override, exists)
+		}
+		if exists {
+			field := v.(map[string]any)
+			if field["type"] != "boolean" || field["default"] != false {
+				t.Fatal(field)
+			}
+		}
+	}
+}
+
+func TestReadOnlyMCPObservation(t *testing.T) {
+	c := harness(t)
+	args := connectArgs(testutil.TelnetSwitch(t))
+	args["config"] = map[string]any{"read_only": true}
+	c.tool(t, "ro-connect", "sess_connect", args)
+	id := structured(t, c.receive(t, "ro-connect", time.Second))["session"].(string)
+	c.tool(t, "ro-send", "sess_sendline_text", map[string]any{"session": id, "data": "show version"})
+	v := c.receive(t, "ro-send", time.Second)
+	out := structured(t, v)
+	if v["result"].(map[string]any)["isError"] != true || out["input_state"] != "not_sent" || !strings.HasPrefix(out["error"].(string), "read_only:") {
+		t.Fatal(v)
+	}
+	c.tool(t, "ro-read", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"end_pattern": "switch> "}})
+	if v = c.receive(t, "ro-read", time.Second); v["result"].(map[string]any)["isError"] != false || !strings.Contains(structured(t, v)["output"].(string), "switch> ") {
+		t.Fatal(v)
+	}
+	c.tool(t, "ro-disable", "sess_configure", map[string]any{"session": id, "config": map[string]any{"read_only": false}})
+	if v = c.receive(t, "ro-disable", time.Second); v["result"].(map[string]any)["isError"] != false {
+		t.Fatal(v)
+	}
+	c.tool(t, "ro-send-ok", "sess_sendline_text", map[string]any{"session": id, "data": "show version", "config": map[string]any{"end_pattern": "switch> "}})
+	if v = c.receive(t, "ro-send-ok", time.Second); structured(t, v)["input_state"] != "sent" || v["result"].(map[string]any)["isError"] != false {
+		t.Fatal(v)
+	}
+}

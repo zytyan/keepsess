@@ -47,7 +47,7 @@ Connect returns no terminal output and does not consume the greeting.
 `sess_configure(session, config)` atomically updates only supplied fields. `sess_get_config`
 returns effective values, descriptions, units and capabilities, without credentials. All send,
 exec and read tools accept a config object for that call only; active operations retain their
-snapshot. connect_timeout_ms, session_idle_timeout_ms and tcp_keepalive_ms cannot be overridden
+snapshot except the live read_only guard, which is rechecked before writing. read_only, connect_timeout_ms, session_idle_timeout_ms and tcp_keepalive_ms cannot be overridden
 per operation. Changing connect_timeout on an established session only stores the value; explicitly reuse
 that config on a new connect.
 
@@ -56,6 +56,23 @@ TCP keepalive 15000ms; max input 4096 bytes; max output 8192 bytes; encoding utf
 empty (disabled). Idle read/session timeout and keepalive accept 0 to disable; total read must
 be 1..110000ms; exec_total_timeout_ms has the same range. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
 strings such as "30*60*1000", without function calls or arbitrary evaluation.
+
+## Read-only observation
+
+read_only is a boolean session config, default false. Set it on connect or explicitly with
+sess_configure: {"session":"s1","config":{"read_only":true}}. It cannot be overridden in
+ANY operation's config (true and false are both rejected). When enabled, all four send tools
+and sess_exec return input_state=not_sent with error starting "read_only:"; no application
+input is written and no output is consumed. Reads, get_config, list and close remain available.
+Protocol negotiation and TCP keepalive continue normally.
+
+If an application write is in progress, a configure patch containing read_only returns busy
+and applies NONE of the patch. Retry configure explicitly after the write finishes. Successful
+enabling serializes with writes; even operations holding an older config recheck the live guard
+before sending. Already running remote commands are not stopped; their output remains readable.
+Do not disable read_only automatically to retry a rejected send. This is an accidental-input
+guard, not authorization: configure can explicitly disable it. Independent connection cursors
+do not guarantee the console server broadcasts output or permits concurrent connections.
 
 ## Choose exec or stream
 

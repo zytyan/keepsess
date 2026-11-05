@@ -185,7 +185,11 @@ func SSHWithShell(t *testing.T, shell func(io.ReadWriter)) (string, string) {
 							time.Sleep(650 * time.Millisecond)
 							_, _ = io.WriteString(ch, "quiet done\n")
 						case "hang":
-							_, _ = io.Copy(io.Discard, ch)
+							// Non-interactive exec closes stdin immediately. EOF is
+							// not command completion: keep running until channel close.
+							for req := range reqs {
+								_ = req.Reply(false, nil)
+							}
 							return
 						default:
 							_, _ = io.WriteString(ch, p.Command+"\n")

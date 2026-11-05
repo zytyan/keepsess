@@ -17,3 +17,5 @@
 - SSH 网络设备推荐 mode=stream + sendline_text（line_end 默认 CR），保留原始 data 精确语义；禁止为了修复疑似 CRLF 问题静默修改 raw data。模型可用 send_escaped 显式解码一层可见转义，去重与上限按解码后的字节计算，非法转义不得部分发送。
 - 空输出/等待超时不代表未执行；返回 input_state/input_bytes/written_bytes。0.3 不再接受 input_id，不归因输入输出、不自动重试；stream 的 sent/written_bytes 只确认本地 writer 写入，不证明端点收到、密码被接受或 shell 就绪；不改为含混的 accepted。start=end/连续空输出均不能判断认证结果，不可因此重发凭据或补发回车；unknown 的 written_bytes 只是已确认下界。close 明确丢弃缓冲并释放句柄。
 - 单次调用双警告不能直接定性为输入重复发送；要区分线上字节、终端 Enter 解释、回显与增量输出。未实测真实设备时不得声称已复现特定厂商问题。
+
+- read_only 默认 false，仅 connect/configure 可设置，操作级覆盖一律拒绝。开启后 send/exec 返回 not_sent 与 read_only 错误，不消费输出。修改与应用写入同步，写入中返回 busy 且配置整体不变；写入前重查当前只读状态。协议协商/keepalive 继续，已运行命令不停止；防误操作，不作为权限边界。

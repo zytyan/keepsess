@@ -154,10 +154,12 @@ func configSchema(override bool) any {
 	descriptions := core.ConfigDescriptions()
 	props := map[string]any{}
 	for k, desc := range descriptions {
-		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms") {
+		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms" || k == "read_only") {
 			continue
 		}
-		if strings.HasSuffix(k, "_ms") || strings.HasSuffix(k, "_bytes") {
+		if k == "read_only" {
+			props[k] = map[string]any{"type": "boolean", "description": desc, "default": false}
+		} else if strings.HasSuffix(k, "_ms") || strings.HasSuffix(k, "_bytes") {
 			props[k] = map[string]any{"description": desc + " Integer or arithmetic string, e.g. 30*60*1000. No eval/calls.", "anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string", "maxLength": 128}}}
 		} else {
 			props[k] = str(desc)
@@ -432,7 +434,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec only for non-interactive SSH mode=exec. Interactive shells, console login and all Telnet use mode=stream send/read; never exec. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec uses independent exec_total_timeout_ms (30000ms), ignoring read timeouts and end_pattern. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. close discards buffers."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec only for non-interactive SSH mode=exec. Interactive shells, console login and all Telnet use mode=stream send/read; never exec. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 8192 bytes. sess_exec uses independent exec_total_timeout_ms (30000ms), ignoring read timeouts and end_pattern. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec; change explicitly with sess_configure, never per-call config. close discards buffers."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

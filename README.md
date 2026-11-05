@@ -114,10 +114,11 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 
 ## 配置
 
-连接时 config、sess_configure.config 与操作的 config 使用同一套校验。未知字段、null、非法正则、超范围值整体拒绝，不部分生效。调用开始时快照配置；之后修改不会影响当前调用。操作中的 config 不改变会话默认配置。
+连接时 config、sess_configure.config 与操作的 config 使用同一套校验。未知字段、null、非法正则、超范围值整体拒绝，不部分生效。调用开始时快照配置；read_only 在实际写入前重新检查，其余配置修改不会影响当前调用。操作中的 config 不改变会话默认配置。
 
 | 配置项 | 默认值 | 语义 |
 |---|---|---|
+| read_only | false | 会话级输入保护，禁止 send 和 exec；只能通过 connect/configure 设置，不能单次覆盖 |
 | connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改仅保存值，重新 connect 时显式复用该 config 才生效 |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
 | session_idle_timeout_ms | 1800000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
@@ -140,7 +141,21 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 {"session":"s1","config":{"session_idle_timeout_ms":"30*60*1000","max_output_bytes":"8*1024","read_idle_timeout_ms":500}}
 ```
 
-不执行 eval、函数调用或变量；除法必须得到整数，表达式长度与数值有界。connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms 是连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
+不执行 eval、函数调用或变量；除法必须得到整数，表达式长度与数值有界。read_only、connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms 是会话/连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
+
+### 多人串口旁观
+
+连接时可设置 `config: {"read_only":true}`，也可显式切换：
+
+```json
+{"session":"s1","config":{"read_only":true}}
+```
+
+上例用于 sess_configure。开启后四个 send 工具与 sess_exec 返回 `input_state=not_sent`、`error` 以 `read_only:` 开头，不发送应用输入、不消费输出；读取、查看配置、列出会话、关闭连接仍可用。SSH/Telnet 协议协商与系统 keepalive 不受影响。
+
+read_only 不能在任意操作的 config 中覆盖，无论 true 或 false 都拒绝。修改 read_only 时若应用写入正在进行，整份 configure 返回 busy 且不修改任何配置；待写入结束后显式重试。开启成功后，先前操作即使持有旧配置，也必须通过写入前的最新只读检查。不会停止已启动的远端命令，其后续输出仍可读取。
+
+这是防误操作开关，AI 仍可通过 sess_configure 关闭，不是权限隔离。每个 keepsess 连接有独立的读取游标；串口服务器能否广播输出、是否抢占连接取决于服务端，read_only 不提供多人广播或输入仲裁。
 
 ## 发送、转义和编码
 

@@ -335,6 +335,14 @@ func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
+	// Serialize guard changes with application writes, without an unbounded wait.
+	// A successful configure guarantees any preceding write has finished.
+	if _, changingGuard := p["read_only"]; changingGuard {
+		if !s.writeMu.TryLock() {
+			return ConfigResult{}, errors.New("busy: application write in progress; read_only unchanged; retry sess_configure after it finishes")
+		}
+		defer s.writeMu.Unlock()
+	}
 	s.mu.Lock()
 	old := s.config
 	connected := s.connected
@@ -420,6 +428,12 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if kind != "read_tail" && r.Lines != 0 {
 		return Result{}, errors.New("lines is only for read_tail")
 	}
+	if sending && cfg.ReadOnly {
+		v := s.status()
+		v.InputState = "not_sent"
+		v.Error = "read_only: application input disabled; nothing sent; change explicitly with sess_configure"
+		return v, nil
+	}
 	collect := !sending || r.CollectOutput == nil || *r.CollectOutput
 	if collect {
 		if !s.readMu.TryLock() {
@@ -497,7 +511,14 @@ func (s *Session) write(ctx context.Context, kind string, b []byte, c Config) Re
 	}
 	s.mu.Lock()
 	running := s.running
+	readOnly := s.config.ReadOnly
 	s.mu.Unlock()
+	// Recheck the live guard while holding writeMu: an operation may have
+	// captured its config before a concurrent sess_configure enabled it.
+	if readOnly {
+		v.Error = "read_only: application input disabled; nothing sent; change explicitly with sess_configure"
+		return v
+	}
 	if kind == "exec" && running {
 		v.Error = "busy: previous exec still running; nothing sent"
 		return v

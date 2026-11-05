@@ -754,3 +754,125 @@ func TestExecImmediatelyRejectsStreamWithoutSending(t *testing.T) {
 		})
 	}
 }
+
+func TestReadOnlyGuardAndOverrides(t *testing.T) {
+	m, s, wire := localSession(t)
+	if s.config.ReadOnly {
+		t.Fatal("read_only must default false")
+	}
+	for _, bad := range []any{nil, "true", 1} {
+		if _, err := m.Configure(s.id, cfg(map[string]any{"read_only": bad})); err == nil {
+			t.Fatalf("accepted %v", bad)
+		}
+	}
+	if _, err := m.Configure(s.id, cfg(map[string]any{"read_only": true})); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.GetConfig(s.id)
+	if err != nil || !info.Config.ReadOnly || info.Fields["read_only"].Description == "" {
+		t.Fatal(info, err)
+	}
+	// Blocking a send must not require the read lock or consume output.
+	s.readMu.Lock()
+	for _, kind := range []string{"send_text", "send_escaped", "sendline_text", "sendline_escaped"} {
+		v := run(t, m, kind, Request{Session: s.id, Data: "password"})
+		if v.InputState != "not_sent" || !strings.Contains(v.Error, "read_only") || v.WrittenBytes != 0 {
+			t.Fatal(kind, v)
+		}
+	}
+	s.readMu.Unlock()
+	if wire.Len() != 0 {
+		t.Fatal("readonly sent input", wire.String())
+	}
+	for _, enabled := range []bool{false, true} {
+		for _, kind := range []string{"send_text", "read_available"} {
+			if _, err := m.Operate(context.Background(), kind, Request{Session: s.id, Config: cfg(map[string]any{"read_only": enabled})}); err == nil {
+				t.Fatal("operation override accepted", kind)
+			}
+		}
+	}
+	s.Write([]byte("observer output"))
+	if v := run(t, m, "read_available", Request{Session: s.id}); v.Output != "observer output" {
+		t.Fatal(v)
+	}
+	// Even a stale operation config cannot bypass the live session guard.
+	s.writeMu.Lock()
+	v := s.write(context.Background(), "send_text", []byte("stale"), DefaultConfig("ssh"))
+	s.writeMu.Unlock()
+	if v.InputState != "not_sent" || !strings.Contains(v.Error, "read_only") || wire.Len() != 0 {
+		t.Fatal(v)
+	}
+	if _, err := m.Configure(s.id, cfg(map[string]any{"read_only": false})); err != nil {
+		t.Fatal(err)
+	}
+	if v := run(t, m, "send_text", Request{Session: s.id, Data: "ok", CollectOutput: noCollect()}); v.InputState != "sent" || wire.String() != "ok" {
+		t.Fatal(v)
+	}
+}
+
+type guardedTestWriter struct{ started, release chan struct{} }
+
+func (w *guardedTestWriter) Write(p []byte) (int, error) {
+	close(w.started)
+	<-w.release
+	return len(p), nil
+}
+
+func TestReadOnlyChangeDuringWrite(t *testing.T) {
+	m, s, _ := localSession(t)
+	w := &guardedTestWriter{make(chan struct{}), make(chan struct{})}
+	s.input = w
+	done := make(chan Result, 1)
+	go func() {
+		v, _ := m.Operate(context.Background(), "send_text", Request{Session: s.id, Data: "in flight", CollectOutput: noCollect()})
+		done <- v
+	}()
+	select {
+	case <-w.started:
+	case <-time.After(time.Second):
+		t.Fatal("write did not start")
+	}
+	_, err := m.Configure(s.id, cfg(map[string]any{"read_only": true, "line_end": `\0`}))
+	close(w.release)
+	if err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatal("must reject guard change during write", err)
+	}
+	select {
+	case v := <-done:
+		if v.InputState != "sent" {
+			t.Fatal(v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write did not finish")
+	}
+	info, _ := m.GetConfig(s.id)
+	if info.Config.ReadOnly || info.Config.LineEnd != `\r` {
+		t.Fatal("busy patch partially applied", info)
+	}
+	if _, err := m.Configure(s.id, cfg(map[string]any{"read_only": true})); err != nil {
+		t.Fatal(err)
+	}
+	if v := run(t, m, "send_text", Request{Session: s.id, Data: "blocked", CollectOutput: noCollect()}); v.InputState != "not_sent" || !strings.Contains(v.Error, "read_only") {
+		t.Fatal(v)
+	}
+}
+
+func TestReadOnlySSHExecConnect(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	m := manager(t)
+	o := options(addr, "ssh", "exec")
+	o.HostKey = key
+	o.Config = cfg(map[string]any{"read_only": true})
+	id := connect(t, m, o)
+	v := run(t, m, "exec", Request{Session: id, Command: "both"})
+	if v.InputState != "not_sent" || !strings.Contains(v.Error, "read_only") || v.Running {
+		t.Fatal(v)
+	}
+	if _, err := m.Configure(id, cfg(map[string]any{"read_only": false})); err != nil {
+		t.Fatal(err)
+	}
+	v = run(t, m, "exec", Request{Session: id, Command: "both"})
+	if v.Reason != "exec_finish" || v.ExitCode == nil || *v.ExitCode != 0 {
+		t.Fatal(v)
+	}
+}

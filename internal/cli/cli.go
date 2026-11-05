@@ -40,6 +40,7 @@ sess_exec 仅用于非交互 SSH mode=exec；stream 直接报错，使用 sendli
 exec 使用独立 exec_total_timeout_ms（默认 30000ms），不受 read 超时/end_pattern 影响。
 send_text 编码文字；send_escaped 显式解码一层转义；sendline 追加配置结尾。
 发送默认顺便收集未读流，collect_output=false 仅发送；不归因输入输出，不自动重放。
+read_only 默认 false；true 禁止 send/exec，只能通过 connect/configure 设置，不能按调用覆盖。
 sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确或 shell 就绪。
 空输出/start=end 时认证状态未知；有界只读等待，不重发密码或补发回车。
 默认增量输出 8KiB，上限 64KiB；history 1MiB；close 丢弃连接和缓冲，无正文。

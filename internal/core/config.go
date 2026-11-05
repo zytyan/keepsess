@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	ReadOnly                bool   `json:"read_only"`
 	ConnectTimeoutMS        int64  `json:"connect_timeout_ms"`
 	WriteTimeoutMS          int64  `json:"write_timeout_ms"`
 	SessionIdleTimeoutMS    int64  `json:"session_idle_timeout_ms"`
@@ -45,6 +46,7 @@ type ConfigResult struct {
 }
 
 var configDescriptions = map[string]string{
+	"read_only":                  "Session-only input guard; default false. Reject send and exec before application writes. Protocol negotiation/keepalive remain enabled. Change explicitly with sess_configure; not a security boundary and does not stop an already running command.",
 	"connect_timeout_ms":         "Connect, authentication and initial shell setup deadline. On an established session this is stored only; explicitly reuse config on a new connect.",
 	"write_timeout_ms":           "Write/channel setup deadline; failed writes close transport and may have executed. Maximum 110000ms.",
 	"session_idle_timeout_ms":    "Reclaim session and buffers after no operations; 0 disables. Active readers/writers or running exec are excluded.",
@@ -75,11 +77,17 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 		if _, ok := configDescriptions[k]; !ok {
 			return c, fmt.Errorf("unknown config parameter %q", k)
 		}
-		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms") {
+		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms" || k == "read_only") {
 			return c, fmt.Errorf("%s is connection configuration; use sess_configure", k)
 		}
 		var err error
 		switch k {
+		case "read_only":
+			if strings.TrimSpace(string(v)) == "null" {
+				err = errors.New("null is not a config value")
+			} else {
+				err = json.Unmarshal(v, &c.ReadOnly)
+			}
 		case "connect_timeout_ms":
 			c.ConnectTimeoutMS, err = integer(v)
 		case "write_timeout_ms":
@@ -102,7 +110,7 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 			c.BackpressureBytes, err = integer(v)
 		default:
 			var str string
-			if string(v) == "null" {
+			if strings.TrimSpace(string(v)) == "null" {
 				err = errors.New("null is not a config value")
 			} else {
 				err = json.Unmarshal(v, &str)
