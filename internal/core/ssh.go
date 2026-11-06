@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -164,4 +165,16 @@ func compactSSHVersion(raw []byte) string {
 		}
 		return r
 	}, string(raw))
+}
+
+// Input and PTY must be established before Start; default exec retains EOF semantics.
+func (sh *sshExecChannel) prepareInput(pty bool) (io.WriteCloser, error) {
+	stdin, err := sh.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	if pty {
+		err = sh.RequestPty("vt100", 24, 80, ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 9600, ssh.TTY_OP_OSPEED: 9600})
+	}
+	return stdin, err
 }

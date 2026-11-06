@@ -21,11 +21,11 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 当前提供下列 21 个工具（含 sess_reconnect）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 当前提供下列 22 个工具（含 sess_reconnect、sess_task_close_stdin）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；21 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；22 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
@@ -78,12 +78,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 | 旧名 | 新名 |
 |---|---|
-| sess_send_raw | sess_task_list | session?；列出保留任务与状态，不消费输出 |
-| sess_task_status | handle；立即查询任务状态、退出信息、未读输出及最近信号请求 |
-| sess_task_wait | handle、config?；等待任务完成并收集增量输出，超时默认尝试 TERM |
-| sess_task_signal | handle、signal；有界发送 TERM/INT/KILL 等 SSH 信号，不保证退出 |
-| sess_task_release | handle；释放已结束且无活动操作的任务记录和输出；运行中/未知状态返回 busy |
-| sess_send_text |
+| sess_send_raw | sess_send_text |
 | sess_sendline_raw | sess_sendline_text |
 | sess_read_all | sess_read_history |
 
@@ -94,8 +89,8 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_configure | session、config；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
-| sess_exec | session、command、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
-| sess_send_text | session、data、collect_output?、config?；发送文字并默认收集输出，不解析转义 |
+| sess_exec | session、command、interactive?、pty?、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
+| sess_send_text | session 或 handle（二选一）、data、collect_output?、config?；发送文字并默认收集输出，不解析转义 |
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
 | sess_sendline_text | 同 text，追加一次配置的 line_end |
 | sess_sendline_escaped | 同 escaped，追加一次配置的 line_end |
@@ -103,12 +98,18 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_read_until | session 或 handle（二选一）、config?；按匹配、超时等条件结束读取 |
 | sess_read_tail | session 或 handle（二选一）、lines?、config?；最后 N 行，默认 20，不移动增量游标 |
 | sess_read_history | session 或 handle（二选一）、offset?、config?；立即分页读取保留历史，不移动增量游标 |
+| sess_task_list | session?；列出保留任务，不消费输出 |
+| sess_task_status | handle；任务状态、退出信息和 stdin_open |
+| sess_task_wait | handle、config?；等待任务完成并收集增量输出 |
+| sess_task_signal | handle、signal；请求 SSH 信号，不保证退出 |
+| sess_task_release | handle；释放已完成且无活动操作的任务记录 |
+| sess_task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
-SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的 SSH exec 模式；SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**交互式 Bash/shell、console 登录流程和任何 Telnet 会话都禁止使用 sess_exec；请使用 mode=stream 的 sess_sendline_text/sess_sendline_escaped 和 read 工具。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
+SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配 SSH mode=exec，默认非交互；可用 interactive=true 显式保留任务 stdin。SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**持久终端 shell、console 登录流程和任何 Telnet 会话使用 mode=stream 的 send/read。SSH mode=exec 可显式启动 GDB 等交互任务，再按 task handle 收发。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
 
 ```json
 {"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","mode":"exec"}
@@ -186,9 +187,29 @@ read_only 不能在任意操作的 config 中覆盖，无论 true 或 false 都�
 
 这是防误操作开关，AI 仍可通过 sess_configure 关闭，不是权限隔离。每个 keepsess 连接有独立的读取游标；串口服务器能否广播输出、是否抢占连接取决于服务端，read_only 不提供多人广播或输入仲裁。
 
+## 交互 exec 与 stdin
+
+普通 sess_exec 默认 interactive=false、pty=false，stdin 保持 EOF 语义；cat/python 等普通命令不会因隐式保持输入而挂起。显式交互示例（已建立 SSH mode=exec 的 s1）：
+
+```json
+{"session":"s1","command":"gdb ./app","interactive":true,"pty":true,"collect_output":false}
+```
+
+拿到 task handle 后，依次调用 sess_read_until 观察提示，使用四个 send 工具之一输入；例如 sess_sendline_text：
+
+```json
+{"handle":"task1","data":"bt","config":{"line_end":"\\n","read_idle_timeout_ms":500}}
+```
+
+interactive=true 在命令启动前保留 stdin，不自动修改 collect_output 或超时策略。通常使用 collect_output=false 启动，再按 handle 收发；同步收集期间也允许其他调用 collect_output=false 向同一任务写入。每任务输入互斥、输出读取互斥，读写可并行；不同任务输入独立。启动时未开启 stdin 的任务不能事后切换。
+
+pty=true 必须搭配 interactive=true，启动前申请 vt100 PTY；默认不申请。PTY 会改变行规程、回显、换行以及 stdout/stderr 表现，服务器可能把双流合并到终端。结束符仍按 line_end 显式配置，工具不猜测或规范化输入。无 PTY 时 Ctrl-C/Ctrl-D 是普通输入字节，信号请用 task_signal。
+
+sess_task_close_stdin({"handle":"task1"}) 发送 SSH stdin EOF，保留输出和退出状态，重复关闭不再发送请求。发送 \x04 与 EOF 不等价；EOF 不保证程序退出，也不关闭 transport。关闭后继续 read/task_wait 收集输出。四种 send 与 EOF 都受当前会话 read_only、写入超时及 RPC 上限保护；卡住或取消正在进行的写入会关闭共享连接、明确报告未知结果，不重放输入。结果中的 interactive、pty、stdin_open 可供检查。
+
 ## 发送、转义和编码
 
-四个 send 工具只适用于 stream。text 表示文字输入，按 encoding 编码，不解析转义；它不限定 ASCII，可以发送中文、日文等 Unicode 文字。escaped 在 JSON 解码之后显式解码一层，适合模型经过 XML/JSON agent 承载可见转义文本。
+四个 send 工具使用 session 操作 stream，或使用 handle 操作显式 interactive=true 的 exec 任务；二者必须且只能指定一个。text 表示文字输入，按 encoding 编码，不解析转义；它不限定 ASCII，可以发送中文、日文等 Unicode 文字。escaped 在 JSON 解码之后显式解码一层，适合模型经过 XML/JSON agent 承载可见转义文本。
 
 - 普通文字、`\uNNNN`、`\UNNNNNNNN` 使用配置的文字编码。
 - `\0 \r \n \t \b \f \v \a`、`\xNN`、Go 三位八进制转义产生实际字节，不二次编码。
@@ -220,7 +241,8 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 | 字段或状态 | 能证明 | 不能证明 |
 |---|---|---|
 | sent（stream） | 本地 writer 完整接受本次应用输入 | 设备收到/处理输入、密码正确、登录成功或 shell 就绪 |
-| sent（exec） | SSH exec channel 启动请求成功 | 命令完成、退出码为零或某个终端内的登录结果 |
+| sent（exec 启动） | SSH exec channel 启动请求成功 | 命令完成、退出码为零或某个终端内的登录结果 |
+| sent（task 输入 / EOF） | stdin 本地写入完成 / EOF 请求已写出；EOF 不计入应用字节数 | 程序已消费输入、处理命令或退出 |
 | not_sent | 本次尝试未写入新的应用字节 | 之前输入是否已经执行 |
 | unknown | 写入/启动失败、超时或取消，可能已经部分发送或执行 | 零字节送达 |
 | input_bytes | 编码/转义后的计划输入长度，包含 line_end | 物理 TCP 包大小或执行次数 |

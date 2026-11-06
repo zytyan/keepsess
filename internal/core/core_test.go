@@ -748,7 +748,7 @@ func TestExecImmediatelyRejectsStreamWithoutSending(t *testing.T) {
 			defer s.writeMu.Unlock()
 			before := s.lastUse
 			_, err := m.Operate(context.Background(), "exec", Request{Session: s.id, Command: "must-not-execute"})
-			if err == nil || !strings.Contains(err.Error(), "non-interactive SSH mode=exec") || !strings.Contains(err.Error(), "nothing sent") {
+			if err == nil || !strings.Contains(err.Error(), "SSH mode=exec") || !strings.Contains(err.Error(), "nothing sent") {
 				t.Fatal("expected direct mode rejection", err)
 			}
 			if wire.Len() != 0 || s.active != 0 || s.running || s.lastUse != before {

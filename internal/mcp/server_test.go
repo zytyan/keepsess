@@ -15,6 +15,7 @@ import (
 
 	"github.com/zytyan/keepsess/internal/core"
 	"github.com/zytyan/keepsess/internal/testutil"
+	"golang.org/x/crypto/ssh"
 )
 
 type client struct {
@@ -129,7 +130,7 @@ func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	}
 	c.send(t, "list", "tools/list", map[string]any{})
 	v = c.receive(t, "list", time.Second)
-	if len(v["result"].(map[string]any)["tools"].([]any)) != 21 {
+	if len(v["result"].(map[string]any)["tools"].([]any)) != 22 {
 		t.Fatal("tool discovery")
 	}
 	c.tool(t, "connect", "sess_connect", connectArgs(addr))
@@ -428,7 +429,7 @@ func TestExecRejectsInteractiveStreamsThroughMCP(t *testing.T) {
 			id := structured(t, c.receive(t, "connect-stream", time.Second))["session"].(string)
 			c.tool(t, "invalid-exec", "sess_exec", map[string]any{"session": id, "command": "must-not-execute"})
 			v := c.receive(t, "invalid-exec", time.Second)
-			if v["result"].(map[string]any)["isError"] != true || !strings.Contains(structured(t, v)["error"].(string), "non-interactive SSH mode=exec") {
+			if v["result"].(map[string]any)["isError"] != true || !strings.Contains(structured(t, v)["error"].(string), "SSH mode=exec") {
 				t.Fatal(v)
 			}
 			c.tool(t, "valid-text", "sess_send_text", map[string]any{"session": id, "data": "test", "collect_output": false})
@@ -591,5 +592,50 @@ func TestMCPMaximumOutputPage(t *testing.T) {
 	v = structured(t, c.receive(t, "page-default", 3*time.Second))
 	if len(v["output"].(string)) != 64<<10 {
 		t.Fatal("default page failed")
+	}
+}
+
+func TestMCPInteractiveTaskInput(t *testing.T) {
+	addr, _ := testutil.SSHWithExec(t, func(_ string, ch ssh.Channel, _ <-chan *ssh.Request) {
+		_, _ = io.Copy(ch, ch)
+		_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
+	})
+	c := harness(t)
+	args := connectArgs(addr)
+	args["protocol"] = "ssh"
+	args["username"] = "test"
+	args["password"] = "test"
+	c.tool(t, "i-connect", "sess_connect", args)
+	id := structured(t, c.receive(t, "i-connect", time.Second))["session"].(string)
+	c.tool(t, "i-start", "sess_exec", map[string]any{"session": id, "command": "echo", "interactive": true, "pty": true, "collect_output": false})
+	v := structured(t, c.receive(t, "i-start", time.Second))
+	handle := v["handle"].(string)
+	if v["stdin_open"] != true || v["pty"] != true || v["interactive"] != true {
+		t.Fatal(v)
+	}
+	c.tool(t, "i-send", "sess_sendline_escaped", map[string]any{"handle": handle, "data": `hello\x21`, "config": map[string]any{"line_end": `\n`, "read_idle_timeout_ms": 10}})
+	v = structured(t, c.receive(t, "i-send", time.Second))
+	if v["input_state"] != "sent" || v["output"] != "hello!\n" {
+		t.Fatal(v)
+	}
+	c.tool(t, "i-eof", "sess_task_close_stdin", map[string]any{"handle": handle})
+	v = structured(t, c.receive(t, "i-eof", time.Second))
+	if v["input_state"] != "sent" || v["stdin_open"] != false {
+		t.Fatal(v)
+	}
+	c.tool(t, "i-wait", "sess_task_wait", map[string]any{"handle": handle})
+	v = structured(t, c.receive(t, "i-wait", time.Second))
+	if v["reason"] != "exec_finish" || v["exit_code"] != float64(0) {
+		t.Fatal(v)
+	}
+	c.tool(t, "i-bad-pty", "sess_exec", map[string]any{"session": id, "command": "echo", "pty": true})
+	if msg := c.receive(t, "i-bad-pty", time.Second); msg["result"].(map[string]any)["isError"] != true {
+		t.Fatal(msg)
+	}
+	for _, tool := range []string{"sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped"} {
+		schema := definitions[tool]["inputSchema"].(map[string]any)
+		if len(schema["oneOf"].([]any)) != 2 || len(schema["required"].([]string)) != 1 || schema["required"].([]string)[0] != "data" {
+			t.Fatal(tool, schema)
+		}
 	}
 }

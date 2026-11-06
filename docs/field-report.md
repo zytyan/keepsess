@@ -1,6 +1,6 @@
 # 0.3 接口迁移与现场反馈
 
-当前可调用的 16 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
+当前可调用的 22 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
 
 0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode/config；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。普通 stream 空闲回收独立为 30min，可禁用。
 
@@ -14,7 +14,7 @@ Linux 支持真实 OS TCP 队列阈值；Windows 显式报告不支持该查询�
 
 用户反馈：sendline_text 发送用户名/密码后 input_state=sent、written_bytes 非零，但输出为空且 start=end，后续两次读取也为空。没有真实端点日志/抓包，不能判断是设备未处理、密码正确但 shell 静默、认证等待其他步骤、回放/游标影响，或数据未送达。
 
-本轮澄清：交互式 shell、console 登录、任何 Telnet 都使用 stream send/read，不使用 sess_exec。stream sent 只是本地 writer 完整写入；written_bytes 是应用字节本地计数，SSH/Telnet framing 不在计数内。TCP ACK 最多是传输层证据，不是终端认证回执。保留 sent，避免 accepted 被误解为“设备接受密码”。SSH exec 的 sent 表示 exec channel 启动请求成功，与最终退出状态分开。
+本轮澄清：持久终端 shell、console 登录、任何 Telnet 都使用 stream send/read；SSH mode=exec 的显式 interactive 任务可按 task handle 收发。stream sent 只是本地 writer 完整写入；written_bytes 是应用字节本地计数，SSH/Telnet framing 不在计数内。TCP ACK 最多是传输层证据，不是终端认证回执。保留 sent，避免 accepted 被误解为“设备接受密码”。SSH exec 的 sent 表示 exec channel 启动请求成功，与最终退出状态分开。
 
 空输出/start=end 仅表示本次没有消费原始输出字节，不提供认证结论。应以实际观察到的设备提示/失败文本进行一次有界只读等待；仍为空时明确报告远端送达/认证/shell 就绪未知，不自动重发密码、改行结尾、补回车或重连重放。提示符匹配也可能来自旧未读内容或 console 回放，不能建立本次输入的因果确认。本轮是文档和工具描述澄清，没有增加应用层 ACK，也没有复现特定设备的密码问题。
 

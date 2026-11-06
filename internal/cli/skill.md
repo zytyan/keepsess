@@ -27,14 +27,15 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-All 21 tools are discovered through MCP tools/list, not individually registered.
+All 22 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
 
 `sess_connect` requires protocol, host and port. SSH takes username and password/keyfile,
 and optionally known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
 consoles AND interactive shells, including interactive Bash. Telnet only supports stream and is plaintext.
-Never use sess_exec for an interactive shell, a console login, or any Telnet session. Selecting
+Use stream send/read for persistent terminal shells, console logins and all Telnet. Explicit
+interactive exec tasks are supported on SSH mode=exec with their own handle. Selecting
 SSH transport does not make an interactive session an exec session. Do not use exec as a probe
 or fallback when a stream is silent. Always use the actual short session
 handle returned (s1, s2, ...); do not select a session implicitly. IDs are not reused in-process.
@@ -130,10 +131,11 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 |---|---|
 | Independent non-interactive SSH command with protocol exit status | SSH mode=exec; sess_exec |
 | Interactive Bash/shell, persistent cwd/environment, login dialog, switch/console | SSH mode=stream; sess_sendline_text/sess_sendline_escaped and read tools |
+| Explicit interactive process such as GDB | SSH mode=exec; interactive=true, optional pty=true; send/read with task handle |
 | Any Telnet connection, including username/password input | mode=stream; send/read tools only, NEVER sess_exec |
 
 
-- `sess_exec(session, command, config?)`: **non-interactive SSH mode=exec only**.
+- `sess_exec(session, command, config?)`: **SSH mode=exec only**, with stdin EOF by default.
   SSH mode=stream and all Telnet sessions immediately return a tool error without sending
   input; there is no fallback to a shell. Use sess_sendline_text/sess_sendline_escaped for
   interactive streams, never probe the same command with exec first. Uses a fresh SSH channel on the
@@ -162,7 +164,7 @@ do not guarantee the console server broadcasts output or permits concurrent conn
   Early returns, uncertain startup and remaining output return handle. All executions retain
   bounded records discoverable through sess_task_list. There is no exec silence watchdog.
 
-Task operations (21 tools total):
+Task operations (22 tools total):
 - sess_task_list(session?): list retained tasks; no output consumption.
 - sess_task_status(handle): immediate state, exit information, more, latest signal; no consumption.
 - sess_task_wait(handle, config?): completion wait plus incremental collection; uses exec_total_timeout_ms
@@ -170,6 +172,7 @@ Task operations (21 tools total):
 - sess_task_signal(handle, signal): bounded SSH signal, e.g. TERM/INT/KILL (without SIG prefix).
   read_only blocks manual and automatic signals. request_state is sent/not_sent/unknown,
   skipped_read_only or skipped_finished. Inspect state again to establish completion.
+- sess_task_close_stdin(handle): send SSH stdin EOF on an interactive task; no output consumed; read_only guarded.
 - sess_task_release(handle): delete a completed idle record and its output. Live, unknown and
   actively accessed tasks return busy. Close the connection to discard all associated handles;
   this does not guarantee remote program exit.
@@ -184,7 +187,7 @@ records globally; 1MiB history per task. Completed records expire after 30min an
 sooner at capacity, oldest first, excluding active operations. Unknown/live tasks are not evicted
 for capacity. Missing/expired handles fail explicitly; never replay because a handle expired.
 
-- Stream send tools: send_text, send_escaped, sendline_text, sendline_escaped (all prefixed sess_).
+- Stream/interactive-task send tools: send_text, send_escaped, sendline_text, sendline_escaped (all prefixed sess_).
   They send and collect unread output by default, using bounded deadlines. Set
   collect_output=false to return only a send receipt, e.g. when another call is already reading.
   The observed stream is NOT attributed to the latest input. No input IDs or automatic replay.
@@ -225,6 +228,36 @@ mode. Adjust to [~host], [*host], or nested views when observed; a pattern match
 command success. Use a pager's observed pattern and sess_send_text data=" " for the next page.
 Do not automatically commit/save/discard configurations or answer confirmation questions.
 
+## Interactive exec stdin and PTY
+
+sess_exec defaults interactive=false and pty=false: stdin EOF preserves ordinary command behavior.
+For GDB or another interactive process, opt in BEFORE startup:
+
+```json
+{"session":"s1","command":"gdb ./app","interactive":true,"pty":true,"collect_output":false}
+```
+
+Read the returned handle's prompt, then use any of the four send tools with handle INSTEAD OF
+session. Example sess_sendline_text({"handle":"task1","data":"bt","config":{"line_end":"\\n"}}).
+interactive does not change collection or timeout defaults. Prefer collect_output=false for
+startup; synchronous collection may also receive concurrent collect_output=false input.
+Task input has its own busy writer guard; output has a separate reader guard. Raw/escaped
+encoding, line_end, max_input_bytes, backpressure and collection semantics match stream sends.
+Never send task input to its parent session: that session is an exec connection, not the stdin.
+A task started without stdin cannot enable it later. Inspect interactive/pty/stdin_open in status.
+
+pty=true requires interactive=true and requests vt100 before exec. PTY changes terminal line
+discipline, echo, newline and stdout/stderr behavior; servers may merge stderr into terminal
+output. Configure line_end explicitly for the program. No PTY is allocated by default.
+Without PTY Ctrl-C/Ctrl-D are bytes, not guaranteed signals or EOF; use task_signal for signals.
+
+sess_task_close_stdin({"handle":"task1"}) sends SSH stdin EOF without consuming output or
+closing the connection. Repeated closure sends no second request. It does not guarantee exit;
+continue read/task_wait. Sending \x04 is not equivalent to closing stdin. Current session
+read_only blocks both task sends and EOF. Bounded stalled/cancelled writes close shared transport
+and report unknown outcomes for affected tasks; never retry automatically. Ordinary input errors
+leave the transport usable but mark stdin unavailable. close_stdin accepts handle only.
+
 ## Send receipts and silent login are not authentication results
 
 Keep input_state="sent"; for stream sends it means LOCAL write completion, not device acceptance. Renaming it
@@ -233,7 +266,8 @@ to accepted would suggest an acknowledgement the stream protocol cannot provide.
 | Receipt | What it proves | What it does NOT prove |
 |---|---|---|
 | sent (stream) | Local writer completed the full application input | Peer delivery, device application processing, successful authentication, or shell readiness |
-| sent (exec) | SSH exec channel start request succeeded | Command completion, exit success, or a terminal login result |
+| sent (exec startup) | SSH exec channel start request succeeded | Command completion, exit success, or a terminal login result |
+| sent (task input / EOF) | Local stdin write / EOF request write completed; EOF has no application-byte count | Program consumption, command success or exit |
 | not_sent | This attempt wrote no new application input | The outcome of any earlier attempt |
 | unknown | Write/setup failed, timed out or was cancelled; partial delivery/execution is possible | That zero bytes reached the peer |
 

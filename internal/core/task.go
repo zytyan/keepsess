@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +47,8 @@ type Task struct {
 	finished time.Time   // Protected by out.mu.
 	sequence uint64
 	signalMu sync.Mutex
+	inputMu  sync.Mutex
+	stdin    io.WriteCloser // Published under out.mu before state=running; inputMu serializes writes.
 }
 
 func (s *Session) runningLocked() bool {
@@ -97,7 +100,7 @@ func evictTaskLocked(s *Session, t *Task) {
 	t.out.mu.Unlock()
 }
 
-func (m *Manager) allocateTask(s *Session, c Config) (*Task, error) {
+func (m *Manager) allocateTask(s *Session, c Config, interactive, pty bool) (*Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sessions[s.id] != s {
@@ -166,7 +169,7 @@ func (m *Manager) allocateTask(s *Session, c Config) (*Task, error) {
 	now := time.Now()
 	t := &Task{session: s, sequence: m.nextTask, out: &Session{
 		id: s.id, handle: fmt.Sprintf("task%d", m.nextTask), protocol: "ssh", mode: "exec", state: "starting",
-		config: c, connected: true, running: true, active: 1, last: now, lastUse: now,
+		config: c, interactive: interactive, pty: pty, connected: true, running: true, active: 1, last: now, lastUse: now,
 		notify: make(chan struct{}, 1), done: make(chan struct{}),
 	}}
 	if s.tasks == nil {
@@ -178,6 +181,9 @@ func (m *Manager) allocateTask(s *Session, c Config) (*Task, error) {
 }
 
 func (m *Manager) startTask(ctx context.Context, s *Session, r Request, c Config) (Result, error) {
+	if r.PTY && !r.Interactive {
+		return Result{}, errors.New("pty=true requires interactive=true; nothing sent")
+	}
 	if r.Command == "" || r.Data != "" {
 		return Result{}, errors.New("command required; data is not accepted")
 	}
@@ -243,7 +249,7 @@ func (m *Manager) startTask(ctx context.Context, s *Session, r Request, c Config
 			return v, nil
 		}
 	}
-	t, err := m.allocateTask(s, c)
+	t, err := m.allocateTask(s, c, r.Interactive, r.PTY)
 	if err != nil {
 		v.Error = err.Error()
 		return v, nil
@@ -293,6 +299,28 @@ func (t *Task) start(ctx context.Context, command string, c Config) Result {
 		}
 		t.channel = ch
 		t.out.mu.Unlock()
+		if t.out.interactive {
+			input, ok := ch.(interface {
+				prepareInput(bool) (io.WriteCloser, error)
+			})
+			if !ok {
+				err = errors.New("exec channel does not support interactive stdin")
+			} else {
+				var stdin io.WriteCloser
+				stdin, err = input.prepareInput(t.out.pty)
+				if err == nil {
+					t.out.mu.Lock()
+					t.stdin = stdin
+					t.out.stdinOpen = true
+					t.out.mu.Unlock()
+				}
+			}
+			if err != nil {
+				done <- startup{err: err}
+				t.closeChannel(ch)
+				return
+			}
+		}
 		err = ch.start(command, t.out)
 		if err != nil {
 			done <- startup{err: err, attempted: true}
@@ -346,6 +374,7 @@ func (t *Task) finish(err error) {
 	if t.out.disposed {
 		return
 	}
+	t.out.stdinOpen = false
 	var exit *ssh.ExitError
 	var missing *ssh.ExitMissingError
 	switch {
@@ -373,6 +402,7 @@ func (t *Task) finish(err error) {
 		return
 	}
 	t.out.state, t.out.running, t.out.completed = "finished", false, true
+	t.out.stdinOpen = false
 	t.finished = time.Now()
 	t.out.signal()
 }
@@ -543,6 +573,12 @@ func (m *Manager) TaskList(session string) ([]Result, error) {
 func (m *Manager) operateTask(ctx context.Context, kind string, r Request) (Result, error) {
 	if r.Handle == "" || r.Session != "" {
 		return Result{}, errors.New("provide handle only; session and handle are mutually exclusive")
+	}
+	if strings.HasPrefix(kind, "send") || kind == "task_close_stdin" {
+		return m.taskInput(ctx, kind, r)
+	}
+	if r.Interactive || r.PTY {
+		return Result{}, errors.New("interactive/pty are only for sess_exec")
 	}
 	if r.Data != "" || r.Command != "" || r.CollectOutput != nil {
 		return Result{}, errors.New("task/read operations do not accept input")

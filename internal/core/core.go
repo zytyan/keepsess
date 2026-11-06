@@ -41,6 +41,8 @@ type Options struct {
 func (o Options) address() string { return net.JoinHostPort(o.Host, strconv.Itoa(o.Port)) }
 
 type Request struct {
+	Interactive   bool        `json:"interactive,omitempty"`
+	PTY           bool        `json:"pty,omitempty"`
 	Session       string      `json:"session"`
 	Handle        string      `json:"handle,omitempty"`
 	Signal        string      `json:"signal,omitempty"`
@@ -61,6 +63,9 @@ type PeerIdentity struct {
 
 // Result separates local write receipts from observed stream output.
 type Result struct {
+	Interactive        bool          `json:"interactive,omitempty"`
+	PTY                bool          `json:"pty,omitempty"`
+	StdinOpen          *bool         `json:"stdin_open,omitempty"`
 	Peer               *PeerIdentity `json:"peer,omitempty"`
 	DisconnectReason   string        `json:"disconnect_reason,omitempty"`
 	Session            string        `json:"session"`
@@ -114,6 +119,7 @@ type Session struct {
 	tasks                                   map[string]*Task
 	handle, state, exitSignal               string
 	lastSignal                              *SignalResult
+	interactive, pty, stdinOpen             bool
 }
 type Manager struct {
 	mu         sync.Mutex
@@ -263,6 +269,12 @@ func (s *Session) disconnectWith(code, why string) {
 func (s *Session) status() Result { s.mu.Lock(); defer s.mu.Unlock(); return s.statusLocked() }
 func (s *Session) statusLocked() Result {
 	r := Result{Session: s.id, Handle: s.handle, State: s.state, ExitSignal: s.exitSignal, Signal: s.lastSignal, Connected: s.connected && !s.disposed, Running: s.runningLocked(), ExitCode: s.exit, Warning: s.warning, Error: s.failure, DisconnectReason: s.disconnectReason}
+	if s.handle != "" && s.interactive {
+		r.Interactive = true
+		r.PTY = s.pty
+		open := s.stdinOpen && s.connected && !s.completed && !s.disposed
+		r.StdinOpen = &open
+	}
 	if s.disposed && s.retiredReason != "" {
 		r.DisconnectReason = s.retiredReason
 	}
@@ -477,8 +489,14 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	ctx, cancel := context.WithDeadline(parent, deadline)
 	defer cancel()
 	ctx = context.WithValue(ctx, callDeadlineKey{}, deadline)
+	if (strings.HasPrefix(kind, "send") || strings.HasPrefix(kind, "read_")) && r.Handle == "" && r.Session == "" {
+		return Result{}, errors.New("provide exactly one of session (stream) or handle (exec task)")
+	}
 	if r.Handle != "" || strings.HasPrefix(kind, "task_") {
 		return m.operateTask(ctx, kind, r)
+	}
+	if kind != "exec" && (r.Interactive || r.PTY) {
+		return Result{}, errors.New("interactive/pty are only for sess_exec")
 	}
 	if r.Signal != "" {
 		return Result{}, errors.New("signal is only for sess_task_signal")
@@ -499,7 +517,7 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return Result{}, errors.New("session disposed; use sess_connect")
 	}
 	if kind == "exec" && (s.mode != "exec" || s.protocol != "ssh") {
-		return Result{}, errors.New("sess_exec requires non-interactive SSH mode=exec; stream sessions do not support exec; nothing sent")
+		return Result{}, errors.New("sess_exec requires SSH mode=exec; stream sessions do not support exec; nothing sent")
 	}
 	cfg, err = applyConfig(cfg, r.Config, true)
 	if err != nil {
@@ -558,7 +576,7 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return s.read(ctx, kind, r, cfg), nil
 	}
 	if s.mode != "stream" {
-		return Result{}, errors.New("send tools require mode=stream; use sess_exec")
+		return Result{}, errors.New("send tools require a stream session or an interactive exec task handle; target the task handle, do not replay exec; nothing sent")
 	}
 	if r.Command != "" {
 		return Result{}, errors.New("send tools accept data, not command")

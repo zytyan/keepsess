@@ -32,10 +32,12 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
 
-21 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
-read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release、close/close_all（均带 sess_ 前缀）。
-sess_exec 仅用于非交互 SSH mode=exec；stream 直接报错，使用 sendline_text/escaped。
-交互式 Bash/shell、console 登录和全部 Telnet 使用 mode=stream 的 send/read，禁止 sess_exec。
+22 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
+read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。
+sess_exec 用于 SSH mode=exec，默认 stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
+mode=stream 调用 exec 直接报错，使用 sendline_text/escaped。
+持久终端 shell、console 登录和全部 Telnet 使用 mode=stream；交互 exec 按 task handle send/read。
+sess_task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。
 读取默认总时限 30000ms、静默时限 500ms；config 可持久设置或按调用覆盖。
 exec/task_wait 使用 exec_total_timeout_ms（默认 120000ms，最高 300000ms）；term_on_timeout 默认 true，超时尝试 TERM，不保证退出。
 同步调用互斥，返回即释放名额；异步返回 taskN，可与同步/异步并行，无后台运行时限。

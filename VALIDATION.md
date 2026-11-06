@@ -1,3 +1,14 @@
+# 显式交互 exec
+
+- sess_exec 新增 interactive/pty，默认均 false；interactive 保留 stdin，pty 必须搭配 interactive，启动前配置，不能事后启用。不改变 collect_output、超时和普通 stdin EOF 默认语义。
+- 四个 send 工具支持 session（stream）或 handle（interactive exec）二选一，复用编码/转义/结束符/输入上限/OS 反压/收集语义。每任务单写者和独立读者；同步收集期间可并行 collect_output=false 输入。
+- 新增第 22 个工具 sess_task_close_stdin(handle)，发送 SSH EOF、幂等、不消费输出，不以 Ctrl-D 代替；输出/退出状态仍可读取。status/list/结果报告 interactive、pty、stdin_open。
+- 输入/EOF 都检查当前会话 read_only，写入期间修改保护返回 busy；写入超时或取消关闭共享 transport、报告 unknown，不重放。普通任务输入错误保持 transport 可用并将 stdin 标为不可用。
+- 真实 SSH 测试覆盖默认 EOF、四种发送与字节、PTY 请求、显式 EOF 与 Ctrl-D 区别、只读/非法参数/无 stdin/已结束拒绝、同步读写并行、写入/EOF 超时与取消、PTY 拒绝不启动；新增 MCP 端到端与 schema 目标选择验证。未实测真实 GDB 或操作系统 PTY 行规程，模拟器确认 SSH 请求/字节行为。
+- 完整 go test -race ./...、go vet ./...、Linux amd64/arm64 与 Windows amd64 交叉构建、skill 校验及内嵌一致性检查通过；可选 110s 静默测试未重跑。README、CLI、MCP、skill、现场说明和开发约束已同步。
+
+---
+
 # 连接健康、身份摘要与新预算
 
 - 会话空闲保留默认 7200000ms（2h），活跃任务/读写排除；不是固定连接年龄。SSH 协议探测默认 30000ms、单回复截止 10000ms，至多一个在途；否定回复仍为健康，不输入终端字符、不刷新本地空闲，Telnet 保持 TCP keepalive。
