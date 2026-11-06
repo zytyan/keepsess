@@ -10,3 +10,10 @@
 /.keepsess/
 *.keepsess-backup-*
 *.keepsess-install.lock
+
+# 本地构建产物与辅助脚本，避免构建时 dirty
+/keepsess
+/scripts/update.sh
+
+/.codegraph/
+/.mcp.json
