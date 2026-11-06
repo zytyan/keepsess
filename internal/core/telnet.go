@@ -28,7 +28,7 @@ func (s *Session) connectTelnet(ctx context.Context, o Options) error {
 		if e == io.EOF {
 			s.disconnect("")
 		} else {
-			s.disconnect("Telnet disconnected: " + e.Error())
+			s.disconnectError(e, "Telnet disconnected")
 		}
 	}()
 	return nil

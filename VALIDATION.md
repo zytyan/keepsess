@@ -1,3 +1,16 @@
+# 连接健康、身份摘要与新预算
+
+- 会话空闲保留默认 7200000ms（2h），活跃任务/读写排除；不是固定连接年龄。SSH 协议探测默认 30000ms、单回复截止 10000ms，至多一个在途；否定回复仍为健康，不输入终端字符、不刷新本地空闲，Telnet 保持 TCP keepalive。
+- 新增 disconnect_reason 与原始错误保留，区分 reset_by_peer、transport_timeout、keepalive_timeout、ssh_disconnect、remote_eof、transport_error；保留句柄优先 reconnect。释放原因记录最多 128 条/2h，不保留凭据；回收/关闭与 unknown_handle 明确区分，不能把未知归因为设备 reset。
+- SSH connect/reconnect 返回一次 peer.server（96 字符上限）、host_key（SHA256），重连变化标记 host_key_changed；不执行命令、不更改默认校验策略，不在普通读写/list 重复。不把旧身份冒充失败重连后的新观测。
+- exec/task_wait 完成等待默认 120000ms、最高 300000ms；RPC 仍最多 115s，RPC/调用截止先到只返回任务 handle、不发 TERM。仅配置的完成等待超时适用 term_on_timeout；异步无后台运行计时器。
+- 输出默认分页 65536（64KiB）、最高 524288（512KiB），历史仍 1MiB；验证核心分页及实际 MCP 最大页传输（测试客户端有界扫描上限相应扩展）。
+- 新增真实 SSH 探测否定回复/无回复/禁用与重连、任务未知结果、密钥切换、重连身份变化、断连分类、原因记录容量/过期、MCP 配置/身份/关闭原因、RPC 截止不 TERM 测试。长空闲和 RPC 上限采用模拟时间/缩短测试预算，未实等两小时或 115s。
+- 完整 go test -race ./...、go vet ./...、Linux amd64/arm64 与 Windows amd64 交叉构建、skill 校验与内嵌一致性检查通过；可选 110s 静默测试未重跑，未实测用户嵌入式设备。
+- README、CLI、MCP 描述和开发约束同步；修复独立 skill 落后于内嵌版的问题，保留现有 21 工具、task 与信号/空输出说明。第 4 项 exec 交互输入未修改。
+
+---
+
 # 显式重连
 
 - 新增第 16 个工具 sess_reconnect(session)，复用私有原连接参数与当前配置（包括 read_only、connect_timeout_ms），保留句柄，不自动重试或重放应用输入。

@@ -125,7 +125,10 @@ func SSHWithShell(t *testing.T, shell func(io.ReadWriter)) (string, string) {
 func SSHWithExec(t *testing.T, exec func(string, ssh.Channel, <-chan *ssh.Request)) (string, string) {
 	return sshServer(t, Switch, exec)
 }
-func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request)) (string, string) {
+func SSHWithGlobalRequests(t *testing.T, handler func(*ssh.Request)) (string, string) {
+	return sshServer(t, Switch, nil, handler)
+}
+func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request), globals ...func(*ssh.Request)) (string, string) {
 	t.Helper()
 	_, key, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
@@ -145,7 +148,15 @@ func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Ch
 		}
 		_ = raw.SetDeadline(time.Time{})
 		defer sc.Close()
-		go ssh.DiscardRequests(requests)
+		go func() {
+			for req := range requests {
+				if len(globals) > 0 {
+					globals[0](req)
+				} else {
+					_ = req.Reply(false, nil)
+				}
+			}
+		}()
 		var wg sync.WaitGroup
 		defer wg.Wait()
 		for nc := range channels {

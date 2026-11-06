@@ -73,7 +73,7 @@ func waitActive(t *testing.T, s *Session) {
 func TestDefaultsConfigurationAtomicAndOverrides(t *testing.T) {
 	m, s, wire := localSession(t)
 	info, err := m.GetConfig(s.id)
-	if err != nil || info.Config.ReadIdleTimeoutMS != 500 || info.Config.ReadTotalTimeoutMS != 30000 || info.Config.ExecTotalTimeoutMS != 30000 || info.Fields["read_idle_timeout_ms"].Description == "" {
+	if err != nil || info.Config.ReadIdleTimeoutMS != 500 || info.Config.ReadTotalTimeoutMS != 30000 || info.Config.ExecTotalTimeoutMS != 120000 || info.Fields["read_idle_timeout_ms"].Description == "" {
 		t.Fatal(info, err)
 	}
 	if _, err = m.Configure(s.id, cfg(map[string]any{"read_idle_timeout_ms": 0, "session_idle_timeout_ms": "30*60*1000", "line_end": `\0`})); err != nil {
@@ -88,7 +88,7 @@ func TestDefaultsConfigurationAtomicAndOverrides(t *testing.T) {
 		t.Fatal("override changed global config")
 	}
 	before := info.Config
-	for _, p := range []ConfigPatch{cfg(map[string]any{"read_idle_timeout_ms": 1, "encoding": "unknown"}), cfg(map[string]any{"typo": 1}), cfg(map[string]any{"read_total_timeout_ms": 0}), cfg(map[string]any{"exec_total_timeout_ms": 0}), cfg(map[string]any{"exec_total_timeout_ms": 110001}), cfg(map[string]any{"max_output_bytes": 65537}), cfg(map[string]any{"end_pattern": "["}), cfg(map[string]any{"line_end": `\q`}), cfg(map[string]any{"read_idle_timeout_ms": nil})} {
+	for _, p := range []ConfigPatch{cfg(map[string]any{"read_idle_timeout_ms": 1, "encoding": "unknown"}), cfg(map[string]any{"typo": 1}), cfg(map[string]any{"read_total_timeout_ms": 0}), cfg(map[string]any{"exec_total_timeout_ms": 0}), cfg(map[string]any{"exec_total_timeout_ms": 300001}), cfg(map[string]any{"max_output_bytes": 524289}), cfg(map[string]any{"end_pattern": "["}), cfg(map[string]any{"line_end": `\q`}), cfg(map[string]any{"read_idle_timeout_ms": nil})} {
 		if _, err = m.Configure(s.id, p); err == nil {
 			t.Fatal("invalid config accepted", p)
 		}

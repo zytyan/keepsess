@@ -35,7 +35,7 @@ func harness(t *testing.T) *client {
 	go func() {
 		defer close(c.messages)
 		scan := bufio.NewScanner(rr)
-		scan.Buffer(make([]byte, 4096), 1<<20)
+		scan.Buffer(make([]byte, 4096), 8<<20)
 		for scan.Scan() {
 			var v map[string]any
 			if json.Unmarshal(scan.Bytes(), &v) == nil {
@@ -535,5 +535,61 @@ func TestMCPReconnectPreservesHandleAndReadOnly(t *testing.T) {
 	c.tool(t, "rc-closed", "sess_reconnect", map[string]any{"session": id})
 	if msg = c.receive(t, "rc-closed", time.Second); msg["result"].(map[string]any)["isError"] != true {
 		t.Fatal(msg)
+	}
+}
+
+func TestMCPHealthMetadataAndBudgets(t *testing.T) {
+	addr, key := testutil.SSH(t)
+	c := harness(t)
+	args := connectArgs(addr)
+	args["protocol"] = "ssh"
+	args["username"] = "test"
+	args["password"] = "test"
+	c.tool(t, "health-connect", "sess_connect", args)
+	v := structured(t, c.receive(t, "health-connect", time.Second))
+	id := v["session"].(string)
+	peer, ok := v["peer"].(map[string]any)
+	if !ok || peer["host_key"] != key || peer["server"] == "" {
+		t.Fatal(v)
+	}
+	c.tool(t, "health-config", "sess_get_config", map[string]any{"session": id})
+	v = structured(t, c.receive(t, "health-config", time.Second))
+	conf := v["config"].(map[string]any)
+	if conf["session_idle_timeout_ms"] != float64(7200000) || conf["exec_total_timeout_ms"] != float64(120000) || conf["max_output_bytes"] != float64(65536) || conf["ssh_keepalive_ms"] != float64(30000) {
+		t.Fatal(conf)
+	}
+	c.tool(t, "health-close", "sess_close", map[string]any{"session": id})
+	c.receive(t, "health-close", time.Second)
+	c.tool(t, "health-closed-read", "sess_read_available", map[string]any{"session": id})
+	msg := c.receive(t, "health-closed-read", time.Second)
+	v = structured(t, msg)
+	if msg["result"].(map[string]any)["isError"] != true || v["disconnect_reason"] != "explicit_close" || v["next_action"] != "sess_connect" || v["session"] != id {
+		t.Fatal(msg)
+	}
+	for _, key := range []string{"ssh_keepalive_ms", "ssh_keepalive_timeout_ms"} {
+		properties := configSchema(true).(map[string]any)["properties"].(map[string]any)
+		if _, ok := properties[key]; ok {
+			t.Fatal("connection config in operation schema", key)
+		}
+	}
+}
+
+func TestMCPMaximumOutputPage(t *testing.T) {
+	addr := testutil.Listen(t, func(conn net.Conn) {
+		_, _ = io.WriteString(conn, strings.Repeat("x", 600<<10))
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	c := harness(t)
+	c.tool(t, "page-connect", "sess_connect", connectArgs(addr))
+	id := structured(t, c.receive(t, "page-connect", time.Second))["session"].(string)
+	c.tool(t, "page-max", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"max_output_bytes": 512 << 10, "read_idle_timeout_ms": 0}})
+	v := structured(t, c.receive(t, "page-max", 3*time.Second))
+	if len(v["output"].(string)) != 512<<10 || v["reason"] != "output_limit" {
+		t.Fatal("maximum page failed")
+	}
+	c.tool(t, "page-default", "sess_read_until", map[string]any{"session": id, "config": map[string]any{"read_idle_timeout_ms": 0}})
+	v = structured(t, c.receive(t, "page-default", 3*time.Second))
+	if len(v["output"].(string)) != 64<<10 {
+		t.Fatal("default page failed")
 	}
 }

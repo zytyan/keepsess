@@ -16,7 +16,7 @@ import (
 
 const (
 	HistoryLimit  = 1 << 20
-	ResultLimit   = 64 << 10
+	ResultLimit   = 512 << 10
 	MaxInputLimit = 1 << 20
 	MaxSessions   = 32
 	CallLimit     = 115 * time.Second
@@ -52,8 +52,17 @@ type Request struct {
 	Offset        *int64      `json:"offset,omitempty"`
 }
 
-// Result separates local send receipts from observed stream output; stream sent is not a device acknowledgement.
+// PeerIdentity is handshake metadata, emitted only on connect/reconnect.
+type PeerIdentity struct {
+	Server         string `json:"server"`
+	HostKey        string `json:"host_key"`
+	HostKeyChanged bool   `json:"host_key_changed,omitempty"`
+}
+
+// Result separates local write receipts from observed stream output.
 type Result struct {
+	Peer               *PeerIdentity `json:"peer,omitempty"`
+	DisconnectReason   string        `json:"disconnect_reason,omitempty"`
 	Session            string        `json:"session"`
 	Handle             string        `json:"handle,omitempty"`
 	State              string        `json:"state,omitempty"`
@@ -92,6 +101,9 @@ type Session struct {
 	active                                  int
 	connected, running, completed, disposed bool
 	failure, warning                        string
+	disconnectReason, retiredReason         string
+	peer                                    *PeerIdentity
+	keepaliveWake                           chan struct{}
 	exit                                    *int
 	notify, done                            chan struct{}
 	once                                    sync.Once
@@ -111,6 +123,7 @@ type Manager struct {
 	opening    int
 	generation uint64
 	pending    map[string]context.CancelFunc
+	retired    map[string]retiredSession
 }
 
 func NewManager() *Manager {
@@ -121,7 +134,15 @@ func (m *Manager) Get(id string) (*Session, error) {
 	defer m.mu.Unlock()
 	s := m.sessions[id]
 	if s == nil {
-		return nil, errors.New("unknown session; use sess_connect")
+		return nil, m.sessionErrorLocked(id)
+	}
+	s.mu.Lock()
+	disposed, reason := s.disposed, s.retiredReason
+	s.mu.Unlock()
+	if disposed {
+		m.rememberLocked(id, reason)
+		delete(m.sessions, id)
+		return nil, m.sessionErrorLocked(id)
 	}
 	return s, nil
 }
@@ -182,7 +203,11 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	m.sessions[id] = s
 	m.mu.Unlock()
 	go m.watch(s)
-	return s.status(), nil
+	v := s.status()
+	s.mu.Lock()
+	v.Peer = s.peer
+	s.mu.Unlock()
+	return v, nil
 }
 func (s *Session) signal() {
 	select {
@@ -211,14 +236,18 @@ func (s *Session) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *Session) disconnect(why string) {
+	s.disconnectWith(classifyDisconnect(nil, why), why)
+}
+func (s *Session) disconnectWith(code, why string) {
 	s.once.Do(func() {
 		s.mu.Lock()
 		s.connected = false
 		s.running = false
 		s.failure = why
+		s.disconnectReason = code
 		c := s.closer
 		for _, task := range s.tasks {
-			task.out.disconnect(why)
+			task.out.disconnectWith(code, why)
 		}
 		if s.handle != "" && !s.completed {
 			s.state = "unknown"
@@ -233,7 +262,10 @@ func (s *Session) disconnect(why string) {
 }
 func (s *Session) status() Result { s.mu.Lock(); defer s.mu.Unlock(); return s.statusLocked() }
 func (s *Session) statusLocked() Result {
-	r := Result{Session: s.id, Handle: s.handle, State: s.state, ExitSignal: s.exitSignal, Signal: s.lastSignal, Connected: s.connected && !s.disposed, Running: s.runningLocked(), ExitCode: s.exit, Warning: s.warning, Error: s.failure}
+	r := Result{Session: s.id, Handle: s.handle, State: s.state, ExitSignal: s.exitSignal, Signal: s.lastSignal, Connected: s.connected && !s.disposed, Running: s.runningLocked(), ExitCode: s.exit, Warning: s.warning, Error: s.failure, DisconnectReason: s.disconnectReason}
+	if s.disposed && s.retiredReason != "" {
+		r.DisconnectReason = s.retiredReason
+	}
 	if s.handle != "" {
 		r.More = s.cursor < s.total
 	}
@@ -257,6 +289,7 @@ func (s *Session) expire(now time.Time) bool {
 	unused := s.active == 0 && !s.runningLocked() && s.config.SessionIdleTimeoutMS > 0 && now.Sub(s.lastUse) >= s.config.Duration(s.config.SessionIdleTimeoutMS)
 	if unused {
 		s.disposed = true
+		s.retiredReason = "session_idle_expired"
 		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
@@ -276,10 +309,12 @@ func (m *Manager) watch(s *Session) {
 		s.expire(time.Now())
 		s.mu.Lock()
 		disposed := s.disposed
+		reason := s.retiredReason
 		s.mu.Unlock()
 		if disposed {
 			m.mu.Lock()
 			if m.sessions[s.id] == s {
+				m.rememberLocked(s.id, reason)
 				delete(m.sessions, s.id)
 			}
 			m.mu.Unlock()
@@ -292,9 +327,11 @@ func (m *Manager) Close(id string) (Result, error) {
 	m.mu.Lock()
 	s := m.sessions[id]
 	if s == nil {
+		err := m.sessionErrorLocked(id)
 		m.mu.Unlock()
-		return Result{}, errors.New("unknown session; use sess_connect")
+		return Result{}, err
 	}
+	m.rememberLocked(id, "explicit_close")
 	delete(m.sessions, id)
 	if cancel := m.pending[id]; cancel != nil {
 		cancel()
@@ -302,6 +339,7 @@ func (m *Manager) Close(id string) (Result, error) {
 	m.mu.Unlock()
 	s.mu.Lock()
 	s.disposed = true
+	s.retiredReason = "explicit_close"
 	s.options = Options{}
 	s.buf = nil
 	s.base = s.total
@@ -314,6 +352,9 @@ func (m *Manager) Close(id string) (Result, error) {
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
 	ss := m.sessions
+	for id := range ss {
+		m.rememberLocked(id, "explicit_close")
+	}
 	m.sessions = make(map[string]*Session)
 	m.generation++
 	for _, cancel := range m.pending {
@@ -323,6 +364,7 @@ func (m *Manager) CloseAll() {
 	for _, s := range ss {
 		s.mu.Lock()
 		s.disposed = true
+		s.retiredReason = "explicit_close"
 		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
@@ -339,8 +381,10 @@ func (m *Manager) List() []Result {
 	for id, s := range m.sessions {
 		s.mu.Lock()
 		disposed := s.disposed
+		reason := s.retiredReason
 		s.mu.Unlock()
 		if disposed {
+			m.rememberLocked(id, reason)
 			delete(m.sessions, id)
 			continue
 		}
@@ -406,6 +450,12 @@ func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 		return ConfigResult{}, errors.New("session disposed")
 	}
 	s.config = cfg
+	if s.keepaliveWake != nil {
+		select {
+		case s.keepaliveWake <- struct{}{}:
+		default:
+		}
+	}
 	s.lastUse = time.Now()
 	s.mu.Unlock()
 	return ConfigResult{Session: id, Config: cfg}, nil
@@ -611,7 +661,7 @@ func (s *Session) write(ctx context.Context, kind string, b []byte, c Config) Re
 		w.err = ctx.Err()
 	}
 	if w.err != nil {
-		s.disconnect(w.err.Error())
+		s.disconnectError(w.err, "write failed")
 		v = s.status()
 		v.InputState = "unknown"
 		v.InputBytes = len(b)
@@ -673,6 +723,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 		return Result{}, errors.New("busy: session operation or exec in progress; reconnect refused")
 	}
 	o, cfg := old.options, old.config
+	previousPeer := old.peer
 	old.reconnecting = true
 	old.active++ // Prevent idle collection while establishing the replacement.
 	generation := m.generation
@@ -685,7 +736,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	old.base, old.cursor = old.total, old.total
 	old.discardTasksLocked()
 	old.mu.Unlock()
-	next := &Session{id: id, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
+	next := &Session{id: id, peer: previousPeer, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
 		last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
 	dialCtx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
 	if o.Protocol == "ssh" {
@@ -698,7 +749,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	}
 	stop()
 	if err != nil {
-		next.disconnect("reconnect failed: " + err.Error())
+		next.disconnectError(err, "reconnect failed")
 	}
 	// Publish only if close/close_all has not invalidated this handle in the meantime.
 	m.mu.Lock()
@@ -727,6 +778,12 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	}
 	go m.watch(next)
 	v := next.status()
+	next.mu.Lock()
+	v.Peer = next.peer
+	if err != nil && next.peer == previousPeer {
+		v.Peer = nil
+	}
+	next.mu.Unlock()
 	if err != nil {
 		v.Reason = "aborted"
 		if errors.Is(err, context.Canceled) {

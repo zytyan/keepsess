@@ -77,7 +77,7 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		v := s.statusLocked()
 		s.mu.Unlock()
 		if disposed {
-			return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
+			return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, DisconnectReason: v.DisconnectReason, NextAction: "sess_connect", Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
 		}
 		now := time.Now()
 		idleSince := last
@@ -150,13 +150,15 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 			}
 			s.mu.Lock()
 			if s.disposed {
+				v = s.statusLocked()
 				s.mu.Unlock()
-				return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
+				return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, DisconnectReason: v.DisconnectReason, NextAction: "sess_connect", Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
 			}
 			// If the producer overtook the snapshot, report that loss on the next read.
 			if !history {
 				s.cursor = end
 			}
+			v.DisconnectReason = s.disconnectReason
 			v.Connected = s.connected
 			v.Running = s.running
 			v.State, v.ExitCode, v.ExitSignal, v.Warning = s.state, s.exit, s.exitSignal, s.warning

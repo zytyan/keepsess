@@ -130,6 +130,14 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 
 有读写、任务操作、配置更新、其他重连或活跃 exec 时返回 busy，旧连接不受影响。重连会清空全部旧任务 handle 与历史；断线后仍未知的远端程序不自动重放。连接失败返回 connected=false 和明确错误，保留原参数与配置，可再次显式重连；绝不自动重试。取消或连接超时也保留句柄。close/close_all 会取消进行中的重连并彻底释放参数，已关闭或回收的句柄不能重连，须重新 connect。read_only 会保留，仍禁止应用输入；串口服务端能否恢复原设备状态取决于其实现。
 
+### 连接健康与设备身份
+
+会话默认连续两小时无工具操作才回收（不是连接建立后两小时强制关闭）；活动读写与活跃任务不回收。SSH 默认同时启用 TCP keepalive 和每 30s 的 SSH `keepalive@openssh.com` 协议探测，每次等回复最多 10s，仅一个探测在途。服务端否定回复也算有响应。keepalive 不输入字符、不延长本地会话空闲期限，不能阻止设备重启或终端自身的登录超时。配置更改可唤醒探测调度；已在途探测按原截止时间完成。
+
+断连返回 disconnect_reason 与可用的原始 error：reset_by_peer、transport_timeout、keepalive_timeout、ssh_disconnect、remote_eof、transport_error。EOF 只说明连接关闭，不猜测设备空闲超时或重启；探测超时也不能证明设备一定已死机。保留句柄时优先 next_action=sess_reconnect，绝不重放输入。已回收/关闭时返回 session_idle_expired/explicit_close 与 sess_connect；最多保留 128 条、不含凭据的原因记录两小时，可能提前淘汰。未识别句柄报告 unknown_handle，说明可能关闭/回收/服务重启，不伪造设备原因。
+
+SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字符软件标识）、host_key（SHA256 指纹），与同句柄上次观察值不同则附 host_key_changed=true。不在普通 read/send/list 中重复。失败重连不会把上次身份冒充为本次观测值。默认不校验策略不变；这是对端线索，不能证明镜像版本、物理设备身份或是否重启；不会自动执行 uname 等命令。
+
 ## 配置
 
 连接时 config、sess_configure.config 与操作的 config 使用同一套校验。未知字段、null、非法正则、超范围值整体拒绝，不部分生效。调用开始时快照配置；read_only 在实际写入前重新检查，其余配置修改不会影响当前调用。操作中的 config 不改变会话默认配置。
@@ -139,28 +147,30 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配非交互的
 | read_only | false | 会话级输入保护，禁止 send、exec 及手动/自动信号；只能通过 connect/configure 设置，不能单次覆盖 |
 | connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入 config |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
-| session_idle_timeout_ms | 1800000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
+| session_idle_timeout_ms | 7200000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
 | read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |
 | read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 sess_exec |
-| exec_total_timeout_ms | 30000 | sess_exec/task_wait 等待协议完成的独立总时限，1..110000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
+| exec_total_timeout_ms | 120000 | sess_exec/task_wait 等待协议完成的独立总时限，1..300000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
 | term_on_timeout | true | 完成等待超时尝试一次 TERM；可单次覆盖；普通 read 超时、取消等待和输出上限不触发 |
+| ssh_keepalive_ms | 30000 | SSH 协议探测间隔，0 禁用；不发送终端输入、不刷新本地空闲计时；Telnet 不使用 |
+| ssh_keepalive_timeout_ms | 10000 | 单次 SSH 探测回复时限，1..110000ms；无回复关闭传输，未完成任务结果未知 |
 | tcp_keepalive_ms | 15000 | 系统 TCP keepalive 周期参数，0 禁用，最高一天；实际探测与失效时序取决于 OS |
 | line_end | SSH `\r`，Telnet `\r\n` | 可见转义文本，配置时按 UTF-8 与字节转义解码一次，最多 1024 字节；可为空 |
 | encoding | utf-8 | utf-8、gbk、shift-jis；支持 utf8、sjis、shift_jis 等别名 |
 | input_encode_error_action | error | 无法编码时整条输入拒绝，不进行部分发送 |
 | output_decode_error_action | to_escape_bytes | 非法输出字节显示为 `\xNN`；to_hex 显示 `<NN>`；error 报错并保留非法字节 |
 | max_input_bytes | 4096 | 实际编码后输入长度，包含行结束符；1..1048576 |
-| max_output_bytes | 8192 | 返回 UTF-8 文本字节预算，包括非法字节的展示文本；1..65536 |
+| max_output_bytes | 65536 | 默认 64KiB 分页，返回 UTF-8 文本字节预算，包括非法字节的展示文本；1..524288（最高 512KiB） |
 | backpressure_bytes | 0 | 非零时按系统 TCP 队列阈值拒绝新写入，最高 1GiB；需平台支持 |
 | end_pattern | 空 | Go RE2，匹配解码后的未读输出；空表示禁用，最多 1024 字节；不影响 sess_exec |
 
 数字可传整数或只包含整数、四则运算、括号的字符串，例如：
 
 ```json
-{"session":"s1","config":{"session_idle_timeout_ms":"30*60*1000","max_output_bytes":"8*1024","read_idle_timeout_ms":500}}
+{"session":"s1","config":{"session_idle_timeout_ms":"2*60*60*1000","max_output_bytes":"64*1024","read_idle_timeout_ms":500}}
 ```
 
-不执行 eval、函数调用或变量；除法必须得到整数，表达式长度与数值有界。read_only、connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms 是会话/连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
+不执行 eval、函数调用或变量；除法必须得到整数，表达式长度与数值有界。read_only、connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms、ssh_keepalive_ms、ssh_keepalive_timeout_ms 是会话/连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
 
 ### 多人串口旁观
 
@@ -257,7 +267,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 ## SSH exec 与连接保护
 
-**sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次 config，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 30000ms，1..110000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。
+**sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次 config，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
 
 例如，下面的 sess_exec 最多等待协议完成 60 秒，不改变会话默认设置：
 
@@ -289,7 +299,7 @@ sess_task_release({"handle":"task22"})
 
 每连接最多 8 个未完成任务、16 条保留记录；全局最多 64 个未完成任务、128 条记录。运行中/未知任务不自动淘汰以腾出容量；完成记录保留 30min，达到容量时可提前淘汰最旧且无活动操作的完成记录。读取被淘汰的 handle 明确报 unknown or expired，不切换到其他任务、不重放。会话被关闭、重连或回收时任务记录一起清理。
 
-**exec 不再有 110 秒无输出保护。** 无活动调用且无活跃任务的会话默认 30min 回收，可设 session_idle_timeout_ms=0 禁用；安静的后台任务不因无输出被关闭。连接/握手/写入截止时间、单次调用上限、TCP keepalive 继续有效。
+**exec 不再有 110 秒无输出保护。** 无活动调用且无活跃任务的会话默认 2h 回收，可设 session_idle_timeout_ms=0 禁用；安静的后台任务不因无输出被关闭。连接/握手/写入截止时间、单次调用上限、TCP keepalive 继续有效。
 
 收集输出但返回空文本时附 `comment`，区分无新数据、等待超时、命令已结束、历史范围为空、不完整字符、输出预算不足及错误/关闭。它解释本次观察，不保证设备没有发送内容，不证明执行或认证成功。collect_output=false 不收集输出，也不会误报“设备没有返回”。结构化 reason/state/退出信息与发送回执仍是判断依据。
 

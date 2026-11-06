@@ -51,14 +51,14 @@ host_key, known_hosts, default skip. insecure=false alone does not enable verifi
 `sess_configure(session, config)` atomically updates only supplied fields. `sess_get_config`
 returns effective values, descriptions, units and capabilities, without credentials. All send,
 exec and read tools accept a config object for that call only; active operations retain their
-snapshot except the live read_only guard, which is rechecked before writing. read_only, connect_timeout_ms, session_idle_timeout_ms and tcp_keepalive_ms cannot be overridden
+snapshot except the live read_only guard, which is rechecked before writing. read_only, connect_timeout_ms, session_idle_timeout_ms, tcp_keepalive_ms, ssh_keepalive_ms and ssh_keepalive_timeout_ms cannot be overridden
 per operation. Changing connect_timeout on an established session stores it for the next
 sess_reconnect; explicitly pass that config again for a new sess_connect.
 
-Defaults: read total 30000ms; read idle 500ms; exec total 30000ms; connect/write 10000ms; unused session 1800000ms;
-TCP keepalive 15000ms; max input 4096 bytes; max output 8192 bytes; encoding utf-8; end_pattern
+Defaults: read total 30000ms; read idle 500ms; exec total 120000ms; connect/write 10000ms; unused session 7200000ms;
+TCP keepalive 15000ms; max input 4096 bytes; max output 65536 bytes; encoding utf-8; end_pattern
 empty (disabled). Idle read/session timeout and keepalive accept 0 to disable; total read must
-be 1..110000ms; exec_total_timeout_ms has the same range. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
+be 1..110000ms; exec_total_timeout_ms is 1..300000ms. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
 strings such as "30*60*1000", without function calls or arbitrary evaluation.
 
 ## Explicit reconnect
@@ -77,6 +77,35 @@ EXPLICIT retry, never automatic replay. close/close_all cancel an in-progress re
 release the handle/parameters; a closed/expired handle needs a new sess_connect. Credentials
 are private process memory, absent from list/get_config/reconnect results. Reconnect does not
 imply device state reset; a console server may still expose the same downstream terminal.
+
+## Connection health and peer identity
+
+Default session idle retention is 2 hours without tool operations, not a fixed connection age.
+Active tasks/readers/writers prevent reclamation. SSH uses both OS TCP keepalive and protocol
+keepalive@openssh.com every 30000ms, with ssh_keepalive_timeout_ms=10000 for each reply.
+ssh_keepalive_ms=0 disables it. Negative replies prove responsiveness too. Only one probe is
+outstanding; deadline closes transport and marks unfinished tasks unknown. In-flight probes
+keep their deadline when configured. Probes never send terminal input or refresh local idle.
+They cannot prevent reboots or terminal application login timeouts; Telnet uses TCP only.
+
+On transport failure inspect disconnect_reason/error; prefer sess_reconnect when the handle
+is retained. reset_by_peer, transport_timeout, keepalive_timeout, ssh_disconnect, remote_eof
+and transport_error describe evidence, not guaranteed device root causes. EOF does not prove
+an idle timeout or reboot. Reclaimed/closed handles return session_idle_expired/explicit_close
+with next_action=sess_connect. Up to 128 credential-free reason records last 2h, possibly less
+under capacity pressure. unknown_handle may mean a released/expired handle or service restart;
+do not infer a device reset or replay earlier commands.
+
+SSH connect/reconnect includes peer.server (bounded software banner) and peer.host_key (SHA256).
+Only when changed on the same handle: peer.host_key_changed=true. Ordinary read/send/list omit
+identity to save tokens. This is observational metadata, not proof of physical device identity,
+Linux image version or reboot. Default host verification policy is unchanged. No automatic
+uname or shell probes. A failed reconnect never presents a cached identity as a new observation.
+
+Completion waits default to 120s and accept up to 300s; a single RPC still has a 115s budget.
+If the RPC budget expires first, return the task handle WITHOUT TERM and continue via
+sess_task_wait/read. Only the configured completion-wait timeout can trigger term_on_timeout;
+it is not a background runtime timer, and collect_output=false still creates no runtime timer.
 
 ## Read-only observation
 
@@ -113,8 +142,8 @@ do not guarantee the console server broadcasts output or permits concurrent conn
   operation; do not resubmit. Missing exit status is an unknown outcome with warning and no
   exit_code; transport remains usable. exec_finish means channel completion, not success.
   **sess_exec ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern**, from BOTH
-  persistent and per-call config. It waits on independent exec_total_timeout_ms (default 30000,
-  range 1..110000), measured from collection after command startup; startup still has
+  persistent and per-call config. It waits on independent exec_total_timeout_ms (default 120000,
+  range 1..300000), measured from collection after command startup; startup still has
   write_timeout_ms and the whole RPC cap remains 115s. Set config.exec_total_timeout_ms for a
   different execution wait, not a read timeout. Quiet commands and prompt-like text must not
   end the exec wait. collect_output=false returns a process-local task handle (task1, task22, ...)
@@ -270,7 +299,7 @@ closed streams/history finalize them under output_decode_error_action. Invalid b
 to visible \xNN; to_hex renders <NN>; error reports aborted and leaves the offending byte unread.
 A decode error does not itself close transport. Override policy to inspect retained data.
 
-max_output_bytes is 1..65536 UTF-8 display bytes, including escaped invalid-byte text. more=true
+max_output_bytes defaults to 65536 (64KiB), and is 1..524288 (512KiB) UTF-8 display bytes, including escaped invalid-byte text. more=true
 means unread bytes remain; use incremental read or read_history offset=end. start/end are RAW byte
 offsets, independent of encoding. dropped_bytes reports overwritten history (retention 1MiB).
 If minimum_output_bytes is returned, increase output budget to fit the next whole character.

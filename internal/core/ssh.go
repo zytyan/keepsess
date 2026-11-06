@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -34,6 +35,13 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		}
 	default:
 		host = ssh.InsecureIgnoreHostKey()
+	}
+	// Capture identity from the existing handshake without executing a command.
+	verify := host
+	var fingerprint string
+	host = func(name string, addr net.Addr, key ssh.PublicKey) error {
+		fingerprint = ssh.FingerprintSHA256(key)
+		return verify(name, addr, key)
 	}
 	auth := []ssh.AuthMethod{}
 	if o.Password != "" {
@@ -80,6 +88,10 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		return e
 	}
 	client := ssh.NewClient(cc, chans, reqs)
+	s.mu.Lock()
+	changed := s.peer != nil && s.peer.HostKey != "" && s.peer.HostKey != fingerprint
+	s.peer = &PeerIdentity{Server: compactSSHVersion(cc.ServerVersion()), HostKey: fingerprint, HostKeyChanged: changed}
+	s.mu.Unlock()
 	if s.mode == "stream" {
 		sh, e := client.NewSession()
 		if e != nil {
@@ -108,7 +120,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 			if e == nil || errors.As(e, &missing) {
 				s.disconnect("")
 			} else {
-				s.disconnect(why)
+				s.disconnectError(e, why)
 			}
 		}()
 	} else {
@@ -124,11 +136,13 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	go func() {
 		e := client.Wait()
 		if e != nil {
-			s.disconnect("SSH disconnected: " + e.Error())
+			s.disconnectError(e, "SSH disconnected")
 		} else {
 			s.disconnect("")
 		}
 	}()
+	s.keepaliveWake = make(chan struct{}, 1)
+	go s.sshKeepalive(func() error { _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); return err })
 	return nil
 }
 
@@ -138,4 +152,16 @@ type sshExecChannel struct{ *ssh.Session }
 func (sh *sshExecChannel) start(command string, out *Session) error {
 	sh.Stdout, sh.Stderr = out, out
 	return sh.Start(command)
+}
+
+func compactSSHVersion(raw []byte) string {
+	if len(raw) > 96 {
+		raw = raw[:96]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 32 || r > 126 {
+			return '?'
+		}
+		return r
+	}, string(raw))
 }

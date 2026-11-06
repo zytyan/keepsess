@@ -184,7 +184,7 @@ func TestTaskSignalsWaitReadOnlyAndNoReadTermination(t *testing.T) {
 		t.Fatal("released handle survived")
 	}
 	info, _ := m.GetConfig(id)
-	if !info.Config.TermOnTimeout || info.Config.ExecTotalTimeoutMS != 30000 {
+	if !info.Config.TermOnTimeout || info.Config.ExecTotalTimeoutMS != 120000 {
 		t.Fatal("override leaked", info)
 	}
 }
@@ -361,7 +361,7 @@ func TestTaskHistoryIsBoundedAndReportsLoss(t *testing.T) {
 	a := run(t, m, "exec", Request{Session: id, Command: "flood", CollectOutput: noCollect()})
 	eventually(t, func() bool { v := run(t, m, "task_status", Request{Handle: a.Handle}); return v.State == "finished" })
 	v := run(t, m, "read_history", Request{Handle: a.Handle})
-	if v.DroppedBytes != 1024 || !v.More || len(v.Output) != 8192 {
+	if v.DroppedBytes != 1024 || !v.More || len(v.Output) != 65536 {
 		t.Fatal(v.DroppedBytes, v.More, len(v.Output))
 	}
 	v = run(t, m, "read_available", Request{Handle: a.Handle})

@@ -392,6 +392,7 @@ func (t *Task) closeChannel(ch execChannel) {
 func (t *Task) wait(ctx context.Context, c Config) Result {
 	// Reserve control-write time inside the 115s RPC budget. Parent cancellation
 	// still cancels observation without terminating the command.
+	completionDeadline := time.Now().Add(c.Duration(c.ExecTotalTimeoutMS))
 	waitCtx := ctx
 	if c.TermOnTimeout {
 		if deadline, ok := ctx.Value(callDeadlineKey{}).(time.Time); ok {
@@ -401,11 +402,15 @@ func (t *Task) wait(ctx context.Context, c Config) Result {
 		}
 	}
 	v := t.out.read(waitCtx, "exec_wait", Request{}, c)
-	if v.Reason == "total_timeout" && c.TermOnTimeout && !errors.Is(ctx.Err(), context.Canceled) {
+	if v.Reason == "total_timeout" && waitCtx.Err() != nil {
+		v.Comment = "RPC collection budget reached; task retained. Continue with sess_task_wait or handle-based read. No TERM sent for RPC budget expiry."
+	}
+	if v.Reason == "total_timeout" && !time.Now().Before(completionDeadline) && c.TermOnTimeout && waitCtx.Err() == nil && ctx.Err() == nil {
 		v.Signal = t.sendSignal(ctx, "TERM")
 		latest := t.out.status()
 		v.State, v.Running, v.Connected, v.More = latest.State, latest.Running, latest.Connected, latest.More
 		v.ExitCode, v.ExitSignal, v.Warning, v.NextAction = latest.ExitCode, latest.ExitSignal, latest.Warning, latest.NextAction
+		v.DisconnectReason = latest.DisconnectReason
 		if latest.Error != "" {
 			v.Error = latest.Error
 		}
@@ -514,7 +519,7 @@ func (m *Manager) TaskList(session string) ([]Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if session != "" && m.sessions[session] == nil {
-		return nil, errors.New("unknown session")
+		return nil, m.sessionErrorLocked(session)
 	}
 	out := make([]Result, 0)
 	for _, s := range m.sessions {
