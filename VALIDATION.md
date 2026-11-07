@@ -1,3 +1,11 @@
+# exec 唯一会话推断
+
+- sess_exec 的 session 改为可选，仅在恰好保留一个会话时推断；断开和 stream 会话均参与计数，不按模式、在线状态或最近连接筛选。显式无效 session 不回退，显式空值/null 拒绝，唯一断开会话不自动重连。
+- 真实 SSH 与 MCP stdio 测试覆盖零/单/多会话、双流输出、实际 session 返回、显式指定与失效、断开会话、stream 模式拒绝、拒绝时不启动任务；任务 handle 必填和 task_list() 全部任务语义保持。
+- Go 1.22.1 全量测试、race、go vet 通过；CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 构建通过。README、CLI 帮助、MCP schema/初始化说明及两份 skill 同步。
+
+---
+
 # 显式交互 exec
 
 - sess_exec 新增 interactive/pty，默认均 false；interactive 保留 stdin，pty 必须搭配 interactive，启动前配置，不能事后启用。不改变 collect_output、超时和普通 stdin EOF 默认语义。

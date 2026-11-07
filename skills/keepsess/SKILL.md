@@ -31,7 +31,8 @@ All 22 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
 
-`sess_connect` requires protocol, host and port. SSH takes username and password/keyfile,
+`sess_connect` declares protocol, host and port in inputSchema.required. For SSH, conditional
+required also requires username and at least one of password/keyfile (both are allowed),
 and optionally known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
 consoles AND interactive shells, including interactive Bash. Telnet only supports stream and is plaintext.
 Use stream send/read for persistent terminal shells, console logins and all Telnet. Explicit
@@ -135,7 +136,8 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 | Any Telnet connection, including username/password input | mode=stream; send/read tools only, NEVER sess_exec |
 
 
-- `sess_exec(session, command, config?)`: **SSH mode=exec only**, with stdin EOF by default.
+- For sess_exec, session may be omitted: infer it only with exactly one retained session, counting disconnected and stream sessions too. No sessions: connect first. Multiple sessions: specify session explicitly; never select by connectivity, mode or recency. A disconnected sole session requires explicit reconnect. Explicit invalid sessions never fall back. Results retain the actual session. Task tools still require handle; task_list() still lists all tasks.
+- `sess_exec(command, session?, config?)`: **SSH mode=exec only**, with stdin EOF by default.
   SSH mode=stream and all Telnet sessions immediately return a tool error without sending
   input; there is no fallback to a shell. Use sess_sendline_text/sess_sendline_escaped for
   interactive streams, never probe the same command with exec first. Uses a fresh SSH channel on the

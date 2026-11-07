@@ -35,6 +35,7 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
 22 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。
 sess_exec 用于 SSH mode=exec，默认 stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
+sess_exec 仅在恰好保留一个会话时可省略 session；多会话须明确指定，断开的会话也计数。
 mode=stream 调用 exec 直接报错，使用 sendline_text/escaped。
 持久终端 shell、console 登录和全部 Telnet 使用 mode=stream；交互 exec 按 task handle send/read。
 sess_task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。

@@ -152,6 +152,32 @@ func (m *Manager) Get(id string) (*Session, error) {
 	}
 	return s, nil
 }
+
+// uniqueExecSession selects among all retained sessions, including disconnected
+// and stream sessions. Never infer a target from protocol, mode or connectivity.
+func (m *Manager) uniqueExecSession() (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var selected *Session
+	for id, s := range m.sessions {
+		s.mu.Lock()
+		disposed, reason := s.disposed, s.retiredReason
+		s.mu.Unlock()
+		if disposed {
+			m.rememberLocked(id, reason)
+			delete(m.sessions, id)
+			continue
+		}
+		if selected != nil {
+			return nil, errors.New("multiple retained sessions; specify session explicitly; use sess_list; nothing sent")
+		}
+		selected = s
+	}
+	if selected == nil {
+		return nil, errors.New("no retained session; use sess_connect first; nothing sent")
+	}
+	return selected, nil
+}
 func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, CallLimit)
 	defer cancel()
@@ -501,7 +527,13 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	if r.Signal != "" {
 		return Result{}, errors.New("signal is only for sess_task_signal")
 	}
-	s, err := m.Get(r.Session)
+	var s *Session
+	var err error
+	if kind == "exec" && r.Session == "" {
+		s, err = m.uniqueExecSession()
+	} else {
+		s, err = m.Get(r.Session)
+	}
 	if err != nil {
 		return Result{}, err
 	}

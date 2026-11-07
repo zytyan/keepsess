@@ -84,12 +84,12 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 | 工具 | 参数与用途 |
 |---|---|
-| sess_connect | protocol、host、port；可选 username/password/keyfile、SSH 主机校验、mode、config |
+| sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、mode、config |
 | sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
 | sess_configure | session、config；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
-| sess_exec | session、command、interactive?、pty?、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
+| sess_exec | session?、command、interactive?、pty?、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
 | sess_send_text | session 或 handle（二选一）、data、collect_output?、config?；发送文字并默认收集输出，不解析转义 |
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
 | sess_sendline_text | 同 text，追加一次配置的 line_end |
@@ -108,6 +108,8 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
+
+`sess_exec` 可省略 `session`，仅在恰好保留一个会话时推断；结果仍返回实际 `session`。没有会话时须先 connect，多个会话时必须明确指定，不按在线状态、模式或最近连接筛选。唯一会话已断开时须显式 reconnect，不自动重连；显式指定的会话失效时不回退。任务工具仍须提供 `handle`，`sess_task_list()` 仍列出全部任务。
 
 SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配 SSH mode=exec，默认非交互；可用 interactive=true 显式保留任务 stdin。SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**持久终端 shell、console 登录流程和任何 Telnet 会话使用 mode=stream 的 send/read。SSH mode=exec 可显式启动 GDB 等交互任务，再按 task handle 收发。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
 
