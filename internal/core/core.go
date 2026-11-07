@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	"io"
 	"net"
 	"sort"
@@ -129,6 +130,9 @@ type Result struct {
 	QueuedBytes        *int          `json:"queued_bytes,omitempty"`
 }
 type Session struct {
+	sshClient                               *ssh.Client
+	tunnels                                 map[string]*Tunnel
+	nextTunnel                              uint64
 	name                                    string
 	startedAt                               time.Time
 	finishedAt                              time.Time

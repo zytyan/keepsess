@@ -131,6 +131,7 @@ func (s *Session) openSSHRoute(ctx context.Context, o Options, targetSSH bool, r
 func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	return s.openSSHRoute(ctx, o, true, func(client *ssh.Client, fingerprint string) error {
 		s.mu.Lock()
+		s.sshClient = client
 		changed := s.peer != nil && s.peer.HostKey != "" && s.peer.HostKey != fingerprint
 		s.peer = &PeerIdentity{Server: compactSSHVersion(client.ServerVersion()), HostKey: fingerprint, HostKeyChanged: changed}
 		s.mu.Unlock()

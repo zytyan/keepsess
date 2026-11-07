@@ -21,11 +21,11 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 当前提供下列 24 个工具（含 sess_rename、sess_task_rename）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 当前提供下列 30 个工具（含 sess_help、sess_rename、sess_task_rename）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；24 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；30 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
@@ -84,6 +84,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 | 工具 | 参数与用途 |
 |---|---|
+| sess_help | 无参数列目录；topic 查询工具/主题，topic+parameter 查询单个参数，query 搜索短摘要；limit 默认 3、最大 5 |
 | sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、ssh_jumps、mode 和顶层配置 |
 | sess_rename | session、name；更新会话别名，稳定 sN ID 保持有效，不重建连接 |
 | sess_task_rename | handle、name；更新任务别名，稳定 taskN ID 保持有效，不消费输出 |
@@ -108,6 +109,21 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
+
+工具发现采用精简说明，保留日常调用所需的类型、默认值、关键约束及风险提示；只展示各操作适用的配置参数。完整字段说明来自同一套内置定义，可用 `sess_help` 渐进查询，无需预先加载完整 skill：
+
+```text
+sess_help()                                            # 简短主题目录
+sess_help(query="RPC 超时")                            # 默认最多 3 条搜索摘要
+sess_help(topic="timeouts")                             # 一个操作主题
+sess_help(topic="sess_exec")                            # 一个工具的详细 schema
+sess_help(topic="sess_exec", parameter="env")           # 仅一个参数
+sess_help(topic="configuration", parameter="line_end") # 配置默认值/协议差异
+```
+
+内置主题包含 connections、tasks、timeouts、ssh_jumps、naming、exec_environment、interactive、read_only、output、configuration，也接受全部工具名作为 topic。query 与 topic/parameter 互斥，parameter 必须配合 topic。搜索使用固定代码的关键词/标题/正文匹配及中英文关键词映射，不调用模型、向量库、网络或本地文件，也不搜索会话输出/凭据；query 最长 512 字节，最多处理 16 个搜索词，limit=1..5，每条摘要最多约 220 字符。无匹配明确返回 matched=false；按结果的 topic/parameter 获取细节，避免重复加载全文。
+
+本轮只压缩发现与初始化说明，不更改协议执行、默认值或已有调用校验逻辑；原来已接受但对该操作无效的配置覆盖保持运行时兼容，发现列表和 help 不再推荐它们。数字配置仍支持整数及算术字符串。完整 skill 是可选流程参考，不要求常驻或每次查 help。
 
 所有工具的配置参数都直接写在顶层，例如 `sess_configure({"session":"s1","read_only":true})`，或 `sess_read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
 
@@ -393,3 +409,27 @@ GOTOOLCHAIN=go1.22.1 sh scripts/build.sh
 测试覆盖真实 SSH 退出与双流、缺失退出状态、Telnet IAC 分包、交换机模式/分页/慢输出、输入转义与线上字节、Unicode/GBK/Shift-JIS 分包与错误策略、超时/取消、读写并发、TCP 满缓冲/队列阈值、stdio 慢消费者及 race。长测试验证真实静默端点的读取在两分钟内结束且 transport 保留。Windows/ARM64 在本地只验证交叉编译；docs/ci.yml 是包含 Windows 短测试的 CI 模板，未自动启用。
 
 [验证记录](VALIDATION.md) · [现场反馈与迁移说明](docs/field-report.md) · [AI skill](skills/keepsess/SKILL.md)
+
+### 文件传输与 SSH 隧道
+
+新增五个工具，总计 30 个。均复用已有 SSH 连接及跳板链路，适用于 SSH exec/stream，不支持 Telnet。
+
+- `sess_get_file(session, src, dst?, backend?, overwrite?)`：远端普通文件下载到 keepsess 所在机器。省略 dst 时创建系统临时目录，返回 JSON 中的绝对 dst。文件由调用者使用后删除。
+- `sess_put_file(session, src, dst, backend?, overwrite?)`：上传本地普通文件。路径均是文件，不自动创建父目录，不支持目录递归或续传。
+- backend 默认 auto：探测 SFTP，随后传统 SCP，最后 SSH exec 原始字节流。无覆盖上传在 auto 下优先使用 exec 而非 SCP。远端分别需要 SFTP subsystem、scp 命令或 POSIX shell/cat/wc；发布还需 mv 或 ln/rm。无 PTY、无 Bash login 包装，不污染终端历史。只在传输开始前选择后端，失败不自动重传。
+- overwrite 默认 false。上传先写同目录临时文件，再发布；失败返回 temporary_path 供检查/清理，可能保留部分临时文件。SFTP 无覆盖发布需要 hardlink 扩展，覆盖需要 posix-rename 扩展，不支持时明确失败。下载先写本地临时文件，成功才发布；无覆盖发布需要本地硬链接支持。
+- 单次传输最多 110 秒；超时/取消可能关闭共享 SSH transport，影响其他任务，须检查状态并显式 reconnect。bytes_transferred 是本地复制确认数，不是远端持久化证明；缺失 SSH exit-status 返回失败/未知，不假定成功。
+- read_only 阻止上传及新建隧道，允许下载。既有隧道继续运行；read_only 不检查隧道中的应用协议。
+
+`sess_tunnel_open` 参数为 session、type、bind_host（默认 127.0.0.1）、bind_port（默认 0 自动分配），固定转发还需 target_host/target_port。返回 handle 和 listen_address：
+
+| type | 监听位置 | 目标连接位置 |
+|---|---|---|
+| local | keepsess 本地 | 最终 SSH 服务器 |
+| remote | 最终 SSH 服务器 | keepsess 本地 |
+| dynamic | keepsess 本地 SOCKS5 | 最终 SSH 服务器 |
+| remote_dynamic | 最终 SSH 服务器 SOCKS5 | keepsess 本地 |
+
+例如 `sess_tunnel_open({"session":"s1","type":"local","target_host":"127.0.0.1","target_port":5556})` 后，本地 Python 可连接返回的 listen_address 访问远端 QMP。动态模式仅支持 SOCKS5 无认证 CONNECT（TCP），不支持 UDP、TUN/TAP 或 Unix socket；远程绑定范围受 SSH 服务器配置影响。
+
+`sess_tunnel_list(session)` 查看监听与连接状态；`sess_tunnel_close(session, handle)` 关闭监听、连接并释放记录。每会话最多 16 个记录，全局最多 64 个监听，每监听最多 64 个 socket。建连/握手/写阻塞有界，空闲读取上限 2h，活跃连接阻止会话空闲回收。断线/reconnect 关闭旧隧道，不自动恢复，关闭的记录可显式释放。SSH 转发建连阻塞超时时可能关闭共享 transport。

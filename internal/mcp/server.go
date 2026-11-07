@@ -60,6 +60,9 @@ func toolResult(v any, e error) any {
 			v = map[string]any{"error": e.Error(), "hop_index": route.HopIndex, "host": route.Host, "port": route.Port, "from_host": route.FromHost, "stage": route.Stage, "target": route.Target}
 		}
 	}
+	if r, ok := v.(map[string]any); ok && r["error"] != nil {
+		bad = true
+	}
 	if r, ok := v.(core.Result); ok && r.Error != "" {
 		bad = true
 	}
@@ -89,7 +92,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 	props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
 	for k := range keys {
 		if _, ok := props[k]; !ok && !(k == "config" && props["encoding"] != nil) {
-			return toolResult(nil, fmt.Errorf("unknown argument %q for %s", k, args.Name))
+			return toolResult(nil, fmt.Errorf("unknown argument %q for %s; use sess_help(topic=%q) for parameters", k, args.Name, args.Name))
 		}
 	}
 	for _, k := range def["inputSchema"].(map[string]any)["required"].([]string) {
@@ -163,6 +166,28 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		args.Arguments, _ = json.Marshal(keys)
 	}
 	switch args.Name {
+	case "sess_get_file", "sess_put_file":
+		var r core.FileRequest
+		if e := strict(args.Arguments, &r); e != nil {
+			return toolResult(nil, e)
+		}
+		v, e := s.Manager.Transfer(ctx, args.Name == "sess_put_file", r)
+		return toolResult(v, e)
+	case "sess_tunnel_open", "sess_tunnel_list", "sess_tunnel_close":
+		var r core.TunnelRequest
+		if e := strict(args.Arguments, &r); e != nil {
+			return toolResult(nil, e)
+		}
+		v, e := s.Manager.Tunnel(ctx, strings.TrimPrefix(args.Name, "sess_tunnel_"), r)
+		return toolResult(v, e)
+
+	case "sess_help":
+		var r helpRequest
+		if e := strict(args.Arguments, &r); e != nil {
+			return toolResult(nil, e)
+		}
+		v, e := builtinHelp(r)
+		return toolResult(v, e)
 	case "sess_rename", "sess_task_rename":
 		var r struct {
 			Session string `json:"session"`
@@ -276,6 +301,29 @@ func buildDefinitions() map[string]map[string]any {
 	session := func() map[string]any {
 		return map[string]any{"session": str("Stable session ID (s1) or current name alias. Always target an explicit session unless sess_exec can infer the sole retained session.")}
 	}
+	for _, name := range []string{"sess_get_file", "sess_put_file"} {
+		p := session()
+		p["src"] = str("Source file path; get: remote, put: local to keepsess process")
+		p["dst"] = str("Destination file path; get may omit for an automatically created local temporary path; put requires remote path")
+		p["backend"] = map[string]any{"type": "string", "enum": []string{"auto", "sftp", "scp", "exec"}, "default": "auto", "description": "Auto probes SFTP then SCP then raw SSH exec. Never retries a started transfer. No PTY or Bash login wrapper."}
+		p["overwrite"] = map[string]any{"type": "boolean", "default": false, "description": "Permit destination overwrite. Uploads stage beside the destination; failures may leave a temporary_path. No automatic replay."}
+		required := []string{"session", "src"}
+		if name == "sess_put_file" {
+			required = append(required, "dst")
+		}
+		add(name, "Transfer one regular file over existing SSH (exec or stream), including jumps. Local paths refer to keepsess host. 110s deadline; cancellation may close shared transport. Upload is read_only guarded; publishes by rename/link, requiring remote filesystem support. SFTP no-clobber requires hardlink extension; overwrite requires posix-rename. No recursive copy or automatic resume.", p, required...)
+	}
+	p := session()
+	p["type"] = map[string]any{"type": "string", "enum": []string{"local", "remote", "dynamic", "remote_dynamic"}}
+	p["bind_host"] = str("Listener host, default 127.0.0.1. Remote binding subject to SSH server GatewayPorts.")
+	p["bind_port"] = integerSchema("Listener port, default 0 allocates a port", 0, 65535)
+	p["target_host"] = str("Required for local/remote. Local targets connect from SSH server; remote targets from keepsess.")
+	p["target_port"] = integerSchema("Required for local/remote", 1, 65535)
+	add("sess_tunnel_open", "Open TCP forwarding or SOCKS5 CONNECT tunnel. Dynamic listens locally; remote_dynamic listens remotely. read_only blocks creation; existing tunnels remain. Disconnect/reconnect closes tunnels; never restored automatically. 16 listeners/session, 64 sockets/listener.", p, "session", "type")
+	add("sess_tunnel_list", "List retained tunnel handles and bound addresses; closed transports require explicit close/reopen.", session(), "session")
+	p = session()
+	p["handle"] = str("Tunnel handle returned by open")
+	add("sess_tunnel_close", "Close listener and all accepted connections, releasing the tunnel handle.", p, "session", "handle")
 	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "host": str("Hostname or IP; IPv6 without brackets"), "port": integerSchema("TCP port", 1, 65535), "username": str("SSH username"), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("Local SSH private key path"), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Optional local known_hosts path enables verification; never automatically discovered or written. Used unless host_key or insecure=true takes precedence."), "host_key": str("Optional pinned SHA256 SSH host-key fingerprint enables verification; takes precedence over known_hosts unless insecure=true."), "insecure": map[string]any{"type": "boolean", "description": "Compatibility flag: true skips verification even when host_key/known_hosts is supplied. By default verification is skipped unless those fields are supplied; false alone does not enable it."}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec for independent commands; explicit exec interactive=true supports standalone interactive programs. Use stream for persistent terminal shells, console logins and network devices. Telnet always stream; never use sess_exec there."}, "config": configSchema(false), "name": str("Optional unique session name alias; stable sN ID remains valid. 1..64 letters/digits/._-, starts with alphanumeric; sN/taskN reserved.")}
 	jump := map[string]any{}
 	for _, name := range []string{"host", "port", "username", "password", "keyfile", "key_passphrase", "known_hosts", "host_key", "insecure"} {
@@ -305,7 +353,7 @@ func buildDefinitions() map[string]map[string]any {
 	add("sess_rename", "Rename a session alias without changing its stable ID, connection or running tasks. Names must be unique among retained/pending sessions. Old alias stops resolving; stable ID remains valid.", map[string]any{"session": str("Session ID or current name"), "name": str("New session name")}, "session", "name")
 	add("sess_task_rename", "Rename a retained task alias; stable taskN ID remains valid. Task names are process-wide unique among retained records; no output consumed.", map[string]any{"handle": str("Task ID or current name"), "name": str("New task name")}, "handle", "name")
 	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
-	p := session()
+	p = session()
 	p["config"] = configSchema(false)
 	add("sess_configure", "Atomically patch top-level session settings; omitted fields unchanged. No nested config needed. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
 	add("sess_get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
@@ -389,6 +437,7 @@ func buildDefinitions() map[string]map[string]any {
 			defs["sess_"+kind]["inputSchema"].(map[string]any)["oneOf"] = []any{map[string]any{"required": []string{"session"}}, map[string]any{"required": []string{"handle"}}}
 		}
 	}
+	defs["sess_help"] = helpToolSchema()
 	// Present one flat parameter namespace to MCP clients for every tool.
 	for _, def := range defs {
 		input := def["inputSchema"].(map[string]any)
@@ -410,10 +459,9 @@ func buildDefinitions() map[string]map[string]any {
 	return defs
 }
 func Tools() []any {
-	order := []string{"sess_connect", "sess_reconnect", "sess_rename", "sess_task_rename", "sess_configure", "sess_get_config", "sess_list", "sess_exec", "sess_task_list", "sess_task_status", "sess_task_wait", "sess_task_signal", "sess_task_release", "sess_task_close_stdin", "sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_sendline_escaped", "sess_read_available", "sess_read_until", "sess_read_tail", "sess_read_history", "sess_close", "sess_close_all"}
-	out := make([]any, 0, len(order))
-	for _, name := range order {
-		out = append(out, definitions[name])
+	out := make([]any, 0, len(toolOrder))
+	for _, name := range toolOrder {
+		out = append(out, publicDefinitions[name])
 	}
 	return out
 }
@@ -616,7 +664,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID()}, "instructions": "Stable sN/taskN IDs also accept optional mutable name aliases; sess_rename/sess_task_rename change aliases. Unknown handles may indicate an instance change; inspect lists without replay. exec defaults to a noninteractive Bash login shell; login=false sends the original command when cwd/env are omitted. Connect accepts ssh_jumps for ordered SSH hops to SSH or Telnet targets; old jumps is rejected. Telnet targets require stream, explicit login send/read, and never report SSH jump identity as peer. Use sess_exec on SSH mode=exec; session may be omitted only with exactly one retained session. stdin defaults EOF. Explicit interactive=true retains stdin; optional pty=true requires interactive. Send/read target its task handle; task_close_stdin sends EOF. Persistent stream shells, console login and Telnet still use stream send/read. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 65536 bytes (maximum 524288). sess_exec/task_wait accept top-level exec_total_timeout_ms and term_on_timeout, overriding legacy config values. They use independent exec_total_timeout_ms (120000ms, max 300000ms), ignoring read settings. term_on_timeout defaults true: completion timeout attempts TERM, never guarantees exit. Sync calls release their slot on return; only sync calls exclude each other. Async exec returns taskN and can run concurrently with any exec. Use task_list/status/wait/signal/release and handle-based read tools for exec. Normal sync completion omits handle when all output was returned. There is no exec silence timeout. Read timeouts never send TERM. RPC budget expiry never sends TERM; retain the handle and continue waiting. Session idle retention defaults 2h; SSH protocol probes default 30s with 10s response deadline. Inspect disconnect_reason/error and prefer reconnect on retained handles. Connect/reconnect report compact peer identity once, including key changes. Empty collected output includes comment, never proof of execution/authentication. All tool configuration parameters are top-level, never nested in config. Connect/configure set session defaults; per-operation parameters only override that call. read_only and connection-only settings are exposed only on connect/configure. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec/signals; change explicitly with sess_configure, never per-call config. sess_reconnect explicitly reuses connection parameters/current config and handle, discards old output, never replays application input; busy during active operations. close discards buffers and reconnect parameters."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID()}, "instructions": residentInstructions}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":

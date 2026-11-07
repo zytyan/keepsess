@@ -17,7 +17,7 @@ func TestAllConfigurationArgumentsAreFlat(t *testing.T) {
 			t.Fatalf("nested config exposed by %s", def["name"])
 		}
 		if props["encoding"] != nil {
-			if props["max_output_bytes"] == nil || props["read_idle_timeout_ms"] == nil {
+			if props["max_output_bytes"] == nil {
 				t.Fatal(def)
 			}
 			if def["name"] != "sess_connect" && def["name"] != "sess_configure" && props["read_only"] != nil {

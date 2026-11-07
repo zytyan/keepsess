@@ -1,3 +1,12 @@
+# 精简发现与渐进帮助
+
+- 新增 sess_help，共 25 工具。发现列表独立投影完整运行时定义，保留关键类型/默认值/互斥/安全提示，只隐藏不适用配置并压缩重复说明；现有运行时参数接受/校验、协议行为和默认值不变。数字配置的 integer|string 联合保留算术字符串能力，初始化说明仅保留常用全局约束。
+- sess_help 无参数返回主题/工具目录，topic 或 topic+parameter 返回一份文档/字段；参数详情从相同定义派生，配置默认值来自 core.DefaultConfig。静态全文索引按名称/标题/关键词/正文确定性排序，支持常见中英文映射；query <=512字节、最多16词，默认3条、limit1..5，摘要约220字符。无匹配明确返回；不访问会话、凭据、文件或网络，不改变状态。
+- 官方 DeepSeek-V4.1-Flash tokenizer 与 encoding.py（revision 314113f8a7dadb388215396ba5fbee2c610a04d6）本地计数：工具+初始化说明由 20,486 降到 9,337 tokens（-54.42%，新增 help 已包含）。此范围不含可选完整 skill、其他系统提示/历史，不等同线上 API usage。独立 JSON 帮助正文样例：目录392、RPC超时搜索234、env单字段61、timeouts主题308 tokens；客户端包装另算。未调用收费推理 API，也未做实际模型成功率 A/B。
+- 覆盖所有发现字段的帮助/默认值一致性、静态定义不变性、查询排序/中英文/长度/结果上限/无匹配/错误组合、无 Manager 的只读帮助，以及“搜索→单字段→SSH connect→异步 exec→task_wait 双流退出”的 stdio 流程。全量测试、race、go vet 通过；Go1.22.1、CGO_ENABLED=0 三目标构建通过。README、CLI、两份 skill 与开发约束已同步。
+
+---
+
 # 命名、实例诊断、exec 环境与输出投影
 
 - 新增 sess_rename/sess_task_rename，共 24 工具；connect/exec 的 name 是可变别名，稳定 sN/taskN ID 仍有效。会话名覆盖待连接预留，任务名在 exec 请求前原子预留，重复不发送；引用、配置、列表、关闭和重连支持别名。任务名进程内全局唯一，别名随保留记录释放，长期操作推荐稳定 ID。
@@ -201,3 +210,10 @@ Go 1.22.1 全量 race 与 SESSMCP_LONG_TEST=1 长测试通过：core 包 112.674
 - 验证 busy 未发送输入可以沿用相同 ID 重试；常规静默交互不再重复 hint 或强制 next_action=sess_read。
 - Go 1.22.1 全量 race（含 SESSMCP_LONG_TEST=1）通过：真实无输出端点仍在 120s 内经 stdio 返回错误，ping 不被阻塞。最终空闲回收并发保护更新后全量短 race 通过；go vet 与 skill 校验通过。
 - 三目标 CGO_ENABLED=0 构建通过。CLI/MCP 使用同一 0.2.0+构建标识；Windows/ARM64 仍仅验证交叉编译，未运行实测。
+
+文件传输和 SSH 转发新增验证：
+- 真实 SSH 下 exec / 传统 SCP / auto 二进制往返，含 NUL、非法 UTF-8、CR/LF 与引号路径。
+- SFTP 上传、自动下载到临时目录、无覆盖发布；取消传输有界返回。
+- local / remote / dynamic / remote_dynamic 实际监听及字节往返、SOCKS5 协商、只读拒绝新建、重连关闭旧监听。
+- Go 1.22.1 全量 race 回归、go vet；CGO_ENABLED=0 编译 linux/amd64、linux/arm64、windows/amd64。
+- 测试使用本机 SSH 协议模拟服务；未实测厂商嵌入式设备。

@@ -32,13 +32,15 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
 
-24 个工具：connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
+30 个工具：get_file/put_file、tunnel_open/list/close、help、connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。
 sess_exec 用于 SSH mode=exec，默认 login=true 使用 Bash 登录 shell、stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
 sess_exec 仅在恰好保留一个会话时可省略 session；多会话须明确指定，断开的会话也计数。
 mode=stream 调用 exec 直接报错，使用 sendline_text/escaped。
 持久终端 shell、console 登录和全部 Telnet 使用 mode=stream；交互 exec 按 task handle send/read。
 sess_task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。
+sess_help() 列内置目录；topic/parameter 定点查看，query 搜索短摘要（默认 3 条），不访问端点/文件/网络。
+工具发现保留类型、默认值和关键约束，详细说明按需 help；无需每次调用前查询帮助。
 读取默认总时限 30000ms、静默时限 500ms；所有工具参数均在顶层，无需 config 嵌套。
 connect/configure 设置会话默认值；操作顶层配置仅覆盖本次调用。
 connect/exec 可传 name；rename/task_rename 修改别名，稳定 sN/taskN ID 保持有效；重复名字不发送。

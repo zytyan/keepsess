@@ -27,7 +27,13 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-All 24 tools are discovered through MCP tools/list, not individually registered.
+All 30 tools are discovered through MCP tools/list, not individually registered.
+
+## Progressive built-in help
+
+Tools/list uses concise descriptions and advertises only applicable settings, retaining types, defaults, target exclusivity and essential safety rules. Routine calls do not require loading this full skill or invoking help. For uncertain details use sess_help(): no arguments returns a compact directory; topic="sess_exec" returns one tool's full schema; topic="sess_exec", parameter="env" returns one parameter. Semantic topics: connections, tasks, timeouts, ssh_jumps, naming, exec_environment, interactive, read_only, output, configuration. Configuration fields can be queried with topic="configuration", parameter="line_end".
+
+Use query="RPC 超时" or query="跳板 telnet" for built-in keyword/full-text search (English/Chinese aliases). Default 3 results, limit 1..5, snippets about220 characters; expand the returned topic/parameter rather than requesting all help. Query max512 bytes/16 terms; query is exclusive with topic/parameter, and parameter requires topic. No match returns matched=false. Help reads static built-in documentation only, never endpoint output, credentials, files or network; it changes no session state. Full help and defaults come from the runtime definitions. Older ignored per-operation config overrides remain accepted, but are omitted from discovery/help; meaningful options stay available at the top level. Numeric settings still accept bounded arithmetic strings.
 
 ## Connect and configure
 
@@ -193,7 +199,7 @@ Exec startup defaults login=true: bash --login -c with noninteractive stdin EOF,
 
 Every task_wait starts a fresh completion-wait budget. Collection returns wait_elapsed_ms; task records expose started_at/task_elapsed_ms (frozen on completion). total_timeout includes timeout_source rpc_budget/exec_wait/caller_deadline; read timeouts can report read_total. Only exec_wait timeout may attempt TERM. After rpc_budget, continue status/read/wait on the same handle, never resubmit; instance change errors call for list inspection.
 
-Task operations (24 tools total):
+Task operations (30 tools total):
 - sess_task_list(session?): list retained tasks; no output consumption.
 - sess_task_status(handle): immediate state, exit information, more, latest signal; no consumption.
 - sess_task_wait(handle, exec_total_timeout_ms?, term_on_timeout?, ...settings?): completion wait plus incremental collection; uses exec_total_timeout_ms
@@ -378,3 +384,9 @@ output matters. Unused sessions reclaim automatically after session_idle_timeout
 closure may happen earlier. Running tasks prevent idle session reclamation; quiet exec tasks have no silence watchdog. If
 connected=false, explicitly use sess_reconnect on a retained handle, or sess_connect if the handle
 was closed/expired. Inspect remote state before retrying side effects.
+
+## File transfer and forwarding
+
+Use sess_get_file(session,src,dst?) / sess_put_file(session,src,dst) for binary files, backend auto/sftp/scp/exec. Local means the keepsess host; omitted download dst returns an absolute temporary path. Uploads stage beside the destination; failed/unknown operations may leave temporary_path. Never replay automatically. overwrite defaults false; no recursion/resume; 110s budget.
+
+Use sess_tunnel_open(session,type,bind_host?,bind_port?,target_host?,target_port?) for local/remote/dynamic/remote_dynamic TCP forwarding. Bind defaults loopback and port 0. Local/dynamic targets connect from final SSH server; remote/remote_dynamic from keepsess host. Dynamic is SOCKS5 CONNECT only. Returned listen_address is usable by Python on the listening host. sess_tunnel_list(session) inspects; sess_tunnel_close(session,handle) releases listener/connections. Disconnect/reconnect closes tunnels without restoring them. read_only blocks uploads/new tunnels, not existing tunnel traffic. See sess_help for full parameters.
