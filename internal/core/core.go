@@ -24,6 +24,7 @@ const (
 )
 
 type Options struct {
+	Name          string      `json:"name,omitempty"`
 	SSHJumps      []SSHJump   `json:"ssh_jumps,omitempty"`
 	Protocol      string      `json:"protocol"`
 	Host          string      `json:"host"`
@@ -62,17 +63,21 @@ func (j SSHJump) options() Options {
 func (o Options) address() string { return net.JoinHostPort(o.Host, strconv.Itoa(o.Port)) }
 
 type Request struct {
-	Interactive   bool        `json:"interactive,omitempty"`
-	PTY           bool        `json:"pty,omitempty"`
-	Session       string      `json:"session"`
-	Handle        string      `json:"handle,omitempty"`
-	Signal        string      `json:"signal,omitempty"`
-	Data          string      `json:"data,omitempty"`
-	Command       string      `json:"command,omitempty"`
-	CollectOutput *bool       `json:"collect_output,omitempty"`
-	Config        ConfigPatch `json:"config,omitempty"`
-	Lines         int         `json:"lines,omitempty"`
-	Offset        *int64      `json:"offset,omitempty"`
+	Name          string            `json:"name,omitempty"`
+	Login         *bool             `json:"login,omitempty"`
+	Cwd           string            `json:"cwd,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Interactive   bool              `json:"interactive,omitempty"`
+	PTY           bool              `json:"pty,omitempty"`
+	Session       string            `json:"session"`
+	Handle        string            `json:"handle,omitempty"`
+	Signal        string            `json:"signal,omitempty"`
+	Data          string            `json:"data,omitempty"`
+	Command       string            `json:"command,omitempty"`
+	CollectOutput *bool             `json:"collect_output,omitempty"`
+	Config        ConfigPatch       `json:"config,omitempty"`
+	Lines         int               `json:"lines,omitempty"`
+	Offset        *int64            `json:"offset,omitempty"`
 }
 
 // PeerIdentity is handshake metadata, emitted only on connect/reconnect.
@@ -84,6 +89,16 @@ type PeerIdentity struct {
 
 // Result separates local write receipts from observed stream output.
 type Result struct {
+	Name               string        `json:"name,omitempty"`
+	InstanceID         string        `json:"instance_id,omitempty"`
+	StartedAt          *time.Time    `json:"started_at,omitempty"`
+	TaskElapsedMS      int64         `json:"task_elapsed_ms,omitempty"`
+	WaitElapsedMS      *int64        `json:"wait_elapsed_ms,omitempty"`
+	TimeoutSource      string        `json:"timeout_source,omitempty"`
+	FilteredBytes      int64         `json:"filtered_bytes,omitempty"`
+	FilteredLines      int64         `json:"filtered_lines,omitempty"`
+	StrippedBytes      int64         `json:"stripped_bytes,omitempty"`
+	LineFragments      bool          `json:"line_fragments,omitempty"`
 	Interactive        bool          `json:"interactive,omitempty"`
 	PTY                bool          `json:"pty,omitempty"`
 	StdinOpen          *bool         `json:"stdin_open,omitempty"`
@@ -114,6 +129,9 @@ type Result struct {
 	QueuedBytes        *int          `json:"queued_bytes,omitempty"`
 }
 type Session struct {
+	name                                    string
+	startedAt                               time.Time
+	finishedAt                              time.Time
 	id, protocol, mode                      string
 	mu                                      sync.Mutex
 	readMu, configMu, execMu                sync.Mutex
@@ -143,22 +161,25 @@ type Session struct {
 	interactive, pty, stdinOpen             bool
 }
 type Manager struct {
-	mu         sync.Mutex
-	sessions   map[string]*Session
-	nextID     uint64
-	nextTask   uint64
-	opening    int
-	generation uint64
-	pending    map[string]context.CancelFunc
-	retired    map[string]retiredSession
+	instanceID   string
+	sessionNames map[string]string
+	mu           sync.Mutex
+	sessions     map[string]*Session
+	nextID       uint64
+	nextTask     uint64
+	opening      int
+	generation   uint64
+	pending      map[string]context.CancelFunc
+	retired      map[string]retiredSession
 }
 
 func NewManager() *Manager {
-	return &Manager{sessions: make(map[string]*Session), pending: make(map[string]context.CancelFunc)}
+	return &Manager{instanceID: newInstanceID(), sessionNames: make(map[string]string), sessions: make(map[string]*Session), pending: make(map[string]context.CancelFunc)}
 }
 func (m *Manager) Get(id string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	id = m.resolveSessionLocked(id)
 	s := m.sessions[id]
 	if s == nil {
 		return nil, m.sessionErrorLocked(id)
@@ -231,6 +252,9 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	if (o.Mode != "stream" && o.Mode != "exec") || (o.Protocol == "telnet" && o.Mode != "stream") {
 		return Result{}, errors.New("mode must be stream or exec; Telnet requires stream")
 	}
+	if err := validateName(o.Name); err != nil {
+		return Result{}, err
+	}
 	cfg, err := applyConfig(DefaultConfig(o.Protocol), o.Config, false)
 	if err != nil {
 		return Result{}, err
@@ -240,16 +264,32 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 		m.mu.Unlock()
 		return Result{}, errors.New("session limit reached; close unused sessions")
 	}
+	m.resolveSessionLocked("")
+	if o.Name != "" && m.sessionNames[o.Name] != "" {
+		m.mu.Unlock()
+		return Result{}, errors.New("duplicate session name; nothing sent")
+	}
 	m.opening++
 	m.nextID++
 	id := fmt.Sprintf("s%d", m.nextID)
+	if o.Name != "" {
+		m.sessionNames[o.Name] = id
+	}
 	generation := m.generation
 	m.pending[id] = cancel
 	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.opening--; delete(m.pending, id); m.mu.Unlock() }()
+	defer func() {
+		m.mu.Lock()
+		m.opening--
+		delete(m.pending, id)
+		if m.sessions[id] == nil && m.sessionNames[o.Name] == id {
+			delete(m.sessionNames, o.Name)
+		}
+		m.mu.Unlock()
+	}()
 	ctx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
 	defer stop()
-	s := &Session{id: id, protocol: o.Protocol, mode: o.Mode, config: cfg, last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	s := &Session{id: id, name: o.Name, protocol: o.Protocol, mode: o.Mode, config: cfg, last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
 	s.options = o
 	s.options.Config = nil // Retain connection credentials privately, not a caller-owned config map.
 	if o.Protocol == "ssh" {
@@ -273,6 +313,7 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	v := s.status()
 	s.mu.Lock()
 	v.Peer = s.peer
+	v.InstanceID = m.instanceID
 	s.mu.Unlock()
 	return v, nil
 }
@@ -329,7 +370,16 @@ func (s *Session) disconnectWith(code, why string) {
 }
 func (s *Session) status() Result { s.mu.Lock(); defer s.mu.Unlock(); return s.statusLocked() }
 func (s *Session) statusLocked() Result {
-	r := Result{Session: s.id, Handle: s.handle, State: s.state, ExitSignal: s.exitSignal, Signal: s.lastSignal, Connected: s.connected && !s.disposed, Running: s.runningLocked(), ExitCode: s.exit, Warning: s.warning, Error: s.failure, DisconnectReason: s.disconnectReason}
+	r := Result{Name: s.name, Session: s.id, Handle: s.handle, State: s.state, ExitSignal: s.exitSignal, Signal: s.lastSignal, Connected: s.connected && !s.disposed, Running: s.runningLocked(), ExitCode: s.exit, Warning: s.warning, Error: s.failure, DisconnectReason: s.disconnectReason}
+	if !s.startedAt.IsZero() {
+		started := s.startedAt
+		r.StartedAt = &started
+		end := time.Now()
+		if !s.finishedAt.IsZero() {
+			end = s.finishedAt
+		}
+		r.TaskElapsedMS = end.Sub(started).Milliseconds()
+	}
 	if s.handle != "" && s.interactive {
 		r.Interactive = true
 		r.PTY = s.pty
@@ -398,6 +448,7 @@ func (m *Manager) watch(s *Session) {
 
 func (m *Manager) Close(id string) (Result, error) {
 	m.mu.Lock()
+	id = m.resolveSessionLocked(id)
 	s := m.sessions[id]
 	if s == nil {
 		err := m.sessionErrorLocked(id)
@@ -429,6 +480,7 @@ func (m *Manager) CloseAll() {
 		m.rememberLocked(id, "explicit_close")
 	}
 	m.sessions = make(map[string]*Session)
+	m.sessionNames = make(map[string]string)
 	m.generation++
 	for _, cancel := range m.pending {
 		cancel()
@@ -477,7 +529,7 @@ func (m *Manager) GetConfig(id string) (ConfigResult, error) {
 		return ConfigResult{}, errors.New("session disposed; use sess_connect")
 	}
 	s.lastUse = time.Now()
-	return configInfo(id, s.config), nil
+	return configInfo(s.id, s.config), nil
 }
 func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 	s, err := m.Get(id)
@@ -531,7 +583,7 @@ func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 	}
 	s.lastUse = time.Now()
 	s.mu.Unlock()
-	return ConfigResult{Session: id, Config: cfg}, nil
+	return ConfigResult{Session: s.id, Config: cfg}, nil
 }
 func (s *Session) setKeepalive(ms int64) error {
 	if s.tcp == nil {
@@ -547,11 +599,20 @@ func (s *Session) setKeepalive(ms int64) error {
 }
 func (m *Manager) Operate(parent context.Context, kind string, r Request) (Result, error) {
 	deadline := time.Now().Add(CallLimit)
+	if inherited, ok := parent.Value(callDeadlineKey{}).(time.Time); ok && inherited.Before(deadline) {
+		deadline = inherited
+	}
 	ctx, cancel := context.WithDeadline(parent, deadline)
 	defer cancel()
 	ctx = context.WithValue(ctx, callDeadlineKey{}, deadline)
+	if strings.HasPrefix(kind, "read_") && r.Session != "" && r.Handle != "" {
+		return Result{}, errors.New("exec task reads require handle only: remove session; stream reads require session only: remove handle")
+	}
 	if (strings.HasPrefix(kind, "send") || strings.HasPrefix(kind, "read_")) && r.Handle == "" && r.Session == "" {
 		return Result{}, errors.New("provide exactly one of session (stream) or handle (exec task)")
+	}
+	if kind != "exec" && (r.Login != nil || r.Cwd != "" || r.Env != nil || r.Name != "") {
+		return Result{}, errors.New("name/login/cwd/env are exec startup options only")
 	}
 	if r.Handle != "" || strings.HasPrefix(kind, "task_") {
 		return m.operateTask(ctx, kind, r)
@@ -783,6 +844,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	id = old.id
 	if !old.configMu.TryLock() {
 		return Result{}, errors.New("busy: configure or reconnect in progress")
 	}
@@ -821,7 +883,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	old.base, old.cursor = old.total, old.total
 	old.discardTasksLocked()
 	old.mu.Unlock()
-	next := &Session{id: id, peer: previousPeer, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
+	next := &Session{id: id, name: old.name, peer: previousPeer, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
 		last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
 	dialCtx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
 	if o.Protocol == "ssh" {
@@ -865,6 +927,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	v := next.status()
 	next.mu.Lock()
 	v.Peer = next.peer
+	v.InstanceID = m.instanceID
 	if err != nil && next.peer == previousPeer {
 		v.Peer = nil
 	}

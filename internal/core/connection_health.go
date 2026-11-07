@@ -18,14 +18,20 @@ type retiredSession struct {
 	reason string
 	at     time.Time
 }
-type SessionLookupError struct{ Session, Reason, NextAction string }
+type SessionLookupError struct{ Session, Reason, NextAction, InstanceID string }
+
+type TaskLookupError struct{ Handle, InstanceID string }
+
+func (e *TaskLookupError) Error() string {
+	return fmt.Sprintf("unknown or expired task handle %q; instance_id=%s; records may have closed/expired or the service instance changed; use sess_task_list; do not replay the command", e.Handle, e.InstanceID)
+}
 
 func (e *SessionLookupError) Error() string {
 	detail := "parameters no longer retained"
 	if e.Reason == "unknown_handle" {
-		detail = "not retained in this process; may have been closed, expired, or belonged to an earlier service process"
+		detail = "not retained in this process; may have been closed, expired, or the global sessions/service instance changed; inspect sess_list before connecting; never replay prior input"
 	}
-	return fmt.Sprintf("session %s unavailable: %s; use sess_connect (%s); do not replay prior input", e.Session, e.Reason, detail)
+	return fmt.Sprintf("session %s unavailable: %s; instance_id=%s; use sess_list/sess_connect (%s); do not replay prior input", e.Session, e.Reason, e.InstanceID, detail)
 }
 
 // Both helpers require Manager.mu.
@@ -63,7 +69,11 @@ func (m *Manager) sessionErrorLocked(id string) error {
 			delete(m.retired, id)
 		}
 	}
-	return &SessionLookupError{Session: id, Reason: reason, NextAction: "sess_connect"}
+	next := "sess_connect"
+	if reason == "unknown_handle" {
+		next = "sess_list"
+	}
+	return &SessionLookupError{Session: id, Reason: reason, NextAction: next, InstanceID: m.instanceID}
 }
 func classifyDisconnect(err error, detail string) string {
 	if errors.Is(err, syscall.ECONNRESET) {

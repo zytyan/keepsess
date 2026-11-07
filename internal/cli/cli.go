@@ -32,15 +32,20 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
 
-22 个工具：connect/reconnect/configure/get_config/list、exec、四种 send/sendline、
+24 个工具：connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。
-sess_exec 用于 SSH mode=exec，默认 stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
+sess_exec 用于 SSH mode=exec，默认 login=true 使用 Bash 登录 shell、stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
 sess_exec 仅在恰好保留一个会话时可省略 session；多会话须明确指定，断开的会话也计数。
 mode=stream 调用 exec 直接报错，使用 sendline_text/escaped。
 持久终端 shell、console 登录和全部 Telnet 使用 mode=stream；交互 exec 按 task handle send/read。
 sess_task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。
 读取默认总时限 30000ms、静默时限 500ms；所有工具参数均在顶层，无需 config 嵌套。
 connect/configure 设置会话默认值；操作顶层配置仅覆盖本次调用。
+connect/exec 可传 name；rename/task_rename 修改别名，稳定 sN/taskN ID 保持有效；重复名字不发送。
+instance_id 仅用于实例诊断，不要求每次传入；未知句柄先 list 检查，禁止重放。
+exec 可传 cwd/env，在登录初始化后应用；login=false 且无 cwd/env 时原样提交 command。
+收集支持 strip_ansi/include_pattern/exclude_pattern，仅投影结果、保留原始历史；scan_limit 时继续分页。
+等待返回 wait_elapsed_ms、task_elapsed_ms、timeout_source；RPC 预算耗尽不影响下一次等待。
 connect 可用 ssh_jumps 数组指定最多 8 级跳板（近端在前），每跳独立认证/主机校验，整链共用连接超时；目标支持 SSH 或 Telnet（仅 stream）。
 exec/task_wait 顶层参数 exec_total_timeout_ms（默认 120000ms，最高 300000ms）；term_on_timeout 默认 true，超时尝试 TERM，不保证退出。
 同步调用互斥，返回即释放名额；异步返回 taskN，可与同步/异步并行，无后台运行时限。
@@ -182,7 +187,7 @@ func redact(v any) any {
 	case map[string]any:
 		for k, x := range t {
 			switch k {
-			case "password", "key_passphrase", "token", "private_key":
+			case "password", "key_passphrase", "token", "private_key", "env":
 				t[k] = "[REDACTED]"
 			default:
 				t[k] = redact(x)

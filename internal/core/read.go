@@ -9,6 +9,7 @@ import (
 
 func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Result {
 	started := time.Now()
+	viewActive := c.StripANSI || c.IncludePattern != "" || c.ExcludePattern != ""
 	totalTimeoutMS := c.ReadTotalTimeoutMS
 	if kind == "exec_wait" {
 		// SSH exec collection must not end because
@@ -70,7 +71,10 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		}
 		// Decode only a bounded window, not the entire retained history.
 		rawEnd := total
-		if rawEnd-start > 2*c.MaxOutputBytes+4 {
+		if viewActive && rawEnd-start > ViewScanLimit {
+			rawEnd = start + ViewScanLimit
+		}
+		if !viewActive && rawEnd-start > 2*c.MaxOutputBytes+4 {
 			rawEnd = start + 2*c.MaxOutputBytes + 4
 		}
 		raw := append([]byte(nil), s.buf[start-base:rawEnd-base]...)
@@ -90,7 +94,11 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		// A live incomplete character survives idle/immediate reads; only closed,
 		// completed exec or an explicit history read finalizes its invalid bytes.
 		final := !connected || (s.mode == "exec" && completed) || history
-		d := decodeWindow(raw, c, final && rawEnd == total)
+		decodeConfig := c
+		if viewActive {
+			decodeConfig.MaxOutputBytes = 4*ViewScanLimit + 4
+		}
+		d := decodeWindow(raw, decodeConfig, final && rawEnd == total)
 		reason := ""
 		output := d.text
 		consumed := d.consumed
@@ -104,6 +112,25 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 				}
 				output = output[:end]
 				reason = "match"
+			}
+		}
+		if viewActive {
+			d.text, d.consumed = output, consumed
+			d.bounds = d.bounds[:len(output)+1]
+			view := projectOutput(d, c, final && rawEnd == total || reason == "match" || totalReached || idleReached || ctx.Err() != nil, (!connected || (s.mode == "exec" && completed)) && rawEnd == total)
+			output, consumed = view.text, view.consumed
+			v.FilteredBytes, v.FilteredLines, v.StrippedBytes, v.LineFragments = view.filteredBytes, view.filteredLines, view.strippedBytes, view.fragments
+			d.limited, d.minimum, d.incomplete = view.limited, view.minimum, view.incomplete
+			if reason == "match" && view.incomplete {
+				reason = "view_incomplete"
+			}
+			if view.limited {
+				reason = "output_limit"
+			} else if len(raw) >= ViewScanLimit && (rawEnd < total || !final) && reason == "" {
+				reason = "scan_limit"
+				if consumed == 0 {
+					reason = "view_incomplete"
+				}
 			}
 		}
 		if reason == "" {
@@ -139,6 +166,20 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		}
 		if reason != "" || immediate {
 			end := start + int64(consumed)
+			elapsed := time.Since(started).Milliseconds()
+			v.WaitElapsedMS = &elapsed
+			if reason == "total_timeout" {
+				v.TimeoutSource = "read_total"
+				if kind == "exec_wait" {
+					v.TimeoutSource = "exec_wait"
+				}
+				if ctx.Err() != nil {
+					v.TimeoutSource = "caller_deadline"
+					if rpc, ok := ctx.Value(callDeadlineKey{}).(time.Time); ok && !time.Now().Before(rpc) {
+						v.TimeoutSource = "rpc_budget"
+					}
+				}
+			}
 			v.Output = output
 			v.Reason = reason
 			v.Start = start
@@ -162,6 +203,13 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 			v.Connected = s.connected
 			v.Running = s.running
 			v.State, v.ExitCode, v.ExitSignal, v.Warning = s.state, s.exit, s.exitSignal, s.warning
+			if !s.startedAt.IsZero() {
+				end := time.Now()
+				if !s.finishedAt.IsZero() {
+					end = s.finishedAt
+				}
+				v.TaskElapsedMS = end.Sub(s.startedAt).Milliseconds()
+			}
 			v.More = end < s.total
 			if v.Error == "" {
 				v.Error = s.failure
@@ -172,6 +220,10 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 			s.mu.Unlock()
 			if v.Output == "" {
 				switch {
+				case v.Reason == "view_incomplete":
+					v.Comment = "Output projection encountered an incomplete ANSI sequence at a bounded scan/pattern boundary; raw history is preserved. Disable strip_ansi/filters to inspect raw output."
+				case v.FilteredLines > 0 || v.StrippedBytes > 0:
+					v.Comment = "New bytes were scanned but produced no visible output after ANSI stripping/line filtering; inspect counters and raw offsets. Raw history is retained subject to normal retention limits."
 				case v.Error != "":
 					v.Comment = "No output returned because the operation encountered an error; inspect error and state before continuing."
 				case !v.Connected || v.Reason == "closed":
@@ -180,6 +232,8 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 					v.Comment = "Output collection was cancelled without returning text. This does not imply the command stopped or was not executed."
 				case d.limited:
 					v.Comment = "Output bytes are available, but max_output_bytes is too small to return the next complete character or byte escape."
+				case viewActive && len(raw) > 0 && consumed == 0:
+					v.Comment = "New bytes are retained, but output projection needs a complete line/ANSI sequence/character; try a bounded read_until or disable projection to inspect raw history."
 				case len(raw) > 0 && consumed == 0:
 					v.Comment = "The call is valid. Partial encoded bytes were received; no complete text is available yet."
 				case v.Reason == "exec_finish":

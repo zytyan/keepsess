@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -18,7 +17,7 @@ func (s *Session) connectTelnet(ctx context.Context, o Options) error {
 		return s.openSSHRoute(ctx, o, false, func(client *ssh.Client, _ string) error {
 			raw, err := client.DialContext(ctx, "tcp", o.address())
 			if err != nil {
-				return fmt.Errorf("SSH jump %d forwarding to Telnet target: %w", len(o.SSHJumps), err)
+				return routeFailure(o, len(o.SSHJumps), "forward", err)
 			}
 			// SSH channel connections do not implement deadlines. Bound both
 			// negotiation replies and application writes by closing the shared

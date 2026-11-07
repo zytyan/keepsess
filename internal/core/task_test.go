@@ -19,6 +19,7 @@ func taskServer(t *testing.T) (string, <-chan string) {
 	t.Helper()
 	signals := make(chan string, 128)
 	addr, _ := testutil.SSHWithExec(t, func(command string, ch ssh.Channel, reqs <-chan *ssh.Request) {
+		command = testutil.LoginPayload(command)
 		switch command {
 		case "silent", "terminate":
 			for req := range reqs {
@@ -222,6 +223,7 @@ func TestTaskWaitDoesNotBlockSignalOrSyncExec(t *testing.T) {
 func TestTaskOutputIsolationAndParallelStarts(t *testing.T) {
 	gate := make(chan struct{})
 	addr, _ := testutil.SSHWithExec(t, func(command string, ch ssh.Channel, reqs <-chan *ssh.Request) {
+		command = testutil.LoginPayload(command)
 		_, _ = io.WriteString(ch, command+"-out\n")
 		<-gate
 		_, _ = io.WriteString(ch.Stderr(), command+"-err\n")

@@ -21,11 +21,11 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 当前提供下列 22 个工具（含 sess_reconnect、sess_task_close_stdin）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 当前提供下列 24 个工具（含 sess_rename、sess_task_rename）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；22 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；24 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
@@ -85,11 +85,13 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | 工具 | 参数与用途 |
 |---|---|
 | sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、ssh_jumps、mode 和顶层配置 |
+| sess_rename | session、name；更新会话别名，稳定 sN ID 保持有效，不重建连接 |
+| sess_task_rename | handle、name；更新任务别名，稳定 taskN ID 保持有效，不消费输出 |
 | sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
 | sess_configure | session、顶层配置字段；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
-| sess_exec | session?、command、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
+| sess_exec | session?、command、name?、login?、cwd?、env?、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
 | sess_send_text | session 或 handle（二选一）、data、collect_output?、其他顶层配置?；发送文字并默认收集输出，不解析转义 |
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
 | sess_sendline_text | 同 text，追加一次配置的 line_end |
@@ -108,6 +110,10 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
 
 所有工具的配置参数都直接写在顶层，例如 `sess_configure({"session":"s1","read_only":true})`，或 `sess_read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
+
+会话和任务命名：connect/exec 可传顶层 `name`，默认仍返回稳定 `sN` / `taskN` ID。`session` 或 `handle` 也接受当前名字作为别名；结果中的 session/handle 始终是稳定 ID，name 单独返回。使用 `sess_rename({"session":"s1","name":"prod"})` 和 `sess_task_rename({"handle":"task1","name":"build"})` 更新别名；旧别名立即失效，稳定 ID 仍有效。名字限 1..64 个 ASCII 字母、数字、点、下划线或短横线，首位须字母/数字，`sN/taskN` 保留。会话名与任务名分别唯一；会话连接期间也预留名字，任务名在发送 exec 请求前原子预留，重复名字不发送。名字只在当前保留记录内有效，释放后可复用；长流程优先保留稳定 ID。
+
+每个服务进程生成 8 字符随机 `instance_id`，在 initialize 的 `_meta`、connect/reconnect、列表及未知句柄错误中展示，不要求调用方每次传入标识。未知句柄可能已关闭、过期或来自服务实例变化，先 list 检查，不自动重放；该诊断标识不是访问控制或强制实例校验，不提供重启恢复。本轮不增加 sess_expect 工具。
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
@@ -136,6 +142,8 @@ Telnet 目标示例（登录仍须观察提示后通过 send/read 显式处理�
 ```json
 {"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
 ```
+
+跳板失败包含 `hop_index`（从 1 开始、最终目标为跳数加 1）、`host`、`port`、`from_host`、`stage` 和 `target`。第一跳的 from_host 是 local，后续是前一跳配置的主机名，不代表实际出口 IP。SSH direct-tcpip 已用于 SSH/Telnet stream 路由；已有 `ssh -L` 转发也可直接通过其监听地址连接，本轮不新增创建/管理 -L/-R/-D 监听工具。
 
 ### 显式重连
 
@@ -305,6 +313,26 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 每个 stream/exec 任务历史保留 1MiB，more 表示后面还有数据；start/end 为原始字节偏移，不是显示字符下标。增量读取推进对应 stream/任务的游标；read_history/read_tail 不推进。read_history 默认从仍保留的最早位置开始，用 offset=end 分页，不会无限等待未来输出。dropped_bytes 明确报告请求位置之前已被覆盖的字节。显式 close 会丢弃全部缓冲，后续读取失败；远端自然关闭后尚可读取保留数据，直到回收或 close。
 
+## exec 登录环境与输出投影
+
+`sess_exec` 默认 `login=true`，通过 `bash --login -c` 运行非交互登录 shell；stdin 仍默认 EOF，无自动 PTY。Bash 不存在时按远端退出结果报错，不回退或重试。登录初始化通常读取 `/etc/profile` 和第一个可用用户登录初始化文件，不保证读取 `.bashrc`，也不代表加载所有 profile。初始化可能产生输出和副作用，计入相同的任务完成等待。
+
+`env` 是最多 128 项的字符串对象，键必须是 shell 标识符；`cwd` 和 env 值正确引用。顺序为登录初始化 → export 显式 env → cd 到 cwd → 执行 command，设置失败就不执行 command，env 审计脱敏。设置仅本任务生效，不影响下次 exec。`login=false` 且没有 cwd/env 时原样提交 command；显式 cwd/env 时仍用 `bash -c` 包装但不加载登录 profile。max_input_bytes 对最终编码后的 exec 请求（含包装）生效。
+
+```json
+{"session":"prod","command":"make test","name":"build","cwd":"/srv/project","env":{"BUILD_MODE":"debug"},"collect_output":false}
+```
+
+输出工具及 exec/task_wait 支持顶层 `strip_ansi`（默认 false）、`include_pattern`、`exclude_pattern`（默认空，Go RE2，最多 1024 字节）。先清理 ANSI CSI/OSC 等控制序列，再按行包含/排除；这些设置也能通过 connect/configure 设置默认值。原始历史不改写，start/end 仍是原始字节偏移，过滤掉的行推进增量游标。`end_pattern` 继续匹配解码后的原始文本，不受过滤影响，也不会被 exec 使用。
+
+投影每页最多扫描 64KiB 原始数据，返回 `scan_limit` 时按原 handle 继续读取；行超过 16KiB 时按有界片段过滤并返回 `line_fragments=true`，片段边界可能略延伸以保持字符/字节转义完整。未完成行保留到换行、读取结束条件或任务完成；未完成 ANSI 序列保留到后续数据，极长未闭合序列可能返回 `view_incomplete`，可关闭投影查看原始历史。过滤启用时一个可见行/片段整体返回；页面过小时返回 output_limit/minimum_output_bytes，不部分消费该行。
+
+结果报告 `filtered_bytes`（丢弃的清理后 UTF-8 文本字节）、`filtered_lines`（行/片段数）、`stripped_bytes`（移除的 ANSI 文本字节），与原始历史丢失 `dropped_bytes` 区分。空输出会说明过滤/ANSI/不完整文本等原因；现有输出和历史上限继续生效。读取原始历史时显式设置 `strip_ansi=false, include_pattern="", exclude_pattern=""`。
+
+```json
+{"handle":"build","strip_ansi":true,"include_pattern":"ERROR|WARN","exclude_pattern":"DEBUG"}
+```
+
 ## SSH exec 与连接保护
 
 **sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次顶层参数，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
@@ -320,6 +348,8 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 `collect_output=true`（默认）在同一连接内只允许一个同步 exec 调用，竞争立即返回 busy/not_sent，不排队。同步调用返回时释放名额，包括超时、取消和 output_limit；旧程序仍运行也不阻止下一次同步调用。`collect_output=false` 启动后返回 `handle: "task22"` 与发送回执，不等完成，不启动后台运行计时器；异步任务彼此可并行，也可与同步任务并行。资源上限与服务器 channel 限制仍可能拒绝新任务。
 
 每次 exec 使用独立 SSH channel，合并该任务的 stdout/stderr，按协议退出状态判断完成。cwd、环境不跨命令保留。正常同步完成且输出全部返回时省略 handle；非零退出码也属于完成。提前返回、启动结果不确定或仍有输出时返回 handle，后续按 handle 管理。完成记录仍可在 task_list 找到。缺失 exit-status/exit-signal 返回 warning 与缺省 exit_code，不能假定成功；exit-signal 单独返回 exit_signal，不把合成数字当作远端退出码。
+
+每次 task_wait 均获得新的本次等待预算。结果中的 `wait_elapsed_ms` 表示本次收集耗时，`started_at/task_elapsed_ms` 表示任务启动及累计运行时间（完成后冻结）。`reason=total_timeout` 额外提供 `timeout_source=rpc_budget|exec_wait|caller_deadline`；普通 read 的配置总时限为 read_total。RPC 预算或调用方截止只结束收集，保留 handle，不发送 TERM，也不会把截止时间带入下一次等待。
 
 完成等待超时返回 reason=total_timeout。**term_on_timeout 默认 true**：sess_exec 与 sess_task_wait 在超时后尝试发送一次 TERM，然后返回 handle，不等程序退出、不自动升级 KILL、不重放。设 false 仅结束等待。TERM 请求的 `signal.request_state=sent` 只表示请求已写出，不证明远端处理或程序/子进程树退出。可能返回 not_sent、unknown、skipped_read_only、skipped_finished，并附具体错误。信号写入限时 1s，包含在整个 RPC 115s 预算内；实际完成等待还受剩余 RPC 预算约束。半开连接导致 channel 建立或控制写入卡住时，必须关闭共享 transport 才能解除底层阻塞，会明确报告所有受影响任务的未知结果。
 

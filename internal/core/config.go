@@ -14,6 +14,9 @@ import (
 )
 
 type Config struct {
+	StripANSI               bool   `json:"strip_ansi"`
+	IncludePattern          string `json:"include_pattern"`
+	ExcludePattern          string `json:"exclude_pattern"`
 	TermOnTimeout           bool   `json:"term_on_timeout"`
 	ReadOnly                bool   `json:"read_only"`
 	ConnectTimeoutMS        int64  `json:"connect_timeout_ms"`
@@ -49,6 +52,9 @@ type ConfigResult struct {
 }
 
 var configDescriptions = map[string]string{
+	"strip_ansi":                 "Default false. Strip ANSI CSI/OSC/control sequences from returned output only; raw history and offsets remain unchanged. Incomplete sequences remain unread.",
+	"include_pattern":            "Optional Go RE2 line inclusion filter after ANSI projection; empty disables. Lines over 16KiB are filtered as bounded fragments. 64KiB raw scan per page; skipped text advances the cursor.",
+	"exclude_pattern":            "Optional Go RE2 line exclusion filter after inclusion; empty disables. Raw history remains available. Output limits still apply; filtered_bytes/lines report projection loss, distinct from dropped history.",
 	"read_only":                  "Session-only input guard; default false. Reject send, exec and manual/automatic signals before application writes. Protocol negotiation/keepalive remain enabled. Change explicitly with sess_configure; not a security boundary and does not stop an already running command.",
 	"connect_timeout_ms":         "Connect/reconnect, authentication and initial shell setup deadline. Updating an established session stores the value for its next explicit sess_reconnect; a new sess_connect needs its own config.",
 	"write_timeout_ms":           "Write/channel setup deadline; failed writes close transport and may have executed. Maximum 110000ms.",
@@ -88,6 +94,12 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 		}
 		var err error
 		switch k {
+		case "strip_ansi":
+			if strings.TrimSpace(string(v)) == "null" {
+				err = errors.New("null is not a config value")
+			} else {
+				err = json.Unmarshal(v, &c.StripANSI)
+			}
 		case "term_on_timeout":
 			if strings.TrimSpace(string(v)) == "null" {
 				err = errors.New("null is not a config value")
@@ -141,6 +153,10 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 					c.InputEncodeErrorAction = str
 				case "output_decode_error_action":
 					c.OutputDecodeErrorAction = str
+				case "include_pattern":
+					c.IncludePattern = str
+				case "exclude_pattern":
+					c.ExcludePattern = str
 				case "end_pattern":
 					c.EndPattern = str
 				}
@@ -185,6 +201,14 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 	}
 	if _, err := regexp.Compile(c.EndPattern); err != nil {
 		return c, fmt.Errorf("invalid end_pattern: %w", err)
+	}
+	for key, pattern := range map[string]string{"include_pattern": c.IncludePattern, "exclude_pattern": c.ExcludePattern} {
+		if len(pattern) > 1024 {
+			return c, fmt.Errorf("%s exceeds 1024 bytes", key)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return c, fmt.Errorf("invalid %s: %w", key, err)
+		}
 	}
 	end, err := encodeInput(c.LineEnd, true, "utf-8")
 	if err != nil {

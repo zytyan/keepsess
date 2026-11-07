@@ -4,7 +4,7 @@
 - Go 1.22（固定目标补丁版本 1.22.1），纯 Go、CGO_ENABLED=0；依赖不得要求高于 Go 1.22。
 - 交叉编译 linux/amd64、linux/arm64、windows/amd64。
 - 进程内持久 SSH/Telnet 连接；无需重启恢复。sess_exec 仅适用于 SSH mode=exec，默认非交互，interactive=true 显式保留 stdin、pty=true 必须搭配 interactive，stream 直接报错且不发送输入；标准 SSH 优先 exec，以 SSH exit-status/exit-signal 判断完成，合并 stdout/stderr，禁止结束标记猜测。sess_exec 使用独立 exec_total_timeout_ms（默认 120000ms，1..300000ms），忽略 read_total_timeout_ms/read_idle_timeout_ms/end_pattern；term_on_timeout 默认 true，完成等待超时尝试一次 TERM，不保证退出；false 仅结束等待。普通 read 超时、取消收集和输出上限不发送信号。后续 read 使用 handle 和独立 read 配置。
-- API 采用 22 工具：配置、exec、四种 send/sendline、四种 read、连接管理，以及 task_list/status/wait/signal/release/close_stdin。读取 total=30000ms、idle=500ms，end_pattern 默认禁用，任一条件返回；配置可按调用覆盖且不污染全局。任何调用不得无限等待。
+- API 采用 24 工具（新增 sess_rename/sess_task_rename）：配置、exec、四种 send/sendline、四种 read、连接管理，以及 task_list/status/wait/signal/release/close_stdin。读取 total=30000ms、idle=500ms，end_pattern 默认禁用，任一条件返回；配置可按调用覆盖且不污染全局。任何调用不得无限等待。
 - 独立端点静默保护、连接/握手/写入超时、RPC 上限、stdio 并发调度、有界队列及有界历史，防止半开连接和队头阻塞。整个调用小于两分钟，read_total_timeout_ms 最大 110000；正常读超时不关闭连接。exec 不设无输出静默保护；无活动调用会话按 session_idle_timeout_ms 回收（默认 2h，0 禁用），不能因分析/审批无输出在 110s 自动关闭。
 - 默认增量输出；all/tail 可读取保留的历史，并明确报告截断/丢失；缓慢端点必须返回反压信息，禁止无限输入堆积。
 - 断开连接要在工具结果中明确提示重连；不自动重放可能产生副作用的命令。
@@ -38,3 +38,9 @@
 
 - 所有 MCP 工具配置输入均在顶层，schema 不再暴露 config 对象；旧嵌套 config 仅兼容接收，顶层优先。connect/configure 修改会话默认值，操作参数仅本次覆盖；连接级/read_only 限制保持。结果中的 config 继续用于展示。
 - connect 支持 ssh_jumps 数组（不再接受旧 jumps），近端在前，最多 8 跳，跳板端口默认 22；每跳独立认证/主机校验，使用 x/crypto/ssh direct-tcpip，不执行远端 ssh 命令。整链共享 connect_timeout_ms，取消/失败关闭链路；重连私下复用完整链路，不重放。跳板凭据不进入结果/配置，审计递归脱敏；最终目标可为 SSH 或 Telnet；Telnet 仅 stream，继续使用内部 Telnet 编解码，登录输入不自动发送；不将跳板身份作为 Telnet 设备 peer，SSH 保活探测最后跳板，转发通道写入须有界（含协商回复），超时关闭根 transport。
+
+- 会话/任务支持启动 name 和 sess_rename/sess_task_rename 别名更新；稳定 sN/taskN ID 不变且可继续引用。名字 1..64 ASCII alphanumeric/._-，首位 alphanumeric，保留 sN/taskN；会话与全局任务各自唯一，连接中预留会话名，exec 发送前原子预留任务名，重复不得发送。释放记录后可复用别名，长期操作推荐稳定 ID。
+- 进程启动生成短随机 instance_id，仅 initialize._meta、connect/reconnect/list 和未知句柄错误展示，不增加 expected_instance_id 或强制校验；未知句柄提示可能关闭/过期/实例变化，先 list，不重放。本轮无 sess_expect 工具。
+- exec 默认 login=true，Bash 非交互登录 shell，stdin/PTY 默认保持；缺 Bash 失败、不回退。profile 后应用 env/cwd，然后 command，设置失败不执行 command；shell 引用必须正确，env 审计脱敏。login=false 且无 cwd/env 原样提交，否则 bash -c；每任务独立，包装后的线上命令计入输入上限。
+- 每次 task_wait 新预算；返回 wait_elapsed_ms、started_at、task_elapsed_ms（完成后冻结）及 timeout_source=rpc_budget/exec_wait/caller_deadline，普通 read 为 read_total；只有配置的 exec_wait 超时可 TERM，RPC/调用截止不发信号。跳板失败结构化报告 1-based hop_index/host/port/from_host/stage/target，来源仅配置逻辑主机，不推断出口 IP。
+- 输出 strip_ansi/include_pattern/exclude_pattern 默认关闭，只作用投影，保留 raw history/偏移，过滤行推进游标；end_pattern 仍匹配解码原文，exec 仍忽略。投影每页原始扫描 64KiB、行 16KiB 有界片段，完整字符/渲染转义不分割；未完成 ANSI 保留，极长控制序列 view_incomplete 提示 raw 检查。过滤保留行/片段整体返回，过小页面报告 minimum_output_bytes；filtered_bytes/lines、stripped_bytes 与 dropped_bytes 区分，空输出说明过滤/不完整等原因，任何扫描/等待不可无界。

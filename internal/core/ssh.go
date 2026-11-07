@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -81,22 +80,17 @@ func (s *Session) openSSHRoute(ctx context.Context, o Options, targetSSH bool, r
 	}
 	configs := make([]*ssh.ClientConfig, len(endpoints))
 	fingerprints := make([]*string, len(endpoints))
-	label := func(i int) string {
-		if i < len(o.SSHJumps) {
-			return fmt.Sprintf("SSH jump %d", i+1)
-		}
-		return "SSH target"
-	}
+
 	for i, endpoint := range endpoints {
 		var err error
 		configs[i], fingerprints[i], err = sshClientConfig(endpoint)
 		if err != nil {
-			return fmt.Errorf("%s: %w", label(i), err)
+			return routeFailure(o, i, "authentication_config", err)
 		}
 	}
 	c, e := (&net.Dialer{Timeout: s.config.Duration(s.config.ConnectTimeoutMS), KeepAlive: s.keepalivePeriod()}).DialContext(ctx, "tcp", endpoints[0].address())
 	if e != nil {
-		return fmt.Errorf("%s: %w", label(0), e)
+		return routeFailure(o, 0, "tcp_connect", e)
 	}
 	// The first TCP socket owns the whole chain. Closing it interrupts forwarding,
 	// every nested handshake, channel setup and write, including a stalled hop.
@@ -118,12 +112,12 @@ func (s *Session) openSSHRoute(ctx context.Context, o Options, targetSSH bool, r
 		if i > 0 {
 			connection, e = client.DialContext(ctx, "tcp", endpoint.address())
 			if e != nil {
-				return fmt.Errorf("%s forwarding to %s: %w", label(i-1), label(i), e)
+				return routeFailure(o, i, "forward", e)
 			}
 		}
 		cc, chans, reqs, err := ssh.NewClientConn(connection, endpoint.address(), configs[i])
 		if err != nil {
-			return fmt.Errorf("%s handshake: %w", label(i), err)
+			return routeFailure(o, i, "handshake", err)
 		}
 		client = ssh.NewClient(cc, chans, reqs)
 	}

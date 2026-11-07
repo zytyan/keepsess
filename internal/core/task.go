@@ -30,6 +30,15 @@ type SignalResult struct {
 
 type callDeadlineKey struct{}
 
+// WithRPCBudget marks a binding-owned deadline, so an RPC limit is reported
+// separately from a shorter caller-imposed observation deadline.
+func WithRPCBudget(ctx context.Context) context.Context {
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithValue(ctx, callDeadlineKey{}, deadline)
+	}
+	return ctx
+}
+
 type execChannel interface {
 	start(string, *Session) error
 	Wait() error
@@ -100,7 +109,7 @@ func evictTaskLocked(s *Session, t *Task) {
 	t.out.mu.Unlock()
 }
 
-func (m *Manager) allocateTask(s *Session, c Config, interactive, pty bool) (*Task, error) {
+func (m *Manager) allocateTask(s *Session, c Config, interactive, pty bool, name string) (*Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sessions[s.id] != s {
@@ -117,6 +126,11 @@ func (m *Manager) allocateTask(s *Session, c Config, interactive, pty bool) (*Ta
 				localTotal++
 			}
 			t.out.mu.Lock()
+			if name != "" && t.out.name == name {
+				t.out.mu.Unlock()
+				conn.mu.Unlock()
+				return nil, errors.New("duplicate task name; nothing sent")
+			}
 			if !t.out.completed {
 				running++
 				if conn == s {
@@ -168,7 +182,7 @@ func (m *Manager) allocateTask(s *Session, c Config, interactive, pty bool) (*Ta
 	m.nextTask++
 	now := time.Now()
 	t := &Task{session: s, sequence: m.nextTask, out: &Session{
-		id: s.id, handle: fmt.Sprintf("task%d", m.nextTask), protocol: "ssh", mode: "exec", state: "starting",
+		id: s.id, name: name, handle: fmt.Sprintf("task%d", m.nextTask), protocol: "ssh", mode: "exec", state: "starting",
 		config: c, interactive: interactive, pty: pty, connected: true, running: true, active: 1, last: now, lastUse: now,
 		notify: make(chan struct{}, 1), done: make(chan struct{}),
 	}}
@@ -187,7 +201,14 @@ func (m *Manager) startTask(ctx context.Context, s *Session, r Request, c Config
 	if r.Command == "" || r.Data != "" {
 		return Result{}, errors.New("command required; data is not accepted")
 	}
-	b, err := encodeInput(r.Command, false, c.Encoding)
+	if err := validateName(r.Name); err != nil {
+		return Result{}, err
+	}
+	command, err := execCommand(r)
+	if err != nil {
+		return Result{}, err
+	}
+	b, err := encodeInput(command, false, c.Encoding)
 	if err != nil {
 		return Result{}, err
 	}
@@ -249,7 +270,7 @@ func (m *Manager) startTask(ctx context.Context, s *Session, r Request, c Config
 			return v, nil
 		}
 	}
-	t, err := m.allocateTask(s, c, r.Interactive, r.PTY)
+	t, err := m.allocateTask(s, c, r.Interactive, r.PTY, r.Name)
 	if err != nil {
 		v.Error = err.Error()
 		return v, nil
@@ -330,6 +351,9 @@ func (t *Task) start(ctx context.Context, command string, c Config) Result {
 		t.out.mu.Lock()
 		if t.out.connected && !t.out.disposed {
 			t.out.state = "running"
+			if t.out.startedAt.IsZero() {
+				t.out.startedAt = time.Now()
+			}
 		}
 		t.out.mu.Unlock()
 		done <- startup{attempted: true}
@@ -404,6 +428,7 @@ func (t *Task) finish(err error) {
 	t.out.state, t.out.running, t.out.completed = "finished", false, true
 	t.out.stdinOpen = false
 	t.finished = time.Now()
+	t.out.finishedAt = t.finished
 	t.out.signal()
 }
 
@@ -420,6 +445,7 @@ func (t *Task) closeChannel(ch execChannel) {
 }
 
 func (t *Task) wait(ctx context.Context, c Config) Result {
+	started := time.Now()
 	// Reserve control-write time inside the 115s RPC budget. Parent cancellation
 	// still cancels observation without terminating the command.
 	completionDeadline := time.Now().Add(c.Duration(c.ExecTotalTimeoutMS))
@@ -432,13 +458,31 @@ func (t *Task) wait(ctx context.Context, c Config) Result {
 		}
 	}
 	v := t.out.read(waitCtx, "exec_wait", Request{}, c)
-	if v.Reason == "total_timeout" && waitCtx.Err() != nil {
+	elapsed := time.Since(started).Milliseconds()
+	v.WaitElapsedMS = &elapsed
+	if v.Reason == "total_timeout" {
+		if waitCtx.Err() == nil {
+			v.TimeoutSource = "exec_wait"
+		} else if ctx.Err() == nil {
+			v.TimeoutSource = "rpc_budget"
+		} else {
+			v.TimeoutSource = "caller_deadline"
+			if deadline, ok := ctx.Value(callDeadlineKey{}).(time.Time); ok && !time.Now().Before(deadline) {
+				v.TimeoutSource = "rpc_budget"
+			}
+		}
+	}
+	if v.Reason == "total_timeout" && v.TimeoutSource == "caller_deadline" {
+		v.Comment = "Caller deadline ended this wait; task retained. Continue with a new wait/read call. No TERM sent for caller deadline expiry."
+	}
+	if v.Reason == "total_timeout" && v.TimeoutSource == "rpc_budget" {
 		v.Comment = "RPC collection budget reached; task retained. Continue with sess_task_wait or handle-based read. No TERM sent for RPC budget expiry."
 	}
 	if v.Reason == "total_timeout" && !time.Now().Before(completionDeadline) && c.TermOnTimeout && waitCtx.Err() == nil && ctx.Err() == nil {
 		v.Signal = t.sendSignal(ctx, "TERM")
 		latest := t.out.status()
 		v.State, v.Running, v.Connected, v.More = latest.State, latest.Running, latest.Connected, latest.More
+		v.TaskElapsedMS = latest.TaskElapsedMS
 		v.ExitCode, v.ExitSignal, v.Warning, v.NextAction = latest.ExitCode, latest.ExitSignal, latest.Warning, latest.NextAction
 		v.DisconnectReason = latest.DisconnectReason
 		if latest.Error != "" {
@@ -530,6 +574,17 @@ func (m *Manager) acquireTask(handle string) (*Task, error) {
 		s.mu.Lock()
 		s.pruneTasksLocked(time.Now())
 		t := s.tasks[handle]
+		if t == nil {
+			for _, candidate := range s.tasks {
+				candidate.out.mu.Lock()
+				match := candidate.out.name == handle
+				candidate.out.mu.Unlock()
+				if match {
+					t = candidate
+					break
+				}
+			}
+		}
 		if t != nil && !s.disposed && !s.reconnecting {
 			t.out.mu.Lock()
 			t.out.active++
@@ -542,12 +597,13 @@ func (m *Manager) acquireTask(handle string) (*Task, error) {
 		}
 		s.mu.Unlock()
 	}
-	return nil, errors.New("unknown or expired task handle; use sess_task_list; do not replay the command")
+	return nil, &TaskLookupError{Handle: handle, InstanceID: m.instanceID}
 }
 
 func (m *Manager) TaskList(session string) ([]Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	session = m.resolveSessionLocked(session)
 	if session != "" && m.sessions[session] == nil {
 		return nil, m.sessionErrorLocked(session)
 	}

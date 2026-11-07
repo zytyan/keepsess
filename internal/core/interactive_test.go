@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 func inputServer(t *testing.T) string {
 	addr, _ := testutil.SSHWithExec(t, func(command string, ch ssh.Channel, reqs <-chan *ssh.Request) {
+		command = testutil.LoginPayload(command)
 		if command == "default-eof" {
 			b, _ := io.ReadAll(ch)
 			_, _ = io.WriteString(ch, "eof:"+string(b))
@@ -45,13 +47,13 @@ func TestInteractiveExecInputAndEOF(t *testing.T) {
 		{"sendline_text", "hello", "hello\r"},
 		{"sendline_escaped", `a\x00`, "a\x00\r"},
 	} {
-		v = run(t, m, tc.kind, Request{Handle: a.Handle, Data: tc.data, Config: cfg(map[string]any{"end_pattern": "", "read_idle_timeout_ms": 10, "output_decode_error_action": "to_escape_bytes"})})
+		v = run(t, m, tc.kind, Request{Handle: a.Handle, Data: tc.data, Config: cfg(map[string]any{"end_pattern": regexp.QuoteMeta(tc.want), "read_idle_timeout_ms": 0, "read_total_timeout_ms": 1000, "output_decode_error_action": "to_escape_bytes"})})
 		if v.InputState != "sent" || v.WrittenBytes != len(tc.want) || v.Output != tc.want {
 			t.Fatal(tc.kind, v)
 		}
 	}
 	// A Ctrl-D byte is data when there is no PTY, not stdin EOF.
-	v = run(t, m, "send_escaped", Request{Handle: a.Handle, Data: `\x04`, Config: cfg(map[string]any{"read_idle_timeout_ms": 10})})
+	v = run(t, m, "send_escaped", Request{Handle: a.Handle, Data: `\x04`, Config: cfg(map[string]any{"end_pattern": "\x04", "read_idle_timeout_ms": 0, "read_total_timeout_ms": 1000})})
 	if v.Output != "\x04" || v.StdinOpen == nil || !*v.StdinOpen {
 		t.Fatal(v)
 	}

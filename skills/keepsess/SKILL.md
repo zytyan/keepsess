@@ -27,9 +27,13 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-All 22 tools are discovered through MCP tools/list, not individually registered.
+All 24 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
+
+Session/task names: connect and exec accept optional name. Names are mutable aliases; results keep stable sN/taskN IDs plus name. References accept either ID or current alias. sess_rename(session,name) and sess_task_rename(handle,name) change aliases without reconnecting or restarting; old aliases stop resolving. Names are 1..64 ASCII alphanumeric/._-, start alphanumeric, and may not use reserved sN/taskN forms. Session names and global task names have separate namespaces; duplicates (including concurrent starts) are rejected before application input. Names expire with retained records and can be reused; prefer stable IDs for long workflows.
+
+Each process has a short random instance_id, shown in initialize._meta, connect/reconnect, lists and unknown-handle errors. No expected_instance_id parameter or mandatory check is needed. Missing records may mean closure/expiry or an instance change: inspect lists, never replay commands/login inputs. No automatic recovery or sess_expect tool.
 
 All tool input parameters are top-level, including timeouts, encoding, line_end, output limits and read_only. Never wrap settings in config. Connect/configure set session defaults; operation-level settings only affect that call. Connection-only/read_only settings remain restricted to connect/configure. Legacy nested config is accepted only for compatibility; top-level values take precedence.
 
@@ -52,7 +56,7 @@ host_key, known_hosts, default skip. insecure=false alone does not enable verifi
 {"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
 ```
 
-For SSH or Telnet targets, optional top-level ssh_jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. protocol selects the final target: SSH supports exec/stream; Telnet requires stream and uses the internal Telnet codec. The old jumps parameter is rejected. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Only SSH targets expose final target peer identity; Telnet targets never report a hop as their peer; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the chain to the SSH target or, for Telnet, the final SSH jump; this does not prove Telnet login/application readiness; TCP settings/backpressure apply to the first TCP socket.
+For SSH or Telnet targets, optional top-level ssh_jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Order example: local -> ssh_jumps[0] -> ssh_jumps[1] -> target. Errors identify 1-based hop_index (target is hop-count+1), host/port, from_host (logical configured previous host, first is local), stage and target. direct-tcpip supports SSH/Telnet stream; existing -L listener addresses can also be connected directly. No new listener-management tools. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. protocol selects the final target: SSH supports exec/stream; Telnet requires stream and uses the internal Telnet codec. The old jumps parameter is rejected. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Only SSH targets expose final target peer identity; Telnet targets never report a hop as their peer; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the chain to the SSH target or, for Telnet, the final SSH jump; this does not prove Telnet login/application readiness; TCP settings/backpressure apply to the first TCP socket.
 
 Example sess_connect:
 ```json
@@ -123,6 +127,10 @@ If the RPC budget expires first, return the task handle WITHOUT TERM and continu
 sess_task_wait/read. Only the configured completion-wait timeout can trigger term_on_timeout;
 it is not a background runtime timer, and collect_output=false still creates no runtime timer.
 
+## Output projection
+
+All collecting tools support strip_ansi=false by default, include_pattern and exclude_pattern (Go RE2, max 1024 bytes). ANSI removal precedes line filters; raw history and byte offsets are preserved. end_pattern matches the original decoded text before projection; exec still ignores end_pattern. Each projected page scans at most 64KiB raw bytes and may return scan_limit; continue with the same handle/session. Lines above 16KiB use bounded fragments (line_fragments=true); complete characters/rendered escapes stay indivisible. Filters return kept lines/fragments atomically: too-small output budget reports minimum_output_bytes. Filtered bytes advance the incremental cursor; empty projected output is not proof the device sent nothing. Counters filtered_bytes/filtered_lines/stripped_bytes describe projection, separate from dropped_bytes history loss. Incomplete lines wait for a line boundary or collection return condition; incomplete ANSI remains unread. view_incomplete on an oversized unfinished control sequence requires explicit raw inspection rather than repeated identical reads. To read raw retained history, set strip_ansi=false and both patterns empty. History remains subject to normal retention/eviction limits.
+
 ## Read-only observation
 
 read_only is a boolean session config, default false. Set it on connect or explicitly with
@@ -181,7 +189,11 @@ do not guarantee the console server broadcasts output or permits concurrent conn
   Early returns, uncertain startup and remaining output return handle. All executions retain
   bounded records discoverable through sess_task_list. There is no exec silence watchdog.
 
-Task operations (22 tools total):
+Exec startup defaults login=true: bash --login -c with noninteractive stdin EOF, no implicit PTY. Missing Bash fails without fallback or replay. Profiles may emit output/run initialization and do not necessarily load .bashrc. Optional env (max 128 string values, shell identifier keys) and cwd run AFTER profiles, before command; failed export/cd prevents the command. Values/paths are shell-quoted; env is audit-redacted. Task settings never persist to the session. login=false sends the original command only if cwd/env omitted; otherwise bash -c applies overrides without login initialization. Wire command including wrapping is subject to max_input_bytes. Do not disable login solely due to silence or retry a possibly started command.
+
+Every task_wait starts a fresh completion-wait budget. Collection returns wait_elapsed_ms; task records expose started_at/task_elapsed_ms (frozen on completion). total_timeout includes timeout_source rpc_budget/exec_wait/caller_deadline; read timeouts can report read_total. Only exec_wait timeout may attempt TERM. After rpc_budget, continue status/read/wait on the same handle, never resubmit; instance change errors call for list inspection.
+
+Task operations (24 tools total):
 - sess_task_list(session?): list retained tasks; no output consumption.
 - sess_task_status(handle): immediate state, exit information, more, latest signal; no consumption.
 - sess_task_wait(handle, exec_total_timeout_ms?, term_on_timeout?, ...settings?): completion wait plus incremental collection; uses exec_total_timeout_ms

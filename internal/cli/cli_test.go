@@ -40,6 +40,7 @@ func TestAuditRedaction(t *testing.T) {
 	defer a.Close()
 	if e = a.Record(map[string]any{"arguments": map[string]any{
 		"password": "password-secret", "key_passphrase": "key-secret", "command": "show version",
+		"env": map[string]any{"SECRET_VALUE": "env-secret-value"},
 		"ssh_jumps": []any{
 			map[string]any{"host": "jump1", "password": "jump-password-secret"},
 			map[string]any{"host": "jump2", "key_passphrase": "jump-passphrase-secret"},
@@ -51,7 +52,7 @@ func TestAuditRedaction(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if strings.Contains(string(b), "password-secret") || strings.Contains(string(b), "key-secret") || strings.Contains(string(b), "jump-passphrase-secret") || !strings.Contains(string(b), "show version") {
+	if strings.Contains(string(b), "password-secret") || strings.Contains(string(b), "key-secret") || strings.Contains(string(b), "jump-passphrase-secret") || strings.Contains(string(b), "env-secret-value") || !strings.Contains(string(b), "show version") {
 		t.Fatal(string(b))
 	}
 	var v any

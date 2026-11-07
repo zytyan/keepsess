@@ -1,3 +1,15 @@
+# 命名、实例诊断、exec 环境与输出投影
+
+- 新增 sess_rename/sess_task_rename，共 24 工具；connect/exec 的 name 是可变别名，稳定 sN/taskN ID 仍有效。会话名覆盖待连接预留，任务名在 exec 请求前原子预留，重复不发送；引用、配置、列表、关闭和重连支持别名。任务名进程内全局唯一，别名随保留记录释放，长期操作推荐稳定 ID。
+- 每进程 8 字符随机 instance_id，在 initialize._meta、connect/reconnect、列表和未知句柄错误显示；不增加 expected_instance_id，也不要求 sess_expect。未知句柄提示记录关闭/过期或实例变化、先 list 不重放。
+- task_wait 每次独立预算，新增 wait_elapsed_ms、started_at、task_elapsed_ms（完成后冻结）及 timeout_source。绑定层标记实际 RPC 截止，即使关闭 TERM 保留也能区分 rpc_budget/caller_deadline；只允许配置的 exec_wait 超时尝试 TERM。模拟预算耗尽后第二次 wait 收到新增输出并正常完成，确认只启动一次、不发送 TERM；未复现“沿用上次 deadline”的持久状态问题，不据此宣称已复现现场故障。
+- exec 默认 Bash 非交互登录 shell（login=true），仍默认 stdin EOF/无 PTY；profile 后应用已引用的 env/cwd，设置失败不执行 command，env 审计脱敏；login=false 且无 cwd/env 原样提交，否则 Bash 非登录包装，不重试或自动回退。真实 SSH 协议加本机 Bash 测试验证 login_shell、引号/特殊字符、cwd 失败和退出码；普通模拟器仅解包命令标签，不能冒充远端真实 Bash 验证。
+- 跳板错误新增 hop_index/host/port/from_host/stage/target 与近端到远端顺序说明；来源是配置逻辑主机而非出口 IP。read 同传 session/handle 时明确提示 exec 删除 session，stream 删除 handle；不静默忽略。现有 SSH/Telnet stream direct-tcpip 支持保留，没有新增 -L/-R/-D 监听管理。
+- strip_ansi/include_pattern/exclude_pattern 只投影返回值，保持原始历史和偏移，end_pattern 仍匹配解码原文。投影原始扫描每页 64KiB，长行约 16KiB 片段，过滤行整体返回；控制序列/字符分包、超时保留、history 独立投影、过滤空输出、扫描预算推进、过小页面及原始历史恢复均有测试。超长不完整 ANSI 或匹配截断控制序列返回 view_incomplete，提示显式 raw 检查；不虚构完整终端渲染。
+- 新增命名并发/待连接去重、MCP 新参数与实例诊断、结构化路由错误、env 审计脱敏测试；原交互测试改为等待实际回显，避免依赖 10ms 到达假设。Go 1.22.1 全量测试、race、go vet 及 CGO_ENABLED=0 三目标构建通过；两份 skill、README、CLI、MCP 和开发约束同步。未实测用户 QEMU/外部设备现场。
+
+---
+
 # ssh_jumps 与 SSH 跳板到 Telnet 目标
 
 - 跳板参数统一改名 ssh_jumps，schema/运行时均不接受旧 jumps（包括两者同时出现）。protocol 表示最终目标：SSH 支持 exec/stream，Telnet 仅 stream，复用内部 Telnet 实现；不自动发送目标登录凭据。

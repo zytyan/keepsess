@@ -191,7 +191,7 @@ func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Ch
 							return
 						}
 						code := uint32(0)
-						switch p.Command {
+						switch LoginPayload(p.Command) {
 						case "both":
 							_, _ = io.WriteString(ch, "stdout\n")
 							_, _ = io.WriteString(ch.Stderr(), "stderr\n")
@@ -216,7 +216,7 @@ func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Ch
 							}
 							return
 						default:
-							_, _ = io.WriteString(ch, p.Command+"\n")
+							_, _ = io.WriteString(ch, LoginPayload(p.Command)+"\n")
 						}
 						b := make([]byte, 4)
 						binary.BigEndian.PutUint32(b, code)
@@ -230,4 +230,14 @@ func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Ch
 		}
 	})
 	return addr, ssh.FingerprintSHA256(signer.PublicKey())
+}
+
+// LoginPayload decodes the single quoted Bash login wrapper for command simulators.
+// Custom raw exec handlers still receive the exact SSH command request.
+func LoginPayload(command string) string {
+	const prefix = "bash --login -c '"
+	if strings.HasPrefix(command, prefix) && strings.HasSuffix(command, "'") {
+		return strings.ReplaceAll(command[len(prefix):len(command)-1], "'\\''", "'")
+	}
+	return command
 }
