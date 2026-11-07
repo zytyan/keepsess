@@ -84,28 +84,30 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 | 工具 | 参数与用途 |
 |---|---|
-| sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、mode、config |
+| sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、jumps、mode 和顶层配置 |
 | sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
-| sess_configure | session、config；原子更新出现的字段，其余不变 |
+| sess_configure | session、顶层配置字段；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
-| sess_exec | session?、command、interactive?、pty?、collect_output?、config?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
-| sess_send_text | session 或 handle（二选一）、data、collect_output?、config?；发送文字并默认收集输出，不解析转义 |
+| sess_exec | session?、command、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
+| sess_send_text | session 或 handle（二选一）、data、collect_output?、其他顶层配置?；发送文字并默认收集输出，不解析转义 |
 | sess_send_escaped | 同上；显式解码一层转义再发送 |
 | sess_sendline_text | 同 text，追加一次配置的 line_end |
 | sess_sendline_escaped | 同 escaped，追加一次配置的 line_end |
-| sess_read_available | session 或 handle（二选一）、config?；立即读取未读数据，不等待 |
-| sess_read_until | session 或 handle（二选一）、config?；按匹配、超时等条件结束读取 |
-| sess_read_tail | session 或 handle（二选一）、lines?、config?；最后 N 行，默认 20，不移动增量游标 |
-| sess_read_history | session 或 handle（二选一）、offset?、config?；立即分页读取保留历史，不移动增量游标 |
+| sess_read_available | session 或 handle（二选一）、其他顶层配置?；立即读取未读数据，不等待 |
+| sess_read_until | session 或 handle（二选一）、其他顶层配置?；按匹配、超时等条件结束读取 |
+| sess_read_tail | session 或 handle（二选一）、lines?、其他顶层配置?；最后 N 行，默认 20，不移动增量游标 |
+| sess_read_history | session 或 handle（二选一）、offset?、其他顶层配置?；立即分页读取保留历史，不移动增量游标 |
 | sess_task_list | session?；列出保留任务，不消费输出 |
 | sess_task_status | handle；任务状态、退出信息和 stdin_open |
-| sess_task_wait | handle、config?；等待任务完成并收集增量输出 |
+| sess_task_wait | handle、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；等待任务完成并收集增量输出 |
 | sess_task_signal | handle、signal；请求 SSH 信号，不保证退出 |
 | sess_task_release | handle；释放已完成且无活动操作的任务记录 |
 | sess_task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
+
+所有工具的配置参数都直接写在顶层，例如 `sess_configure({"session":"s1","read_only":true})`，或 `sess_read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
@@ -117,8 +119,16 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配 SSH mode=ex
 {"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","mode":"exec"}
 ```
 
+SSH 可通过顶层 `jumps` 数组指定一个或多个跳板，顺序是本机 → jumps[0] → jumps[1] → 目标 host/port，最多 8 跳。每跳填写 host、username 和 password/keyfile，port 默认 22；key_passphrase、host_key、known_hosts、insecure 的含义与目标相同，逐跳独立认证和校验。跳板必须允许 SSH TCP 转发（direct-tcpip），不通过远端 shell 执行 ssh 命令。仅支持 SSH 目标，兼容目标的 exec 和 stream 模式。
+
 ```json
-{"protocol":"telnet","host":"switch.example","port":23,"config":{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000}}
+{"protocol":"ssh","host":"target.internal","port":22,"username":"target-user","keyfile":"/path/to/target_key","jumps":[{"host":"jump1.example","username":"jump-user","keyfile":"/path/to/jump1_key"},{"host":"jump2.internal","username":"jump-user","keyfile":"/path/to/jump2_key"}],"connect_timeout_ms":30000}
+```
+
+整条链路共用一个 connect_timeout_ms 预算（仍受 RPC 上限约束），失败或取消会关闭已建立的链路，不自动重试。sess_reconnect 私下复用整条跳板链与当前会话配置，保持句柄、不重放命令；close 释放链路与认证参数。SSH keepalive 探测目标且穿过全部跳板；TCP keepalive/排队反压测量本机到第一跳的 TCP 连接。connect/reconnect 的 peer 摘要仍描述最终目标；跳板认证参数不会进入结果或配置，审计中的密码/私钥口令逐跳脱敏。
+
+```json
+{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
 ```
 
 ### 显式重连
@@ -143,12 +153,12 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 
 ## 配置
 
-连接时 config、sess_configure.config 与操作的 config 使用同一套校验。未知字段、null、非法正则、超范围值整体拒绝，不部分生效。调用开始时快照配置；read_only 在实际写入前重新检查，其余配置修改不会影响当前调用。操作中的 config 不改变会话默认配置。
+所有工具的输入参数均位于顶层，不需要嵌套 `config`；connect、configure 与单次操作使用同一套配置校验。未知字段、null、非法正则、超范围值整体拒绝，不部分生效。调用开始时快照配置；read_only 在实际写入前重新检查，其余配置修改不会影响当前调用。单次操作的顶层配置不改变会话默认配置。
 
 | 配置项 | 默认值 | 语义 |
 |---|---|---|
 | read_only | false | 会话级输入保护，禁止 send、exec 及手动/自动信号；只能通过 connect/configure 设置，不能单次覆盖 |
-| connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入 config |
+| connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入配置字段 |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
 | session_idle_timeout_ms | 7200000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
 | read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |
@@ -170,22 +180,22 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 数字可传整数或只包含整数、四则运算、括号的字符串，例如：
 
 ```json
-{"session":"s1","config":{"session_idle_timeout_ms":"2*60*60*1000","max_output_bytes":"64*1024","read_idle_timeout_ms":500}}
+{"session_idle_timeout_ms":"2*60*60*1000","max_output_bytes":"64*1024","read_idle_timeout_ms":500,"session":"s1"}
 ```
 
 不执行 eval、函数调用或变量；除法必须得到整数，表达式长度与数值有界。read_only、connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms、ssh_keepalive_ms、ssh_keepalive_timeout_ms 是会话/连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
 
 ### 多人串口旁观
 
-连接时可设置 `config: {"read_only":true}`，也可显式切换：
+连接时可在顶层设置 `"read_only":true`，也可显式切换：
 
 ```json
-{"session":"s1","config":{"read_only":true}}
+{"read_only":true,"session":"s1"}
 ```
 
 上例用于 sess_configure。开启后四个 send 工具与 sess_exec 返回 `input_state=not_sent`、`error` 以 `read_only:` 开头，不发送应用输入、不消费输出；手动信号被拒绝，自动 TERM 报 skipped_read_only；读取、查看配置、列出会话、关闭连接仍可用。SSH/Telnet 协议协商与系统 keepalive 不受影响。
 
-read_only 不能在任意操作的 config 中覆盖，无论 true 或 false 都拒绝。修改 read_only 时若应用写入正在进行，整份 configure 返回 busy 且不修改任何配置；待写入结束后显式重试。开启成功后，先前操作即使持有旧配置，也必须通过写入前的最新只读检查。不会停止已启动的远端命令，其后续输出仍可读取。
+read_only 不能在任意操作中覆盖，无论 true 或 false 都拒绝。修改 read_only 时若应用写入正在进行，整份 configure 返回 busy 且不修改任何配置；待写入结束后显式重试。开启成功后，先前操作即使持有旧配置，也必须通过写入前的最新只读检查。不会停止已启动的远端命令，其后续输出仍可读取。
 
 这是防误操作开关，AI 仍可通过 sess_configure 关闭，不是权限隔离。每个 keepsess 连接有独立的读取游标；串口服务器能否广播输出、是否抢占连接取决于服务端，read_only 不提供多人广播或输入仲裁。
 
@@ -200,7 +210,7 @@ read_only 不能在任意操作的 config 中覆盖，无论 true 或 false 都�
 拿到 task handle 后，依次调用 sess_read_until 观察提示，使用四个 send 工具之一输入；例如 sess_sendline_text：
 
 ```json
-{"handle":"task1","data":"bt","config":{"line_end":"\\n","read_idle_timeout_ms":500}}
+{"line_end":"\\n","read_idle_timeout_ms":500,"handle":"task1","data":"bt"}
 ```
 
 interactive=true 在命令启动前保留 stdin，不自动修改 collect_output 或超时策略。通常使用 collect_output=false 启动，再按 handle 收发；同步收集期间也允许其他调用 collect_output=false 向同一任务写入。每任务输入互斥、输出读取互斥，读写可并行；不同任务输入独立。启动时未开启 stdin 的任务不能事后切换。
@@ -229,7 +239,7 @@ sess_task_close_stdin({"handle":"task1"}) 发送 SSH stdin EOF，保留输出和
 sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、不归一化。空 data 合法，因此空 sendline 就是发送一次结束符；分页空格、Ctrl-C 等应使用不追加结尾的 send。
 
 ```json
-{"session":"s1","data":"display version","config":{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$"}}
+{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$","session":"s1","data":"display version"}
 ```
 
 上例用于 sess_sendline_text；提示符须按观察结果配置，不能把正文里的括号猜成命令完成。没有自动分页、自动登录、自动 commit/save 或自动确认。
@@ -257,7 +267,7 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 不要因空输出重发用户名/密码、换 ID 重试、猜测改 CR/LF 或额外按回车。回车是新输入，可能提交空密码或触发上一命令回放。正常发送后收集静默 500ms 返回不代表执行失败；可改用一次有界、只读等待，而不是多轮空轮询：
 
 ```json
-{"session":"s1","config":{"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$"}}
+{"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$","session":"s1"}
 ```
 
 上例用于 sess_read_until；仅示意等待设备提示符、重新询问密码或失败文本，正则必须按实际观察到的设备输出配置。end_pattern 匹配只是观察到文本，旧未读内容或 console 回放也可能命中，不能把它当作本次密码认证的协议确认。若等待后仍无输出，应报告“本地写入已完成，远端是否收到、是否通过认证和 shell 是否就绪仍未知”，再检查端点/console 服务、已知结束符要求或请求现场证据。不要无限轮询或重连后自动重放凭据。
@@ -291,12 +301,14 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 ## SSH exec 与连接保护
 
-**sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次 config，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
+**sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次顶层参数，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
+
+`exec_total_timeout_ms` 和 `term_on_timeout` 是 `sess_exec` / `sess_task_wait` 的顶层参数，只影响本次调用。会话默认值仍通过 connect/configure 的顶层参数设置。旧的嵌套 config 调用仅为兼容保留，不再出现在工具 schema；同时提供时顶层值优先。
 
 例如，下面的 sess_exec 最多等待协议完成 60 秒，不改变会话默认设置：
 
 ```json
-{"session":"s1","command":"sleep 2; uname -a","config":{"exec_total_timeout_ms":60000}}
+{"session":"s1","command":"sleep 2; uname -a","exec_total_timeout_ms":60000,"term_on_timeout":false}
 ```
 
 `collect_output=true`（默认）在同一连接内只允许一个同步 exec 调用，竞争立即返回 busy/not_sent，不排队。同步调用返回时释放名额，包括超时、取消和 output_limit；旧程序仍运行也不阻止下一次同步调用。`collect_output=false` 启动后返回 `handle: "task22"` 与发送回执，不等完成，不启动后台运行计时器；异步任务彼此可并行，也可与同步任务并行。资源上限与服务器 channel 限制仍可能拒绝新任务。
@@ -315,7 +327,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 sess_exec({"session":"s1","command":"long-job","collect_output":false})
 sess_task_status({"handle":"task22"})
 sess_read_available({"handle":"task22"})
-sess_task_wait({"handle":"task22","config":{"exec_total_timeout_ms":10000,"term_on_timeout":false}})
+sess_task_wait({"handle":"task22","exec_total_timeout_ms":10000,"term_on_timeout":false})
 sess_task_signal({"handle":"task22","signal":"TERM"})
 sess_task_wait({"handle":"task22"})
 sess_task_release({"handle":"task22"})

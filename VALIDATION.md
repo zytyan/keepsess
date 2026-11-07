@@ -1,3 +1,13 @@
+# 全部参数扁平化与 SSH 跳板
+
+- 22 个工具的输入 schema 均不再暴露 config 对象；原配置字段在适用工具顶层展开，连接级/read_only 参数只在 connect/configure 暴露。旧嵌套调用仅兼容接收，顶层优先；结果中的 config 仍表示当前会话配置。会话默认值与操作覆盖不互相污染。
+- MCP stdio 覆盖顶层 connect/configure、四种 send、四种 read、exec/task_wait 参数、表达式/false/非法值、旧调用优先级、只读拒绝和配置持久性；schema 遍历检查无 config 参数。
+- SSH jumps 为近端在前的最多 8 跳 direct-tcpip 链，每跳独立认证/主机校验，默认端口 22；整链共用连接超时，根 TCP 关闭可中断转发与内层握手。显式 reconnect 复用私有参数，close 释放整链。
+- 真实 SSH 协议模拟器覆盖单跳/双跳的 exec 双流与 stream、重连、调用方参数隔离、密码/加密私钥、跳板与目标主机密钥失败、第一/第二跳认证失败、转发拒绝、卡住的转发/握手及取消、close_all 取消双跳无句柄复活、断开保留未知结果且重连不重放、失败链路释放。审计验证数组内跳板密码/口令递归脱敏。未实测外部真实跳板主机。
+- Go 1.22.1 全量测试、race、go vet 通过；CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 构建通过。两份 skill 内容一致，README/CLI/MCP/现场说明及开发约束已同步。
+
+---
+
 # exec 唯一会话推断
 
 - sess_exec 的 session 改为可选，仅在恰好保留一个会话时推断；断开和 stream 会话均参与计数，不按模式、在线状态或最近连接筛选。显式无效 session 不回退，显式空值/null 拒绝，唯一断开会话不自动重连。

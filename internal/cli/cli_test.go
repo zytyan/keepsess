@@ -38,14 +38,20 @@ func TestAuditRedaction(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer a.Close()
-	if e = a.Record(map[string]any{"arguments": map[string]any{"password": "password-secret", "key_passphrase": "key-secret", "command": "show version"}}); e != nil {
+	if e = a.Record(map[string]any{"arguments": map[string]any{
+		"password": "password-secret", "key_passphrase": "key-secret", "command": "show version",
+		"jumps": []any{
+			map[string]any{"host": "jump1", "password": "jump-password-secret"},
+			map[string]any{"host": "jump2", "key_passphrase": "jump-passphrase-secret"},
+		},
+	}}); e != nil {
 		t.Fatal(e)
 	}
 	b, e := os.ReadFile(p)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if strings.Contains(string(b), "password-secret") || strings.Contains(string(b), "key-secret") || !strings.Contains(string(b), "show version") {
+	if strings.Contains(string(b), "password-secret") || strings.Contains(string(b), "key-secret") || strings.Contains(string(b), "jump-passphrase-secret") || !strings.Contains(string(b), "show version") {
 		t.Fatal(string(b))
 	}
 	var v any

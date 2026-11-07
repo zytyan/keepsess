@@ -39,8 +39,10 @@ sess_exec 仅在恰好保留一个会话时可省略 session；多会话须明�
 mode=stream 调用 exec 直接报错，使用 sendline_text/escaped。
 持久终端 shell、console 登录和全部 Telnet 使用 mode=stream；交互 exec 按 task handle send/read。
 sess_task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。
-读取默认总时限 30000ms、静默时限 500ms；config 可持久设置或按调用覆盖。
-exec/task_wait 使用 exec_total_timeout_ms（默认 120000ms，最高 300000ms）；term_on_timeout 默认 true，超时尝试 TERM，不保证退出。
+读取默认总时限 30000ms、静默时限 500ms；所有工具参数均在顶层，无需 config 嵌套。
+connect/configure 设置会话默认值；操作顶层配置仅覆盖本次调用。
+SSH connect 可用 jumps 数组指定最多 8 级跳板（近端在前），每跳独立认证/主机校验，整链共用连接超时。
+exec/task_wait 顶层参数 exec_total_timeout_ms（默认 120000ms，最高 300000ms）；term_on_timeout 默认 true，超时尝试 TERM，不保证退出。
 同步调用互斥，返回即释放名额；异步返回 taskN，可与同步/异步并行，无后台运行时限。
 正常同步完成且输出返回完毕时省略 handle；exec 后续 read 必须用 handle，stream 用 session。
 普通 read 超时、取消等待和输出上限不发 TERM；exec 不再因 110s 无输出关闭。

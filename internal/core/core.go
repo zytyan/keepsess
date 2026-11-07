@@ -24,6 +24,7 @@ const (
 )
 
 type Options struct {
+	Jumps         []SSHJump   `json:"jumps,omitempty"`
 	Protocol      string      `json:"protocol"`
 	Host          string      `json:"host"`
 	Port          int         `json:"port"`
@@ -36,6 +37,26 @@ type Options struct {
 	Insecure      bool        `json:"insecure,omitempty"`
 	Mode          string      `json:"mode,omitempty"`
 	Config        ConfigPatch `json:"config,omitempty"`
+}
+
+// SSHJump describes one forwarding hop, ordered from the local machine outward.
+// Authentication is private session state, never part of a tool result.
+type SSHJump struct {
+	Host          string `json:"host"`
+	Port          int    `json:"port,omitempty"`
+	Username      string `json:"username"`
+	Password      string `json:"password,omitempty"`
+	Keyfile       string `json:"keyfile,omitempty"`
+	KeyPassphrase string `json:"key_passphrase,omitempty"`
+	KnownHosts    string `json:"known_hosts,omitempty"`
+	HostKey       string `json:"host_key,omitempty"`
+	Insecure      bool   `json:"insecure,omitempty"`
+}
+
+func (j SSHJump) options() Options {
+	return Options{Host: j.Host, Port: j.Port, Username: j.Username, Password: j.Password,
+		Keyfile: j.Keyfile, KeyPassphrase: j.KeyPassphrase, KnownHosts: j.KnownHosts,
+		HostKey: j.HostKey, Insecure: j.Insecure}
 }
 
 func (o Options) address() string { return net.JoinHostPort(o.Host, strconv.Itoa(o.Port)) }
@@ -186,6 +207,20 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	}
 	if o.Host == "" || o.Port < 1 || o.Port > 65535 {
 		return Result{}, errors.New("host and port (1..65535) required")
+	}
+	if len(o.Jumps) > 8 || (len(o.Jumps) != 0 && o.Protocol != "ssh") {
+		return Result{}, errors.New("jumps supports at most 8 SSH hops and requires protocol=ssh")
+	}
+	// Own the slice before defaulting or retaining it for explicit reconnect.
+	o.Jumps = append([]SSHJump(nil), o.Jumps...)
+	for i := range o.Jumps {
+		j := &o.Jumps[i]
+		if j.Port == 0 {
+			j.Port = 22
+		}
+		if j.Host == "" || j.Port < 1 || j.Port > 65535 || j.Username == "" || (j.Password == "" && j.Keyfile == "") {
+			return Result{}, fmt.Errorf("SSH jump %d requires host, port 1..65535 (default 22), username and password or keyfile", i+1)
+		}
 	}
 	if o.Mode == "" {
 		o.Mode = "exec"

@@ -31,6 +31,8 @@ All 22 tools are discovered through MCP tools/list, not individually registered.
 
 ## Connect and configure
 
+All tool input parameters are top-level, including timeouts, encoding, line_end, output limits and read_only. Never wrap settings in config. Connect/configure set session defaults; operation-level settings only affect that call. Connection-only/read_only settings remain restricted to connect/configure. Legacy nested config is accepted only for compatibility; top-level values take precedence.
+
 `sess_connect` declares protocol, host and port in inputSchema.required. For SSH, conditional
 required also requires username and at least one of password/keyfile (both are allowed),
 and optionally known_hosts or pinned host_key; mode defaults to exec. Choose mode="stream" for network
@@ -47,15 +49,22 @@ insecure=true explicitly skips verification even with verification fields. Prior
 host_key, known_hosts, default skip. insecure=false alone does not enable verification.
 
 ```json
-{"protocol":"telnet","host":"switch.example","port":23,"config":{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000}}
+{"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
 ```
 
-`sess_configure(session, config)` atomically updates only supplied fields. `sess_get_config`
+For SSH targets, optional top-level jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. Supports target exec and stream, never Telnet. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Results expose only final target peer identity; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the full chain; TCP settings/backpressure apply to the first TCP socket.
+
+Example sess_connect:
+```json
+{"protocol":"ssh","host":"target.internal","port":22,"username":"target-user","keyfile":"/path/to/target_key","jumps":[{"host":"jump1.example","username":"jump-user","keyfile":"/path/to/jump1_key"},{"host":"jump2.internal","username":"jump-user","keyfile":"/path/to/jump2_key"}],"connect_timeout_ms":30000}
+```
+
+`sess_configure(session, ...settings)` atomically updates only supplied fields. `sess_get_config`
 returns effective values, descriptions, units and capabilities, without credentials. All send,
-exec and read tools accept a config object for that call only; active operations retain their
+exec and read tools accept top-level settings for that call only; active operations retain their
 snapshot except the live read_only guard, which is rechecked before writing. read_only, connect_timeout_ms, session_idle_timeout_ms, tcp_keepalive_ms, ssh_keepalive_ms and ssh_keepalive_timeout_ms cannot be overridden
 per operation. Changing connect_timeout on an established session stores it for the next
-sess_reconnect; explicitly pass that config again for a new sess_connect.
+sess_reconnect; explicitly pass those settings again for a new sess_connect.
 
 Defaults: read total 30000ms; read idle 500ms; exec total 120000ms; connect/write 10000ms; unused session 7200000ms;
 TCP keepalive 15000ms; max input 4096 bytes; max output 65536 bytes; encoding utf-8; end_pattern
@@ -112,8 +121,8 @@ it is not a background runtime timer, and collect_output=false still creates no 
 ## Read-only observation
 
 read_only is a boolean session config, default false. Set it on connect or explicitly with
-sess_configure: {"session":"s1","config":{"read_only":true}}. It cannot be overridden in
-ANY operation's config (true and false are both rejected). When enabled, all four send tools
+sess_configure: {"read_only":true,"session":"s1"}. It cannot be overridden in
+ANY operation (true and false are both rejected). When enabled, all four send tools
 and sess_exec return input_state=not_sent with error starting "read_only:"; no application
 input is written and no output is consumed. Reads, get_config, list and close remain available.
 Manual signals are rejected and automatic timeout TERM reports skipped_read_only. Protocol negotiation and TCP keepalive continue normally.
@@ -137,7 +146,7 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 
 
 - For sess_exec, session may be omitted: infer it only with exactly one retained session, counting disconnected and stream sessions too. No sessions: connect first. Multiple sessions: specify session explicitly; never select by connectivity, mode or recency. A disconnected sole session requires explicit reconnect. Explicit invalid sessions never fall back. Results retain the actual session. Task tools still require handle; task_list() still lists all tasks.
-- `sess_exec(command, session?, config?)`: **SSH mode=exec only**, with stdin EOF by default.
+- `sess_exec(command, session?, exec_total_timeout_ms?, term_on_timeout?, ...settings?)`: **SSH mode=exec only**, with stdin EOF by default.
   SSH mode=stream and all Telnet sessions immediately return a tool error without sending
   input; there is no fallback to a shell. Use sess_sendline_text/sess_sendline_escaped for
   interactive streams, never probe the same command with exec first. Uses a fresh SSH channel on the
@@ -145,10 +154,11 @@ do not guarantee the console server broadcasts output or permits concurrent conn
   exit status determine completion, never text markers. If running=true, read the existing
   operation; do not resubmit. Missing exit status is an unknown outcome with warning and no
   exit_code; transport remains usable. exec_finish means channel completion, not success.
+  Use top-level exec_total_timeout_ms and term_on_timeout for per-call completion waiting. They override session defaults and legacy nested config values without changing session config.
   **sess_exec ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern**, from BOTH
   persistent and per-call config. It waits on independent exec_total_timeout_ms (default 120000,
   range 1..300000), measured from collection after command startup; startup still has
-  write_timeout_ms and the whole RPC cap remains 115s. Set config.exec_total_timeout_ms for a
+  write_timeout_ms and the whole RPC cap remains 115s. Set top-level exec_total_timeout_ms for a
   different execution wait, not a read timeout. Quiet commands and prompt-like text must not
   end the exec wait. collect_output=false returns a process-local task handle (task1, task22, ...)
   after startup, without an execution wait or background runtime timer. Async tasks may run
@@ -169,7 +179,7 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 Task operations (22 tools total):
 - sess_task_list(session?): list retained tasks; no output consumption.
 - sess_task_status(handle): immediate state, exit information, more, latest signal; no consumption.
-- sess_task_wait(handle, config?): completion wait plus incremental collection; uses exec_total_timeout_ms
+- sess_task_wait(handle, exec_total_timeout_ms?, term_on_timeout?, ...settings?): completion wait plus incremental collection; uses exec_total_timeout_ms
   and term_on_timeout, ignoring read timeouts/patterns. Never launches input or takes the sync exec slot.
 - sess_task_signal(handle, signal): bounded SSH signal, e.g. TERM/INT/KILL (without SIG prefix).
   read_only blocks manual and automatic signals. request_state is sent/not_sent/unknown,
@@ -222,7 +232,7 @@ as UTF-8 plus byte escapes: SSH defaults \r, Telnet \r\n. Use sess_send_text/ses
 or controls that must not append an Enter. Never silently change raw bytes to repair CRLF.
 
 ```json
-{"session":"s1","data":"display version","config":{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$"}}
+{"end_pattern":"(?m)^<[^>\r\n]+>\\s*$","session":"s1","data":"display version"}
 ```
 
 Use the above with sess_sendline_text. Supply an observed prompt regex, not a guessed vendor
@@ -240,7 +250,7 @@ For GDB or another interactive process, opt in BEFORE startup:
 ```
 
 Read the returned handle's prompt, then use any of the four send tools with handle INSTEAD OF
-session. Example sess_sendline_text({"handle":"task1","data":"bt","config":{"line_end":"\\n"}}).
+session. Example sess_sendline_text({"line_end":"\\n","handle":"task1","data":"bt"}).
 interactive does not change collection or timeout defaults. Prefer collect_output=false for
 startup; synchronous collection may also receive concurrent collect_output=false input.
 Task input has its own busy writer guard; output has a separate reader guard. Raw/escaped
@@ -292,7 +302,7 @@ an empty password or replay a command. Prefer one bounded read with no input, an
 prompt/failure regex, and idle timeout disabled when a quiet device needs more time:
 
 ```json
-{"session":"s1","config":{"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$"}}
+{"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$","session":"s1"}
 ```
 
 Use this with sess_read_until; the regex is illustrative and must match the actual device's

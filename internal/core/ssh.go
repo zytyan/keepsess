@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -13,9 +14,9 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-func (s *Session) connectSSH(ctx context.Context, o Options) error {
+func sshClientConfig(o Options) (*ssh.ClientConfig, *string, error) {
 	if o.Username == "" {
-		return errors.New("SSH user is required")
+		return nil, nil, errors.New("SSH user is required")
 	}
 	var host ssh.HostKeyCallback
 	switch {
@@ -32,7 +33,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		var e error
 		host, e = knownhosts.New(o.KnownHosts)
 		if e != nil {
-			return e
+			return nil, nil, e
 		}
 	default:
 		host = ssh.InsecureIgnoreHostKey()
@@ -51,7 +52,7 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	if o.Keyfile != "" {
 		b, e := os.ReadFile(o.Keyfile)
 		if e != nil {
-			return e
+			return nil, nil, e
 		}
 		var key ssh.Signer
 		if o.KeyPassphrase != "" {
@@ -60,17 +61,43 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 			key, e = ssh.ParsePrivateKey(b)
 		}
 		if e != nil {
-			return e
+			return nil, nil, e
 		}
 		auth = append(auth, ssh.PublicKeys(key))
 	}
 	if len(auth) == 0 {
-		return errors.New("SSH password or key_file required")
+		return nil, nil, errors.New("SSH password or key_file required")
 	}
-	c, e := (&net.Dialer{Timeout: s.config.Duration(s.config.ConnectTimeoutMS), KeepAlive: s.keepalivePeriod()}).DialContext(ctx, "tcp", o.address())
+	return &ssh.ClientConfig{User: o.Username, Auth: auth, HostKeyCallback: host, Timeout: IOLimit}, &fingerprint, nil
+}
+
+func (s *Session) connectSSH(ctx context.Context, o Options) error {
+	endpoints := make([]Options, 0, len(o.Jumps)+1)
+	for _, jump := range o.Jumps {
+		endpoints = append(endpoints, jump.options())
+	}
+	endpoints = append(endpoints, o)
+	configs := make([]*ssh.ClientConfig, len(endpoints))
+	fingerprints := make([]*string, len(endpoints))
+	label := func(i int) string {
+		if i < len(o.Jumps) {
+			return fmt.Sprintf("SSH jump %d", i+1)
+		}
+		return "SSH target"
+	}
+	for i, endpoint := range endpoints {
+		var err error
+		configs[i], fingerprints[i], err = sshClientConfig(endpoint)
+		if err != nil {
+			return fmt.Errorf("%s: %w", label(i), err)
+		}
+	}
+	c, e := (&net.Dialer{Timeout: s.config.Duration(s.config.ConnectTimeoutMS), KeepAlive: s.keepalivePeriod()}).DialContext(ctx, "tcp", endpoints[0].address())
 	if e != nil {
-		return e
+		return fmt.Errorf("%s: %w", label(0), e)
 	}
+	// The first TCP socket owns the whole chain. Closing it interrupts forwarding,
+	// every nested handshake, channel setup and write, including a stalled hop.
 	s.closer = c
 	s.tcp = c.(*net.TCPConn)
 	if e = s.setKeepalive(s.config.TCPKeepaliveMS); e != nil {
@@ -81,17 +108,27 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		deadline = d
 	}
 	_ = c.SetDeadline(deadline)
-	// Closing the raw socket interrupts handshake, channel setup, writes and Close.
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
-	cc, chans, reqs, e := ssh.NewClientConn(c, o.address(), &ssh.ClientConfig{User: o.Username, Auth: auth, HostKeyCallback: host, Timeout: IOLimit})
-	if e != nil {
-		return e
+	var client *ssh.Client
+	var connection net.Conn = c
+	for i, endpoint := range endpoints {
+		if i > 0 {
+			connection, e = client.DialContext(ctx, "tcp", endpoint.address())
+			if e != nil {
+				return fmt.Errorf("%s forwarding to %s: %w", label(i-1), label(i), e)
+			}
+		}
+		cc, chans, reqs, err := ssh.NewClientConn(connection, endpoint.address(), configs[i])
+		if err != nil {
+			return fmt.Errorf("%s handshake: %w", label(i), err)
+		}
+		client = ssh.NewClient(cc, chans, reqs)
 	}
-	client := ssh.NewClient(cc, chans, reqs)
+	fingerprint := *fingerprints[len(fingerprints)-1]
 	s.mu.Lock()
 	changed := s.peer != nil && s.peer.HostKey != "" && s.peer.HostKey != fingerprint
-	s.peer = &PeerIdentity{Server: compactSSHVersion(cc.ServerVersion()), HostKey: fingerprint, HostKeyChanged: changed}
+	s.peer = &PeerIdentity{Server: compactSSHVersion(client.ServerVersion()), HostKey: fingerprint, HostKeyChanged: changed}
 	s.mu.Unlock()
 	if s.mode == "stream" {
 		sh, e := client.NewSession()

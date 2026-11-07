@@ -2,7 +2,7 @@
 
 当前可调用的 22 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
 
-0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode/config；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。普通 stream 空闲回收独立为 30min，可禁用。
+0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode 及其他顶层配置参数；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。普通 stream 空闲回收独立为 30min，可禁用。
 
 输入提供 raw/escaped 和是否追加 line_end 的四种组合。escaped 显式处理模型经过 agent 承载的可见转义，编码文字与直接字节区分；不把错误字节简单归因于模型不了解 JSON。输入和输出不建立关联，不再接受 input_id，也不自动重发。使用 sent/not_sent/unknown 和已确认写入字节数判断是否可能已执行。
 

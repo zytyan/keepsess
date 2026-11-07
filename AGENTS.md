@@ -35,3 +35,6 @@
 - 输出默认分页 64KiB，max_output_bytes 最大 512KiB；历史仍有界。命令完成等待默认 120s、最高 300s，RPC 仍小于 2min；RPC 预算先到只返回 handle、不发 TERM，配置的完成等待超时才适用 term_on_timeout。
 
 - interactive/pty 仅 exec 启动参数，默认 false；普通 stdin EOF 行为保持，已启动任务不能补开。四种 send 的 session（stream）与 handle（interactive exec）二选一；task_close_stdin 发送 SSH EOF、幂等、不消费输出，不以 Ctrl-D 字节代替。任务输入受当前 read_only、编码/上限/反压/写超时保护，每任务单写者与独立读者可并行；写入中改只读 busy，卡住/取消关闭共享 transport 报未知。PTY 影响行规程与双流，不自动更改收集/超时配置。
+
+- 所有 MCP 工具配置输入均在顶层，schema 不再暴露 config 对象；旧嵌套 config 仅兼容接收，顶层优先。connect/configure 修改会话默认值，操作参数仅本次覆盖；连接级/read_only 限制保持。结果中的 config 继续用于展示。
+- SSH connect 支持 jumps 数组，近端在前，最多 8 跳，跳板端口默认 22；每跳独立认证/主机校验，使用 x/crypto/ssh direct-tcpip，不执行远端 ssh 命令。整链共享 connect_timeout_ms，取消/失败关闭链路；重连私下复用完整链路，不重放。跳板凭据不进入结果/配置，审计递归脱敏；Telnet 不接受 jumps。

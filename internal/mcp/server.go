@@ -80,7 +80,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 	}
 	props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
 	for k := range keys {
-		if _, ok := props[k]; !ok {
+		if _, ok := props[k]; !ok && !(k == "config" && props["encoding"] != nil) {
 			return toolResult(nil, fmt.Errorf("unknown argument %q for %s", k, args.Name))
 		}
 	}
@@ -110,6 +110,24 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		if e := s.Audit.Record(record); e != nil {
 			return toolResult(nil, fmt.Errorf("audit unavailable: %w", e))
 		}
+	}
+	// Public tool arguments are flat. Preserve legacy nested config only at the
+	// binding boundary; explicit top-level values win, without mutating defaults.
+	if props["encoding"] != nil {
+		patch := core.ConfigPatch{}
+		if raw, ok := keys["config"]; ok {
+			if err := json.Unmarshal(raw, &patch); err != nil || patch == nil {
+				return toolResult(nil, errors.New("legacy config must be an object; supply configuration parameters at the top level"))
+			}
+		}
+		for k := range core.ConfigDescriptions() {
+			if raw, ok := keys[k]; ok {
+				patch[k] = raw
+				delete(keys, k)
+			}
+		}
+		keys["config"], _ = json.Marshal(patch)
+		args.Arguments, _ = json.Marshal(keys)
 	}
 	switch args.Name {
 	case "sess_connect":
@@ -211,6 +229,17 @@ func buildDefinitions() map[string]map[string]any {
 		return map[string]any{"session": str("Short handle returned by sess_connect, e.g. s1. Always target an explicit session.")}
 	}
 	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}}, "host": str("Hostname or IP; IPv6 without brackets"), "port": integerSchema("TCP port", 1, 65535), "username": str("SSH username"), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("Local SSH private key path"), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Optional local known_hosts path enables verification; never automatically discovered or written. Used unless host_key or insecure=true takes precedence."), "host_key": str("Optional pinned SHA256 SSH host-key fingerprint enables verification; takes precedence over known_hosts unless insecure=true."), "insecure": map[string]any{"type": "boolean", "description": "Compatibility flag: true skips verification even when host_key/known_hosts is supplied. By default verification is skipped unless those fields are supplied; false alone does not enable it."}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec for independent commands; explicit exec interactive=true supports standalone interactive programs. Use stream for persistent terminal shells, console logins and network devices. Telnet always stream; never use sess_exec there."}, "config": configSchema(false)}
+	jump := map[string]any{}
+	for _, name := range []string{"host", "port", "username", "password", "keyfile", "key_passphrase", "known_hosts", "host_key", "insecure"} {
+		jump[name] = connect[name]
+	}
+	jump["port"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 65535, "default": 22}
+	jumpSchema := schema(jump, "host", "username")
+	jumpSchema["anyOf"] = []any{
+		map[string]any{"required": []string{"password"}, "properties": map[string]any{"password": map[string]any{"minLength": 1}}},
+		map[string]any{"required": []string{"keyfile"}, "properties": map[string]any{"keyfile": map[string]any{"minLength": 1}}},
+	}
+	connect["jumps"] = map[string]any{"type": "array", "maxItems": 8, "items": jumpSchema, "description": "SSH-only forwarding chain, first hop nearest this client, then subsequent hops, then the target host/port. Each hop authenticates and verifies its host key independently with the same precedence as the target. Port defaults 22. Entire chain shares connect_timeout_ms. No shell commands or automatic retries. Reconnect reuses the private chain."}
 	add("sess_connect", "Create a persistent connection and short handle; no terminal output consumed. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.", connect, "protocol", "host", "port")
 	// SSH credentials are conditionally required; Telnet login uses stream input.
 	// anyOf permits password and keyfile together, matching SSH authentication.
@@ -228,7 +257,7 @@ func buildDefinitions() map[string]map[string]any {
 	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
 	p := session()
 	p["config"] = configSchema(false)
-	add("sess_configure", "Atomically patch session settings; omitted fields unchanged. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
+	add("sess_configure", "Atomically patch top-level session settings; omitted fields unchanged. No nested config needed. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
 	add("sess_get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
 	add("sess_list", "List process-local sessions and transport/exec state.", map[string]any{})
 	add("sess_close", "Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
@@ -244,7 +273,7 @@ func buildDefinitions() map[string]map[string]any {
 			desc = "Immediately inspect task state, exit_code/exit_signal/warning, unread output (more), interactive/pty/stdin_open, and latest signal request. Does not consume output. Missing exit status is unknown outcome even if state=finished."
 		case "wait":
 			p["config"] = configSchema(true)
-			desc = "Wait for this task's completion and consume incremental output. Uses exec_total_timeout_ms and term_on_timeout, ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Configured completion timeout attempts TERM by default and retains handle; RPC budget expiry does not signal. Cancellation/output_limit do not signal. One reader per task."
+			desc = "Wait for this task's completion and consume incremental output. Uses top-level exec_total_timeout_ms and term_on_timeout (override session defaults and legacy config values), ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Configured completion timeout attempts TERM by default and retains handle; RPC budget expiry does not signal. Cancellation/output_limit do not signal. One reader per task."
 		case "signal":
 			p["signal"] = map[string]any{"type": "string", "enum": []string{"ABRT", "ALRM", "FPE", "HUP", "ILL", "INT", "KILL", "PIPE", "QUIT", "SEGV", "TERM", "USR1", "USR2"}, "description": "SSH signal name without SIG prefix. sent confirms only the request write, not delivery or program exit. read_only blocks signals."}
 			required = append(required, "signal")
@@ -266,7 +295,7 @@ func buildDefinitions() map[string]map[string]any {
 			p["command"] = str("One SSH exec command; shell state does not persist across commands.")
 			p["interactive"] = map[string]any{"type": "boolean", "default": false, "description": "Explicitly retain task stdin before startup; send tools can then target its handle. Default false delivers stdin EOF. Cannot enable after startup. Does not change collection or timeout defaults."}
 			p["pty"] = map[string]any{"type": "boolean", "default": false, "description": "Request vt100 PTY before exec startup; requires interactive=true. May change echo, line endings and stdout/stderr separation."}
-			desc = "Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
+			desc = "Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
 		case "send_text", "sendline_text":
 			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
 			required = append(required, "data")
@@ -304,6 +333,24 @@ func buildDefinitions() map[string]map[string]any {
 		add("sess_"+kind, desc, p, required...)
 		if strings.HasPrefix(kind, "read_") || strings.HasPrefix(kind, "send") {
 			defs["sess_"+kind]["inputSchema"].(map[string]any)["oneOf"] = []any{map[string]any{"required": []string{"session"}}, map[string]any{"required": []string{"handle"}}}
+		}
+	}
+	// Present one flat parameter namespace to MCP clients for every tool.
+	for _, def := range defs {
+		input := def["inputSchema"].(map[string]any)
+		props := input["properties"].(map[string]any)
+		if nested, ok := props["config"]; ok {
+			for key, field := range nested.(map[string]any)["properties"].(map[string]any) {
+				props[key] = field
+			}
+			delete(props, "config")
+			required := []string{}
+			for _, key := range input["required"].([]string) {
+				if key != "config" {
+					required = append(required, key)
+				}
+			}
+			input["required"] = required
 		}
 	}
 	return defs
@@ -515,7 +562,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec on SSH mode=exec; session may be omitted only with exactly one retained session. stdin defaults EOF. Explicit interactive=true retains stdin; optional pty=true requires interactive. Send/read target its task handle; task_close_stdin sends EOF. Persistent stream shells, console login and Telnet still use stream send/read. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 65536 bytes (maximum 524288). sess_exec/task_wait use independent exec_total_timeout_ms (120000ms, max 300000ms), ignoring read settings. term_on_timeout defaults true: completion timeout attempts TERM, never guarantees exit. Sync calls release their slot on return; only sync calls exclude each other. Async exec returns taskN and can run concurrently with any exec. Use task_list/status/wait/signal/release and handle-based read tools for exec. Normal sync completion omits handle when all output was returned. There is no exec silence timeout. Read timeouts never send TERM. RPC budget expiry never sends TERM; retain the handle and continue waiting. Session idle retention defaults 2h; SSH protocol probes default 30s with 10s response deadline. Inspect disconnect_reason/error and prefer reconnect on retained handles. Connect/reconnect report compact peer identity once, including key changes. Empty collected output includes comment, never proof of execution/authentication. Configure session or override config per operation. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec/signals; change explicitly with sess_configure, never per-call config. sess_reconnect explicitly reuses connection parameters/current config and handle, discards old output, never replays application input; busy during active operations. close discards buffers and reconnect parameters."}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "instructions": "Use sess_exec on SSH mode=exec; session may be omitted only with exactly one retained session. stdin defaults EOF. Explicit interactive=true retains stdin; optional pty=true requires interactive. Send/read target its task handle; task_close_stdin sends EOF. Persistent stream shells, console login and Telnet still use stream send/read. Four send tools optionally collect unread stream output. No input/output attribution or input IDs. Defaults: read total 30000ms, idle 500ms, output 65536 bytes (maximum 524288). sess_exec/task_wait accept top-level exec_total_timeout_ms and term_on_timeout, overriding legacy config values. They use independent exec_total_timeout_ms (120000ms, max 300000ms), ignoring read settings. term_on_timeout defaults true: completion timeout attempts TERM, never guarantees exit. Sync calls release their slot on return; only sync calls exclude each other. Async exec returns taskN and can run concurrently with any exec. Use task_list/status/wait/signal/release and handle-based read tools for exec. Normal sync completion omits handle when all output was returned. There is no exec silence timeout. Read timeouts never send TERM. RPC budget expiry never sends TERM; retain the handle and continue waiting. Session idle retention defaults 2h; SSH protocol probes default 30s with 10s response deadline. Inspect disconnect_reason/error and prefer reconnect on retained handles. Connect/reconnect report compact peer identity once, including key changes. Empty collected output includes comment, never proof of execution/authentication. All tool configuration parameters are top-level, never nested in config. Connect/configure set session defaults; per-operation parameters only override that call. read_only and connection-only settings are exposed only on connect/configure. Stream sent/written_bytes mean local write completion, not delivery/authentication; empty output cannot determine login state. Never replay sent/unknown inputs or add Enter on silence. read_only (default false) blocks send/exec/signals; change explicitly with sess_configure, never per-call config. sess_reconnect explicitly reuses connection parameters/current config and handle, discards old output, never replays application input; busy during active operations. close discards buffers and reconnect parameters."}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":
