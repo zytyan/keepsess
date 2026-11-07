@@ -34,14 +34,14 @@ func TestSSHJumpChainExecStreamAndReconnect(t *testing.T) {
 				var stats []*testutil.JumpStats
 				for i := 0; i < count; i++ {
 					addr, hostKey, state := testutil.SSHJump(t, next, false)
-					o.Jumps = append([]SSHJump{jumpOptions(addr, hostKey)}, o.Jumps...)
+					o.SSHJumps = append([]SSHJump{jumpOptions(addr, hostKey)}, o.SSHJumps...)
 					stats = append(stats, state)
 					next = addr
 				}
 				m := manager(t)
 				id := connect(t, m, o)
 				// Mutating caller-owned hop storage cannot change reconnect credentials.
-				o.Jumps[0].Password = "caller-mutated"
+				o.SSHJumps[0].Password = "caller-mutated"
 				check := func() {
 					t.Helper()
 					var v Result
@@ -89,16 +89,16 @@ func TestSSHJumpVerificationAuthenticationAndFailureCleanup(t *testing.T) {
 			m := manager(t)
 			o := options(target, "ssh", "exec")
 			o.HostKey = targetKey
-			o.Jumps = []SSHJump{jumpOptions(addr, key)}
+			o.SSHJumps = []SSHJump{jumpOptions(addr, key)}
 			want := "SSH jump 1"
 			switch failure {
 			case "jump-key":
-				o.Jumps[0].HostKey = "SHA256:bad"
+				o.SSHJumps[0].HostKey = "SHA256:bad"
 			case "target-key":
 				o.HostKey = "SHA256:bad"
 				want = "SSH target"
 			case "password":
-				o.Jumps[0].Password = "bad-secret"
+				o.SSHJumps[0].Password = "bad-secret"
 			case "forward-denied":
 				o.Port++
 			}
@@ -119,7 +119,7 @@ func TestSSHJumpStalledForwardAndHandshake(t *testing.T) {
 			for _, cancelCall := range []bool{false, true} {
 				m := manager(t)
 				o := options(target, "ssh", "exec")
-				o.Jumps = []SSHJump{jumpOptions(addr, key)}
+				o.SSHJumps = []SSHJump{jumpOptions(addr, key)}
 				o.Config = cfg(map[string]any{"connect_timeout_ms": 80})
 				ctx := context.Background()
 				if cancelCall {
@@ -156,7 +156,7 @@ func TestSSHJumpPrivateKeyAuthentication(t *testing.T) {
 	o := options(target, "ssh", "exec")
 	j := jumpOptions(addr, key)
 	j.Password, j.Keyfile, j.KeyPassphrase = "", path, "test-passphrase"
-	o.Jumps = []SSHJump{j}
+	o.SSHJumps = []SSHJump{j}
 	id := connect(t, m, o)
 	if v := run(t, m, "exec", Request{Session: id, Command: "both"}); v.ExitCode == nil || *v.ExitCode != 0 {
 		t.Fatal(v)
@@ -165,10 +165,10 @@ func TestSSHJumpPrivateKeyAuthentication(t *testing.T) {
 
 func TestSSHJumpInvalidConfiguration(t *testing.T) {
 	for _, o := range []Options{
-		{Protocol: "telnet", Host: "localhost", Port: 23, Jumps: []SSHJump{{Host: "jump"}}},
-		{Protocol: "ssh", Host: "localhost", Port: 22, Jumps: make([]SSHJump, 9)},
-		{Protocol: "ssh", Host: "localhost", Port: 22, Jumps: []SSHJump{{Host: "jump", Username: "u"}}},
-		{Protocol: "ssh", Host: "localhost", Port: 22, Jumps: []SSHJump{{Host: "jump", Username: "u", Password: "p", Port: -1}}},
+		{Protocol: "telnet", Host: "localhost", Port: 23, SSHJumps: []SSHJump{{Host: "jump"}}},
+		{Protocol: "ssh", Host: "localhost", Port: 22, SSHJumps: make([]SSHJump, 9)},
+		{Protocol: "ssh", Host: "localhost", Port: 22, SSHJumps: []SSHJump{{Host: "jump", Username: "u"}}},
+		{Protocol: "ssh", Host: "localhost", Port: 22, SSHJumps: []SSHJump{{Host: "jump", Username: "u", Password: "p", Port: -1}}},
 	} {
 		m := manager(t)
 		if _, err := m.Connect(context.Background(), o); err == nil || len(m.List()) != 0 {
@@ -182,7 +182,7 @@ func TestSSHJumpDisconnectLeavesOutcomeUnknownAndReconnectable(t *testing.T) {
 	addr, key, state := testutil.SSHJump(t, target, false)
 	m := manager(t)
 	o := options(target, "ssh", "exec")
-	o.Jumps = []SSHJump{jumpOptions(addr, key)}
+	o.SSHJumps = []SSHJump{jumpOptions(addr, key)}
 	id := connect(t, m, o)
 	v := run(t, m, "exec", Request{Session: id, Command: "hang", CollectOutput: noCollect()})
 	handle := v.Handle
@@ -213,7 +213,7 @@ func TestCloseAllCancelsPendingMultiHopConnect(t *testing.T) {
 	first, firstKey, outer := testutil.SSHJump(t, second, false)
 	m := manager(t)
 	o := options(target, "ssh", "exec")
-	o.Jumps = []SSHJump{jumpOptions(first, firstKey), jumpOptions(second, secondKey)}
+	o.SSHJumps = []SSHJump{jumpOptions(first, firstKey), jumpOptions(second, secondKey)}
 	finished := make(chan error, 1)
 	go func() { _, err := m.Connect(context.Background(), o); finished <- err }()
 	eventually(t, func() bool { return blocked.Forwards.Load() == 1 })
@@ -238,8 +238,8 @@ func TestSSHSecondJumpAuthenticationFailureClosesChain(t *testing.T) {
 	first, firstKey, outer := testutil.SSHJump(t, second, false)
 	m := manager(t)
 	o := options(target, "ssh", "exec")
-	o.Jumps = []SSHJump{jumpOptions(first, firstKey), jumpOptions(second, secondKey)}
-	o.Jumps[1].Password = "bad-second-hop-secret"
+	o.SSHJumps = []SSHJump{jumpOptions(first, firstKey), jumpOptions(second, secondKey)}
+	o.SSHJumps[1].Password = "bad-second-hop-secret"
 	_, err := m.Connect(context.Background(), o)
 	if err == nil || !strings.Contains(err.Error(), "SSH jump 2") || strings.Contains(err.Error(), "bad-second-hop-secret") {
 		t.Fatal(err)

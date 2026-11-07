@@ -84,7 +84,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 | 工具 | 参数与用途 |
 |---|---|
-| sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、jumps、mode 和顶层配置 |
+| sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、ssh_jumps、mode 和顶层配置 |
 | sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
 | sess_configure | session、顶层配置字段；原子更新出现的字段，其余不变 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
@@ -119,13 +119,19 @@ SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配 SSH mode=ex
 {"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","mode":"exec"}
 ```
 
-SSH 可通过顶层 `jumps` 数组指定一个或多个跳板，顺序是本机 → jumps[0] → jumps[1] → 目标 host/port，最多 8 跳。每跳填写 host、username 和 password/keyfile，port 默认 22；key_passphrase、host_key、known_hosts、insecure 的含义与目标相同，逐跳独立认证和校验。跳板必须允许 SSH TCP 转发（direct-tcpip），不通过远端 shell 执行 ssh 命令。仅支持 SSH 目标，兼容目标的 exec 和 stream 模式。
+SSH 或 Telnet 目标可通过顶层 `ssh_jumps` 数组指定一个或多个跳板，顺序是本机 → ssh_jumps[0] → ssh_jumps[1] → 目标 host/port，最多 8 跳。每跳填写 host、username 和 password/keyfile，port 默认 22；key_passphrase、host_key、known_hosts、insecure 的含义与目标相同，逐跳独立认证和校验。跳板必须允许 SSH TCP 转发（direct-tcpip），不通过远端 shell 执行 ssh 命令。`protocol` 表示最终目标协议：SSH 目标支持 exec/stream，Telnet 目标仅支持 stream 并继续使用内部 Telnet 实现。旧参数 `jumps` 不再接受。
 
 ```json
-{"protocol":"ssh","host":"target.internal","port":22,"username":"target-user","keyfile":"/path/to/target_key","jumps":[{"host":"jump1.example","username":"jump-user","keyfile":"/path/to/jump1_key"},{"host":"jump2.internal","username":"jump-user","keyfile":"/path/to/jump2_key"}],"connect_timeout_ms":30000}
+{"protocol":"ssh","host":"target.internal","port":22,"username":"target-user","keyfile":"/path/to/target_key","ssh_jumps":[{"host":"jump1.example","username":"jump-user","keyfile":"/path/to/jump1_key"},{"host":"jump2.internal","username":"jump-user","keyfile":"/path/to/jump2_key"}],"connect_timeout_ms":30000}
 ```
 
-整条链路共用一个 connect_timeout_ms 预算（仍受 RPC 上限约束），失败或取消会关闭已建立的链路，不自动重试。sess_reconnect 私下复用整条跳板链与当前会话配置，保持句柄、不重放命令；close 释放链路与认证参数。SSH keepalive 探测目标且穿过全部跳板；TCP keepalive/排队反压测量本机到第一跳的 TCP 连接。connect/reconnect 的 peer 摘要仍描述最终目标；跳板认证参数不会进入结果或配置，审计中的密码/私钥口令逐跳脱敏。
+Telnet 目标示例（登录仍须观察提示后通过 send/read 显式处理，不自动发送目标凭据；最后一个跳板到 Telnet 目标为明文）：
+
+```json
+{"protocol":"telnet","host":"switch.internal","port":23,"ssh_jumps":[{"host":"bastion.example","username":"jump-user","keyfile":"/path/to/jump_key"}],"connect_timeout_ms":30000}
+```
+
+整条链路共用一个 connect_timeout_ms 预算（仍受 RPC 上限约束），失败或取消会关闭已建立的链路，不自动重试。sess_reconnect 私下复用整条跳板链与当前会话配置，保持句柄、不重放命令；close 释放链路与认证参数。SSH 目标的 SSH keepalive 探测目标；Telnet 目标的 SSH keepalive 探测最后一个 SSH 跳板（不检测 Telnet 登录/应用就绪），均穿过前面的跳板；TCP keepalive/排队反压测量本机到第一跳的 TCP 连接。SSH 目标的 connect/reconnect peer 摘要仍描述最终目标；Telnet 目标不返回 peer，不能把跳板身份当作设备身份；跳板认证参数不会进入结果或配置，审计中的密码/私钥口令逐跳脱敏。
 
 ```json
 {"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
@@ -165,7 +171,7 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 | read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 sess_exec |
 | exec_total_timeout_ms | 120000 | sess_exec/task_wait 等待协议完成的独立总时限，1..300000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
 | term_on_timeout | true | 完成等待超时尝试一次 TERM；可单次覆盖；普通 read 超时、取消等待和输出上限不触发 |
-| ssh_keepalive_ms | 30000 | SSH 协议探测间隔，0 禁用；不发送终端输入、不刷新本地空闲计时；Telnet 不使用 |
+| ssh_keepalive_ms | 30000 | SSH 协议探测间隔，0 禁用；不发送终端输入、不刷新本地空闲计时；直连 Telnet 不使用，经 SSH 跳板的 Telnet 探测最后一个跳板 |
 | ssh_keepalive_timeout_ms | 10000 | 单次 SSH 探测回复时限，1..110000ms；无回复关闭传输，未完成任务结果未知 |
 | tcp_keepalive_ms | 15000 | 系统 TCP keepalive 周期参数，0 禁用，最高一天；实际探测与失效时序取决于 OS |
 | line_end | SSH `\r`，Telnet `\r\n` | 可见转义文本，配置时按 UTF-8 与字节转义解码一次，最多 1024 字节；可为空 |

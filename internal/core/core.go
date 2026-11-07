@@ -24,7 +24,7 @@ const (
 )
 
 type Options struct {
-	Jumps         []SSHJump   `json:"jumps,omitempty"`
+	SSHJumps      []SSHJump   `json:"ssh_jumps,omitempty"`
 	Protocol      string      `json:"protocol"`
 	Host          string      `json:"host"`
 	Port          int         `json:"port"`
@@ -208,13 +208,13 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	if o.Host == "" || o.Port < 1 || o.Port > 65535 {
 		return Result{}, errors.New("host and port (1..65535) required")
 	}
-	if len(o.Jumps) > 8 || (len(o.Jumps) != 0 && o.Protocol != "ssh") {
-		return Result{}, errors.New("jumps supports at most 8 SSH hops and requires protocol=ssh")
+	if len(o.SSHJumps) > 8 {
+		return Result{}, errors.New("ssh_jumps supports at most 8 SSH hops")
 	}
 	// Own the slice before defaulting or retaining it for explicit reconnect.
-	o.Jumps = append([]SSHJump(nil), o.Jumps...)
-	for i := range o.Jumps {
-		j := &o.Jumps[i]
+	o.SSHJumps = append([]SSHJump(nil), o.SSHJumps...)
+	for i := range o.SSHJumps {
+		j := &o.SSHJumps[i]
 		if j.Port == 0 {
 			j.Port = 22
 		}

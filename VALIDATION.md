@@ -1,3 +1,13 @@
+# ssh_jumps 与 SSH 跳板到 Telnet 目标
+
+- 跳板参数统一改名 ssh_jumps，schema/运行时均不接受旧 jumps（包括两者同时出现）。protocol 表示最终目标：SSH 支持 exec/stream，Telnet 仅 stream，复用内部 Telnet 实现；不自动发送目标登录凭据。
+- 提取共用 SSH 路由建立逻辑，SSH 握手与最后一级到 Telnet 的 direct-tcpip 共用连接预算及取消保护。Telnet 的 SSH 保活探测最后一个 SSH 跳板，不推断 Telnet 应用就绪，不返回跳板 peer 冒充目标身份。
+- 为不支持原生 deadline 的 SSH 转发通道提供 Telnet 写 deadline 适配，协商回复和应用写入卡住时关闭共享根 transport，返回超时与未知输入结果；普通读取超时不关闭链路。
+- 新增真实协议模拟器与 MCP 测试：单/双跳 Telnet、IAC 分包/字面 IAC/准确输入字节、只读仍允许协商、模式与分页、读超时保留链路、exec 拒绝、重连、SSH 保活否定回复/超时、最后一级转发超时/取消/close_all、写 deadline，以及新旧参数/schema 校验。原 SSH 跳板回归仍通过。未实测外部真实设备。
+- Go 1.22.1 全量测试、race、go vet，以及 CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 构建通过；构建缓存/临时文件迁入项目忽略目录以避开 /tmp 容量限制。README、CLI、MCP 和两份 skill 已同步。
+
+---
+
 # 全部参数扁平化与 SSH 跳板
 
 - 22 个工具的输入 schema 均不再暴露 config 对象；原配置字段在适用工具顶层展开，连接级/read_only 参数只在 connect/configure 暴露。旧嵌套调用仅兼容接收，顶层优先；结果中的 config 仍表示当前会话配置。会话默认值与操作覆盖不互相污染。

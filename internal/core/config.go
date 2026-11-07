@@ -57,7 +57,7 @@ var configDescriptions = map[string]string{
 	"read_idle_timeout_ms":       "Read silence deadline from read start, reset by endpoint bytes; 0 disables. Default 500ms. Ignored by sess_exec.",
 	"exec_total_timeout_ms":      "sess_exec/sess_task_wait completion wait deadline; default 120000ms, 1..300000ms. Independent of read settings. RPC budget ends collection earlier without TERM; continue with the handle. No background runtime timer for collect_output=false.",
 	"term_on_timeout":            "Default true: attempt TERM on exec/task_wait completion timeout, then return the handle. Delivery and exit are not guaranteed. Read timeouts, output limits and cancellation do not signal. read_only blocks signals. Per-call overrides do not alter session config.",
-	"ssh_keepalive_ms":           "SSH protocol probe interval; default 30000ms, 0 disables; SSH only. No terminal input or local idle refresh. Rejection replies still prove responsiveness.",
+	"ssh_keepalive_ms":           "SSH protocol probe interval; default 30000ms, 0 disables; for SSH targets or SSH jumps to Telnet (probe the final jump). No terminal input or local idle refresh. Rejection replies still prove responsiveness.",
 	"ssh_keepalive_timeout_ms":   "SSH probe response deadline; default 10000ms, 1..110000ms. One outstanding probe; expiry closes transport with unknown outcomes for unfinished tasks.",
 	"tcp_keepalive_ms":           "OS TCP keepalive period, 0 disables. Actual probe/failure timing depends on OS.",
 	"line_end":                   "Visible escape text decoded once to bytes and appended by sendline; \\0 is NUL. Empty appends nothing.",

@@ -15,9 +15,11 @@ import (
 )
 
 type JumpStats struct {
-	Active   atomic.Int32
-	Forwards atomic.Int32
-	Sessions atomic.Int32
+	Active          atomic.Int32
+	Forwards        atomic.Int32
+	Sessions        atomic.Int32
+	Probes          atomic.Int32
+	IgnoreKeepalive atomic.Bool
 }
 
 // SSHJump only forwards to the allowed next endpoint. stall deliberately never
@@ -53,7 +55,17 @@ func SSHJump(t *testing.T, destination string, stall bool) (string, string, *Jum
 			return
 		}
 		defer sc.Close()
-		go ssh.DiscardRequests(requests)
+		go func() {
+			for req := range requests {
+				if req.Type == "keepalive@openssh.com" {
+					stats.Probes.Add(1)
+					if stats.IgnoreKeepalive.Load() {
+						continue
+					}
+				}
+				_ = req.Reply(false, nil)
+			}
+		}()
 		var wg sync.WaitGroup
 		defer wg.Wait()
 		for nc := range channels {

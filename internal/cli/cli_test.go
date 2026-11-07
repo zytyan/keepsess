@@ -40,7 +40,7 @@ func TestAuditRedaction(t *testing.T) {
 	defer a.Close()
 	if e = a.Record(map[string]any{"arguments": map[string]any{
 		"password": "password-secret", "key_passphrase": "key-secret", "command": "show version",
-		"jumps": []any{
+		"ssh_jumps": []any{
 			map[string]any{"host": "jump1", "password": "jump-password-secret"},
 			map[string]any{"host": "jump2", "key_passphrase": "jump-passphrase-secret"},
 		},

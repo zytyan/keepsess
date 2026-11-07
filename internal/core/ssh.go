@@ -71,16 +71,18 @@ func sshClientConfig(o Options) (*ssh.ClientConfig, *string, error) {
 	return &ssh.ClientConfig{User: o.Username, Auth: auth, HostKeyCallback: host, Timeout: IOLimit}, &fingerprint, nil
 }
 
-func (s *Session) connectSSH(ctx context.Context, o Options) error {
-	endpoints := make([]Options, 0, len(o.Jumps)+1)
-	for _, jump := range o.Jumps {
+func (s *Session) openSSHRoute(ctx context.Context, o Options, targetSSH bool, ready func(*ssh.Client, string) error) error {
+	endpoints := make([]Options, 0, len(o.SSHJumps)+1)
+	for _, jump := range o.SSHJumps {
 		endpoints = append(endpoints, jump.options())
 	}
-	endpoints = append(endpoints, o)
+	if targetSSH {
+		endpoints = append(endpoints, o)
+	}
 	configs := make([]*ssh.ClientConfig, len(endpoints))
 	fingerprints := make([]*string, len(endpoints))
 	label := func(i int) string {
-		if i < len(o.Jumps) {
+		if i < len(o.SSHJumps) {
 			return fmt.Sprintf("SSH jump %d", i+1)
 		}
 		return "SSH target"
@@ -125,52 +127,65 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 		}
 		client = ssh.NewClient(cc, chans, reqs)
 	}
-	fingerprint := *fingerprints[len(fingerprints)-1]
-	s.mu.Lock()
-	changed := s.peer != nil && s.peer.HostKey != "" && s.peer.HostKey != fingerprint
-	s.peer = &PeerIdentity{Server: compactSSHVersion(client.ServerVersion()), HostKey: fingerprint, HostKeyChanged: changed}
-	s.mu.Unlock()
-	if s.mode == "stream" {
-		sh, e := client.NewSession()
-		if e != nil {
-			return e
-		}
-		sh.Stdout = s
-		sh.Stderr = s
-		in, e := sh.StdinPipe()
-		if e != nil {
-			return e
-		}
-		s.input = in
-		if e = sh.RequestPty("vt100", 24, 80, ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 9600, ssh.TTY_OP_OSPEED: 9600}); e != nil {
-			return e
-		}
-		if e = sh.Shell(); e != nil {
-			return e
-		}
-		go func() {
-			e := sh.Wait()
-			why := "remote shell closed"
-			if e != nil {
-				why = e.Error()
-			}
-			var missing *ssh.ExitMissingError
-			if e == nil || errors.As(e, &missing) {
-				s.disconnect("")
-			} else {
-				s.disconnectError(e, why)
-			}
-		}()
-	} else {
-		s.newExec = func() (execChannel, error) {
-			sh, err := client.NewSession()
-			if err != nil {
-				return nil, err
-			}
-			return &sshExecChannel{Session: sh}, nil
-		}
+	if err := ready(client, *fingerprints[len(fingerprints)-1]); err != nil {
+		return err
 	}
 	_ = c.SetDeadline(time.Time{})
+	return nil
+}
+
+func (s *Session) connectSSH(ctx context.Context, o Options) error {
+	return s.openSSHRoute(ctx, o, true, func(client *ssh.Client, fingerprint string) error {
+		s.mu.Lock()
+		changed := s.peer != nil && s.peer.HostKey != "" && s.peer.HostKey != fingerprint
+		s.peer = &PeerIdentity{Server: compactSSHVersion(client.ServerVersion()), HostKey: fingerprint, HostKeyChanged: changed}
+		s.mu.Unlock()
+		if s.mode == "stream" {
+			sh, e := client.NewSession()
+			if e != nil {
+				return e
+			}
+			sh.Stdout = s
+			sh.Stderr = s
+			in, e := sh.StdinPipe()
+			if e != nil {
+				return e
+			}
+			s.input = in
+			if e = sh.RequestPty("vt100", 24, 80, ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 9600, ssh.TTY_OP_OSPEED: 9600}); e != nil {
+				return e
+			}
+			if e = sh.Shell(); e != nil {
+				return e
+			}
+			go func() {
+				e := sh.Wait()
+				why := "remote shell closed"
+				if e != nil {
+					why = e.Error()
+				}
+				var missing *ssh.ExitMissingError
+				if e == nil || errors.As(e, &missing) {
+					s.disconnect("")
+				} else {
+					s.disconnectError(e, why)
+				}
+			}()
+		} else {
+			s.newExec = func() (execChannel, error) {
+				sh, err := client.NewSession()
+				if err != nil {
+					return nil, err
+				}
+				return &sshExecChannel{Session: sh}, nil
+			}
+		}
+		s.watchSSH(client)
+		return nil
+	})
+}
+
+func (s *Session) watchSSH(client *ssh.Client) {
 	go func() {
 		e := client.Wait()
 		if e != nil {
@@ -181,7 +196,6 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 	}()
 	s.keepaliveWake = make(chan struct{}, 1)
 	go s.sshKeepalive(func() error { _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); return err })
-	return nil
 }
 
 // The task owns its channel and output sink; channels share only the transport.

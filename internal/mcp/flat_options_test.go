@@ -44,7 +44,7 @@ func TestFlatConnectConfigureSendReadAndJumpThroughMCP(t *testing.T) {
 	jargs["username"], jargs["password"], jargs["host_key"] = "jump-user", "jump-secret", key
 	args := connectArgs(target)
 	args["protocol"], args["username"], args["password"], args["mode"] = "ssh", "test", "test", "stream"
-	args["jumps"] = []any{jargs}
+	args["ssh_jumps"] = []any{jargs}
 	args["read_idle_timeout_ms"], args["encoding"], args["max_output_bytes"] = 20, "utf-8", 4096
 	v := call("sess_connect", args)
 	id := v["session"]

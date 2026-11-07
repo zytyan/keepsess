@@ -52,11 +52,16 @@ host_key, known_hosts, default skip. insecure=false alone does not enable verifi
 {"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
 ```
 
-For SSH targets, optional top-level jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. Supports target exec and stream, never Telnet. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Results expose only final target peer identity; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the full chain; TCP settings/backpressure apply to the first TCP socket.
+For SSH or Telnet targets, optional top-level ssh_jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. protocol selects the final target: SSH supports exec/stream; Telnet requires stream and uses the internal Telnet codec. The old jumps parameter is rejected. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Only SSH targets expose final target peer identity; Telnet targets never report a hop as their peer; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the chain to the SSH target or, for Telnet, the final SSH jump; this does not prove Telnet login/application readiness; TCP settings/backpressure apply to the first TCP socket.
 
 Example sess_connect:
 ```json
-{"protocol":"ssh","host":"target.internal","port":22,"username":"target-user","keyfile":"/path/to/target_key","jumps":[{"host":"jump1.example","username":"jump-user","keyfile":"/path/to/jump1_key"},{"host":"jump2.internal","username":"jump-user","keyfile":"/path/to/jump2_key"}],"connect_timeout_ms":30000}
+{"protocol":"ssh","host":"target.internal","port":22,"username":"target-user","keyfile":"/path/to/target_key","ssh_jumps":[{"host":"jump1.example","username":"jump-user","keyfile":"/path/to/jump1_key"},{"host":"jump2.internal","username":"jump-user","keyfile":"/path/to/jump2_key"}],"connect_timeout_ms":30000}
+```
+
+For a Telnet target, no target SSH username/password is required. Observe prompts and explicitly send Telnet login input through stream tools; never auto-replay credentials. The final jump-to-Telnet leg is plaintext. Example:
+```json
+{"protocol":"telnet","host":"switch.internal","port":23,"ssh_jumps":[{"host":"bastion.example","username":"jump-user","keyfile":"/path/to/jump_key"}],"connect_timeout_ms":30000}
 ```
 
 `sess_configure(session, ...settings)` atomically updates only supplied fields. `sess_get_config`
@@ -97,7 +102,7 @@ keepalive@openssh.com every 30000ms, with ssh_keepalive_timeout_ms=10000 for eac
 ssh_keepalive_ms=0 disables it. Negative replies prove responsiveness too. Only one probe is
 outstanding; deadline closes transport and marks unfinished tasks unknown. In-flight probes
 keep their deadline when configured. Probes never send terminal input or refresh local idle.
-They cannot prevent reboots or terminal application login timeouts; Telnet uses TCP only.
+They cannot prevent reboots or terminal application login timeouts; direct Telnet uses TCP only; Telnet via ssh_jumps additionally probes the last SSH jump.
 
 On transport failure inspect disconnect_reason/error; prefer sess_reconnect when the handle
 is retained. reset_by_peer, transport_timeout, keepalive_timeout, ssh_disconnect, remote_eof
