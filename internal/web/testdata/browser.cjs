@@ -9,6 +9,27 @@ const verifyTypography = require('./typography.cjs');
   await page.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
   await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));
   await verifyTypography(page);
+  await page.evaluate(()=>{
+   const now=new Date(2026,10,9,14,8),check=(date,want)=>{const got=instanceTime(date,now);if(got!==want)throw Error(`${got} != ${want}`);};
+   check(new Date(+now-59000),'刚刚');check(new Date(+now-60000),'1分钟前');check(new Date(+now-3599999),'59分钟前');
+   check(new Date(+now-3600000),'13:08');check(new Date(2026,10,8,14,8),'11月08日 14:08');
+   check(new Date(2025,10,8,14,8),'2025年11月08日 14:08');check(new Date(+now+60000),'2026年11月09日 14:09');
+   if(instanceTime(new Date(2026,10,8,23,50),new Date(2026,10,9,0,10))!=='20分钟前')throw Error('midnight');
+  });
+  await page.locator('#instance-selected').click();
+  const instanceInfo=await page.evaluate(()=>[...instanceButtons].map(([id,b])=>({id,text:b.textContent,title:b.title,label:b.getAttribute('aria-label')})));
+  for(const i of instanceInfo){assert(!i.text.includes(i.id));assert(!i.title.includes(i.id));assert(!i.label.includes(i.id));}
+  assert.equal(await page.locator('#instance-options .instance-live').count(),1);
+  assert.match(await page.locator('#instance-selected').innerText(),/未命名实例\n/);
+  assert.equal(await page.locator('#instance-options .instance-live').evaluate(el=>getComputedStyle(el,'::before').animationName),'instance-pulse');
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await page.locator('#instance-options .instance-live').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.locator('#instance-selected').press('ArrowDown');
+  const focused=await page.evaluate(()=>document.activeElement===document.querySelector('#instance-options button'));
+  assert(focused);await page.evaluate(()=>refreshInstances());assert(await page.evaluate(()=>document.activeElement===document.querySelector('#instance-options button')));
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#instances').getAttribute('open'),null);
+
   assert.equal(await page.locator('#scrollback').inputValue(),'5000');
   assert.equal(await page.evaluate('terminal.options.scrollback'),5000);
   assert.match(await page.locator('#sessions').innerText(),/s1 · production/);assert.match(await page.locator('#sessions').innerText(),/s2 · closed-session/);
@@ -62,7 +83,8 @@ const verifyTypography = require('./typography.cjs');
    unlocked=false;updateControls();check(text()==='','lock clears');
   });
   await page.screenshot({path:process.env.KEEPSESS_SCREENSHOT||'/tmp/keepsess-web.png',fullPage:true});
-  await page.locator('#instances').selectOption('archived');
+  await page.locator('#instance-selected').click();
+  await page.getByRole('button',{name:/归档，只读/}).click();
   await page.waitForFunction(()=>document.getElementById('title').textContent==='s1 · archived-console');
   await page.waitForFunction(()=>terminal.buffer.active.getLine(0)?.translateToString().includes('archive retained'));
   await page.waitForFunction(()=>terminal.buffer.active.getLine(1)?.translateToString().includes('中文'));

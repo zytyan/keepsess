@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestNamedSessionsTasksInstanceDiagnosticsAndViews(t *testing.T) {
 	v := call("sess_connect", args)
 	id := v["session"]
 	instance := v["instance_id"]
-	if len(instance.(string)) != 8 || v["name"] != "prod" {
+	if !regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{6,9}$`).MatchString(instance.(string)) || v["name"] != "prod" {
 		t.Fatal(v)
 	}
 	v = call("sess_rename", map[string]any{"session": "prod", "name": "server"})

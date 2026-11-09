@@ -69,6 +69,8 @@ with Keepsess() as ks:
 
 ## Web 与配置
 
+人类 Web 页面支持桌面端近期稳定版 Chromium 内核浏览器（Chrome、Edge）。实例以名称和本地时间显示；背景与呼吸光点表示进程连接仍活动，亮色边框表示当前选择。启用减少动态效果时使用静态标识。新进程 instance_id 使用 Bitcoin Base58，旧归档 ID 保持兼容。
+
 `serve` 默认加入每用户共享 Web daemon，入口通常为 `http://127.0.0.1:8765/`；实际地址可用 `keepsess daemon status` 查询。页面列出活动实例、会话和任务，默认只读；观察不消耗 MCP/Python 的读取游标。进程退出后保留归档，连接不会恢复。
 
 设置统一读取 `~/.keepsess.toml`，首次启动自动生成。`[web] enabled=false` 禁用本进程的 Web/历史；网页“显示与高亮”提供默认关键词高亮、自定义规则和预览，保存到同一配置文件，无需重启。修改其他 Web/history 配置后执行 `keepsess daemon stop`，修改历史目录还需重启原进程。

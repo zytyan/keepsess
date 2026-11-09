@@ -2,8 +2,8 @@ package core
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
+	"math/big"
 	"regexp"
 	"strings"
 	"time"
@@ -16,8 +16,30 @@ var processInstanceID = func() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("cannot generate process instance ID")
 	}
-	return base64.RawURLEncoding.EncodeToString(b[:])
+	return encodeInstanceID(b[:])
 }()
+
+// Bitcoin Base58 preserves the random bytes, including leading zero bytes.
+func encodeInstanceID(raw []byte) string {
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	n := new(big.Int).SetBytes(raw)
+	base, remainder := big.NewInt(58), new(big.Int)
+	encoded := make([]byte, 0, len(raw)*2)
+	for n.Sign() > 0 {
+		n.QuoRem(n, base, remainder)
+		encoded = append(encoded, alphabet[remainder.Int64()])
+	}
+	for _, b := range raw {
+		if b != 0 {
+			break
+		}
+		encoded = append(encoded, alphabet[0])
+	}
+	for i, j := 0, len(encoded)-1; i < j; i, j = i+1, j-1 {
+		encoded[i], encoded[j] = encoded[j], encoded[i]
+	}
+	return string(encoded)
+}
 
 func newInstanceID() string           { return processInstanceID }
 func (m *Manager) InstanceID() string { return m.instanceID }

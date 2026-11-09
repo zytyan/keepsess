@@ -29,7 +29,13 @@ const assert=require('node:assert/strict');
   await page.locator('#appearance-open').click();await page.locator('#highlight-apply').click();await page.waitForFunction(()=>[...terminalHighlights].some(h=>h.term===previewTerminal&&h.decorations.length>0));
   await page.locator('#highlight-add').click();const row=page.locator('.highlight-rule').last();await row.locator('[data-field="name"]').fill('自定义');await row.locator('[data-field="pattern"]').fill('中文测试');
   await page.locator('#highlight-save').click();await page.waitForFunction(()=>document.getElementById('highlight-status').textContent.includes('已保存'));
-  await page.locator('#appearance-close').click();await page.reload();await page.waitForFunction(()=>typeof appearance!=='undefined'&&appearance.rules.some(r=>r.pattern==='中文测试'));
+  await page.setViewportSize({width:1000,height:500});
+  const before=await page.locator('.appearance-heading').boundingBox();
+  await page.locator('.appearance-body').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+  const after=await page.locator('.appearance-heading').boundingBox();assert.equal(after.y,before.y);
+  const close=await page.locator('#appearance-close').boundingBox();assert(close.y>=0&&close.y+close.height<=500);
+  assert(await page.locator('.appearance-body').evaluate(el=>el.scrollTop>0));
+  await page.locator('#appearance-close').click();await page.setViewportSize({width:1500,height:1100});await page.reload();await page.waitForFunction(()=>typeof appearance!=='undefined'&&appearance.rules.some(r=>r.pattern==='中文测试'));
   // Shared native worker validates syntax and uses correct UTF-16 offsets.
   await page.evaluate(()=>applyAppearance({enabled:true,rules:[{name:'bad',pattern:'[',regex:true,enabled:true,foreground:'#ffffff'}]}));
   await page.waitForFunction(()=>document.getElementById('highlight-status').textContent.includes('无效'));

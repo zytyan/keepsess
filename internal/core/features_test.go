@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,7 +26,7 @@ func TestNamesStableIDsAndConcurrentTaskReservations(t *testing.T) {
 	o := options(addr, "ssh", "exec")
 	o.Name = "prod"
 	v, err := m.Connect(context.Background(), o)
-	if err != nil || v.Name != "prod" || len(v.InstanceID) != 8 {
+	if err != nil || v.Name != "prod" || !regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{6,9}$`).MatchString(v.InstanceID) {
 		t.Fatal(v, err)
 	}
 	id := v.Session

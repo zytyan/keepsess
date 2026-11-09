@@ -2,7 +2,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const root = new URL('./', location.href);
-let serverID='',activeInstances=new Set(),instanceListKey='',instanceRefresh=null;
+let serverID='',activeInstances=new Set(),instanceRefresh=null,instanceItems=[];
 let instance = '', current = '', selected = '', handle = '', socket = null;
 let unlocked = false, cursor = 0, generation = 0, replaying = false;
 let overview=null, overviewMode=false;
@@ -247,18 +247,19 @@ $('overview-older').onclick=()=>{const list=sessionTasks(),first=list.findIndex(
 $('overview-newer').onclick=()=>{const list=sessionTasks(),last=list.findIndex(t=>t.handle===overview?.lastHandle());if(last<list.length-1)selectSession(selected,'',{overview:true,endHandle:list[Math.min(list.length-1,last+OVERVIEW_PAGE_SIZE)].handle});};
 $('overview-latest').onclick=()=>selectSession(selected,'',{overview:true});
 $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
-$('instances').onchange=async()=>{localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=$('instances').value;current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}};
+async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}}
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));terminalResize.observe($('overview'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}overview?.refreshFonts();});
+function renderInstanceChoices(){renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)));}
+setInterval(renderInstanceChoices,60000);
 function refreshInstances(){if(!instanceRefresh)instanceRefresh=refreshInstanceList().finally(()=>{instanceRefresh=null});return instanceRefresh;}
 async function refreshInstanceList(){
  const list=await api('instances'),wasActive=activeInstances.has(instance);activeInstances=new Set(list.filter(i=>i.current).map(i=>i.id));
- const picker=$('instances'),saved=instance,key=JSON.stringify(list);
- if(key!==instanceListKey){instanceListKey=key;picker.replaceChildren();
- for(const i of list){const option=document.createElement('option');option.value=i.id;option.textContent=(i.name?i.name+' · ':'')+(i.current?'活动'+(i.pid?' PID '+i.pid:'')+' · ':'归档 · ')+i.id+' · '+new Date(i.started).toLocaleString();picker.append(option);}}
+ const saved=instance;
  if(!instance)instance=list.find(i=>i.current)?.id||list[0]?.id||'';
- current=activeInstances.has(instance)?instance:'';picker.value=instance;
- $('instance-summary').textContent=`实例 / 历史归档 · ${activeInstances.size} 个活动进程`;
+ current=activeInstances.has(instance)?instance:'';
+ instanceItems=list;renderInstanceChoices();
+ $('instance-summary').textContent='实例';
  if(saved&&wasActive!==activeInstances.has(instance)&&selected){unlocked=false;inputQueue='';await loadCatalog();updateControls();}
  return list;
 }
