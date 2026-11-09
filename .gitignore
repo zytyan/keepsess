@@ -21,3 +21,11 @@
 # Persistent human terminal history (never publish raw input/output)
 /keepsess-history/
 /history/
+
+# Python SDK build/cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+/python/build/
+/python/dist/
+/python/.venv/

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keepsess"
+version = "0.1.0"
+description = "Typed Python client for the keepsess SSH/Telnet engine"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["keepsess"]
+
+[tool.setuptools.package-data]
+keepsess = ["py.typed"]

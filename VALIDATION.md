@@ -1,3 +1,13 @@
+# Python 自动化 SDK（2026-11-09）
+
+- 新增独立 `python/` 包：Python 3.10+、零运行时依赖，30 个 MCP 同名显式方法、同步/异步客户端、dataclass 嵌套结果和保留实际字段的 `to_dict()`。方法从 Go 定义生成，并以 `generate.py --check` 检查一致性。
+- 单客户端持有一个 `keepsess serve`；125s 本地响应预算与 115s 服务端 RPC 预算分离，不自动重启、重连或重放。覆盖本地在途上限、乱序响应、取消/迟到响应、写管道卡住、启动超时/版本拒绝、退出清理和有界 stderr。
+- Python 3.13.5 下 23 项 SDK 测试通过：真实 SSH 协议退出/双流/interactive EOF/缺失退出状态、Telnet IAC 分包/只读/线上字节、共享 Web 命名实例与退出归档。已确认普通 Python `"\r"`、`"\x03"` 通过 text 方法发送实际控制字符，raw string 保留字面反斜杠；两份 skill 同步约束 Python 优先 text，并保留 `line_end` 与精确字节的区别。
+- 临时独立 venv 中默认构建隔离的 `pip install ./python` 成功；从仓库外分别验证已安装包与 `PYTHONPATH` 直接导入、`KEEPSESS_BINARY` 选取引擎和实际工具调用。Python 3.10 已做语法检查，未声称实测所有 Python 版本或 Windows Python 运行时。
+- Go 1.22.1 全仓 `go test -race ./...`、`go vet ./...` 通过；更新内嵌 skill 后 CLI 测试和 skill validator 通过。`CGO_ENABLED=0` 三目标交叉编译通过；SSH/Telnet 使用本地协议模拟器，未实测外部厂商设备。
+
+---
+
 # 离线非衬线字体
 
 - 界面、表单、命令和回执、单任务 xterm、会话总览统一使用 JetBrains Mono 2.304 + Noto Sans SC 2.004，最后回退 sans-serif；移除可见文字的系统字体/通用 monospace 覆盖。

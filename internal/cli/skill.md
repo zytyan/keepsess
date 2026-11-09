@@ -292,6 +292,29 @@ for capacity. Missing/expired handles fail explicitly; never replay because a ha
   The observed stream is NOT attributed to the latest input. No input IDs or automatic replay.
 
 `send_text` encodes literal Unicode text with encoding; it does not parse escapes or append bytes.
+
+When writing Python automation with the keepsess SDK, prefer `sess_send_text` and
+`sess_sendline_text`; do not mechanically translate MCP escaped sends into Python
+escaped sends. Ordinary Python string literals already interpret escapes:
+
+```python
+ks.sess_send_text(session=sid, data="\x03", collect_output=False)  # actual Ctrl-C
+ks.sess_send_text(session=sid, data="show version\r")              # one actual CR
+ks.sess_sendline_text(session=sid, data="show version")           # configured ending
+ks.sess_send_text(session=sid, data=r"\x03")                      # literal backslash+x03
+```
+
+The SDK serializes these strings without another escape-decoding pass. Preserve
+literal backslashes in paths/commands with raw strings or normal Python quoting;
+do not run `unicode_escape` or apply `*_escaped` to ordinary runtime text. Use
+`*_escaped` only when the input intentionally contains visible escapes requiring
+one tool-side decode, e.g. `data=r"\x03"`, or exact byte escapes outside the text
+encoding. In particular, Python `"\xff"` is Unicode U+00FF and text-encodes according
+to `encoding`; it is not necessarily raw byte FF. This preference applies to send
+`data`: `line_end` remains tool-decoded visible escape text (`line_end=r"\r"`),
+and regex patterns retain their own syntax (usually Python raw strings). Never
+add a second line ending to `sendline` data.
+
 `send_escaped` decodes ONE visible escape layer after JSON decoding: \0 \r \n \t \xNN produce
 bytes, ordinary Unicode and \uNNNN/\UNNNNNNNN use encoding. \\ produces a literal backslash;
 Go three-digit octal escapes are also accepted. Unknown/incomplete escapes reject before writing.
