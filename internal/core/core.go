@@ -335,7 +335,7 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	v.InstanceName = instanceName
 	s.mu.Unlock()
 	if promptName {
-		v.Comment = "首次连接成功。请根据当前工作内容，调用 sess_configure({\"instance_name\":\"简短的任务名称\"}) 给本实例命名；instance_id 保持不变，不要重连或重发命令。"
+		v.Comment = "First connection succeeded. Name this instance for the current work using sess_configure({\"instance_name\":\"short task label\"}); instance_id stays unchanged. Do not reconnect or replay commands."
 		v.NextAction = "sess_configure"
 	}
 	return v, nil
