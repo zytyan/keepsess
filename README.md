@@ -37,6 +37,10 @@ keepsess install-skill --dir ./keepsess-skill
 非交互命令前显示 `[s1 task2 /srv/app] $ command`，路径来自请求的 `cwd`；未指定时登录模式显示 `~`，
 非登录模式显示“默认目录（未探测）”，不额外执行目录探测。
 WS 实时更新和断线历史补齐不消耗 MCP 输出游标，不重放任何输入。
+二级侧栏的“会话总览 · 多命令同屏”可把多条命令与各自输出纵向排列，短输出可同时查看。
+总览始终只读，每页最多 20 条；长输出最多展开 12 行并保留独立滚动，前端滚动历史预算按 20 个预览分配，不影响磁盘历史。
+每条命令的解码、ANSI 状态和退出状态独立，不混排并发输出；点击“打开任务”回到原单任务终端。
+总览尾部跟随新输出与新任务，阅读较早内容时保留位置；“更早 / 较新 / 最新”切换历史页。PTY 任务提供单任务查看入口。
 前端滚动历史默认 **5000 行**，可在页面调整为 100..200000 行并保存在浏览器中；磁盘历史独立保留。
 
 历史默认写入系统用户配置目录的 `keepsess/history/<instance_id>/`，目录/文件在支持的平台使用 0700/0600。
@@ -67,7 +71,7 @@ Web 启动失败不阻止 MCP 启动，`web.error` 会报告原因。
 可选浏览器验收（需本地 Node.js、Playwright 和 Chromium，不影响正常 Go 构建）：
 
 ```sh
-KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser(Acceptance|Following)' -v
+KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser(Acceptance|Following|Overview)' -v
 # 可用 KEEPSESS_NODE 指定 node 路径，PLAYWRIGHT_MODULE 指定已安装的 playwright 模块路径。
 ```
 

@@ -28,6 +28,11 @@ appear in a secondary sidebar, ordered by creation. Output follows the viewport
 only at the bottom. A new task is selected automatically only while viewing the
 latest task at its bottom; reading older output/tasks keeps the current selection.
 Pending input/receipts pause automatic switching; switching restores read-only.
+A read-only session overview can display several commands and their outputs together.
+It pages at most 20 task previews, caps each expanded terminal at 12 rows and divides
+its scrollback budget across previews. Decoder/ANSI state stays task-local; PTY tasks
+link to their individual terminals. Reading older content holds position; at the tail,
+new output/tasks follow automatically. Overview observation never sends terminal input.
 
 History defaults to the OS user config directory under `keepsess/history`, with
 private instance directories/files. Commands, raw terminal input (including passwords)

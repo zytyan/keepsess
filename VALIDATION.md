@@ -1,3 +1,12 @@
+# 会话总览与多命令同屏
+
+- 二级侧栏增加可切换的会话总览，按 taskN 顺序纵向显示命令、各自输出与状态；默认单任务视图保持。总览始终只读，打开单任务后仍需显式解锁才能操作。
+- 最多 20 个预览终端，单卡片最多展开 12 行并独立滚动；5000 行前端滚动历史预算按预览分配，磁盘历史不变。更早/较新/最新分页可读取已经从 core 淘汰的任务；PTY 提供单任务入口。
+- 输出、ANSI 与增量字符解码按任务隔离；总览尾部跟随新任务/输出，上翻时保留阅读锚点，前方卡片增高不推走当前阅读内容。切换页面取消旧渲染，不消费模型游标或重放输入。
+- Chromium + 真实 SSH 协议模拟器覆盖短命令同屏、跨任务交错 UTF-8 分包、长输出上限、终端查询不写入、前方内容增高时保持位置、总览/单任务切换、20 条上限与历史翻页、停留/跟随新任务和 PTY 入口；原终端和自动跟随浏览器验收同时回归。
+
+---
+
 # 二级任务侧栏与自动跟随
 
 - exec 任务从顶部标签移到会话旁的二级侧栏，展示 ID、别名、状态和命令摘要；按 taskN 创建顺序排列。stream 隐藏任务侧栏，仍使用会话列表。
@@ -14,7 +23,7 @@
 - 覆盖日志分页/跨段无缺口、索引恢复与损坏尾部、文件权限、容量/队列故障不阻塞实时输出、慢订阅者上限；覆盖关闭已断开会话、任务 transport 故障未知结果、输入编码覆盖和凭据排除。
 - Web/WS 覆盖端口自动重试、默认只读/重新连接只读、会话只读保护、exec 双流及 MCP 独立游标、关闭记录、增量补齐、Host/Origin 和无效根路径；真实 TLS 反代覆盖保留与剥离前缀、HTTPS/WSS。浏览器携带实例标识，服务进程替换后拒绝旧页面写入，不重放输入。
 - Chromium 验收覆盖滚动历史默认值与修改持久化、exec 退出码、已关闭会话、stream 键盘操作、精确输入字节无重复、Unicode 输入、快速切换终端时取消旧回放且不污染新游标、旧实例回放和分包 GBK；终端查询自动回复不作为远端输入。SSH 模拟器无 PTY 行规程，明确区分 Enter 的原始 CR 与测试中补充的 LF，不据此推断真实设备行为。
-- 已运行 Go 1.22.1 全量测试、全量 race、含 110s 等待的长时间 race、go vet，并完成 CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 编译。可选浏览器测试通过 `KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run TestBrowserAcceptance -v` 运行，需要单独安装的 Node/Playwright/Chromium。
+- 已运行 Go 1.22.1 全量测试、全量 race、含 110s 等待的长时间 race、go vet，并完成 CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 编译。可选浏览器测试通过 `KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser(Acceptance|Following|Overview)' -v` 运行，需要单独安装的 Node/Playwright/Chromium。
 
 ---
 
