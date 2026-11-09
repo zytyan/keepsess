@@ -181,6 +181,7 @@ async function apply(e, gen, live=false) {
 async function selectSession(id, task, options={}) {
  generation++;cancelRender();replayRequest?.abort();replayRequest=new AbortController();replayChunks=[];replaySize=0; inputQueue=""; clearTimeout(inputTimer); const gen=generation; if(socket)socket.close();socket=null;unlocked=false;operationPending=false;pendingFollow=null;selected=id;cursor=0;
  const e=sessions.get(id);overviewMode=!!options.overview&&e?.mode==='exec';handle=overviewMode?'':task||'';
+ document.querySelector('.terminal-panel').classList.toggle('overview-active',overviewMode);
  if(e?.mode==='exec'&&!handle&&!overviewMode)handle=latestTaskId();
  if(overview){overview.dispose();overview=null;}
  const initialScroll=scrollVersion;
@@ -255,7 +256,7 @@ $('overview-older').onclick=()=>{const list=sessionTasks(),first=list.findIndex(
 $('overview-newer').onclick=()=>{const list=sessionTasks(),last=list.findIndex(t=>t.handle===overview?.lastHandle());if(last<list.length-1)selectSession(selected,'',{overview:true,endHandle:list[Math.min(list.length-1,last+OVERVIEW_PAGE_SIZE)].handle});};
 $('overview-latest').onclick=()=>selectSession(selected,'',{overview:true});
 $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
-async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;$('session-errors').open=false;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(firstSession())selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}}
+async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;$('session-errors').open=false;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(firstSession())selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;document.querySelector('.terminal-panel').classList.remove('overview-active');$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}}
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));terminalResize.observe($('overview'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}overview?.refreshFonts();});
 function renderInstanceChoices(){renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)));}

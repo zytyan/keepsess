@@ -51,7 +51,7 @@ class TaskOverview {
   element.append(header,command,mount,hint);this.container.append(element);
   const card={element,title,state,command,mount,hint,record:null,decoder:null,encoding:'',epoch:0,version:0,resizing:false,terminal:null,closed:false};
   if(record.status.pty){hint.textContent='PTY 任务请打开单任务终端查看。';return card;}
-  const terminal=card.terminal=new Terminal({rows:2,cols:80,scrollback:this.budget(),disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:13,lineHeight:1.2,convertEol:true,...TERMINAL_APPEARANCE});
+  const terminal=card.terminal=new Terminal({rows:2,cols:80,scrollback:this.budget(),disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:13,lineHeight:1.2,convertEol:true,...TERMINAL_APPEARANCE,theme:{...TERMINAL_THEME,background:'#0c111b'}});
   terminal.open(mount);attachTerminalAppearance(terminal);
   terminal.onScroll(()=>{if(!card.resizing&&!this.terminalTail(card))card.version++;});
   for(const event of ['wheel','touchmove','pointerdown','keydown'])mount.addEventListener(event,()=>card.version++,{signal:this.events.signal,passive:true});
@@ -64,7 +64,7 @@ class TaskOverview {
   card.record=record;card.title.textContent=record.handle+(record.name?' · '+record.name:'');
   const code=record.status.exit_code;card.state.textContent=this.options.state(record)+(code!==undefined?' ('+code+')':'');
   card.command.textContent=`[${record.cwd||'~'}] $ ${record.command||'(命令记录不可用)'}`;
-  if(card.terminal)card.hint.textContent=`只读预览 · 滚动历史 ${this.budget()} 行；可打开单任务查看和操作。`;
+  card.hint.hidden=!!card.terminal;
  }
  resizeCard(card){
   const terminal=card.terminal;if(!terminal||card.closed)return;
