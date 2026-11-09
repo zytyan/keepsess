@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,12 @@ func (h *host) Instances() ([]history.Instance, error) {
 			instances[i].PID = p.pid
 		}
 	}
+	sort.SliceStable(instances, func(i, j int) bool {
+		if instances[i].Current != instances[j].Current {
+			return instances[i].Current
+		}
+		return instances[i].Started.After(instances[j].Started)
+	})
 	return instances, nil
 }
 func (h *host) Lookup(instance string) (web.Backend, error) {

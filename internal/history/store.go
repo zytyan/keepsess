@@ -34,11 +34,12 @@ type State struct {
 	LostEvents uint64 `json:"lost_events"`
 }
 type Instance struct {
-	ID      string    `json:"id"`
-	Name    string    `json:"name,omitempty"`
-	Started time.Time `json:"started"`
-	Current bool      `json:"current"`
-	PID     int       `json:"pid,omitempty"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name,omitempty"`
+	Started     time.Time `json:"started"`
+	Current     bool      `json:"current"`
+	PID         int       `json:"pid,omitempty"`
+	HasSessions *bool     `json:"has_sessions,omitempty"`
 }
 type Page struct {
 	Events []core.Event `json:"events"`
@@ -65,6 +66,8 @@ type Store struct {
 	queue          chan queued
 	done           chan struct{}
 	closed         bool
+	hasSessions    bool
+	owner          *os.File
 	once           sync.Once
 	pending        map[uint64]core.Event
 	subscribers    map[*Subscription]bool
@@ -73,6 +76,7 @@ type Store struct {
 	// File and projection mutations belong exclusively to the writer goroutine.
 	file              *os.File
 	segmentSize, used int64
+	metaHasSessions   bool
 }
 
 func Open(root, instance string, maxBytes int64) (*Store, error) {
@@ -86,8 +90,22 @@ func Open(root, instance string, maxBytes int64) (*Store, error) {
 	if err := os.Mkdir(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create private instance history: %w", err)
 	}
-	s := &Store{root: root, instance: instance, maxBytes: maxBytes, queue: make(chan queued, 256), done: make(chan struct{}), state: State{Recording: true}, pending: make(map[uint64]core.Event), subscribers: make(map[*Subscription]bool)}
-	if err := writeJSON(filepath.Join(dir, "instance.json"), Instance{ID: instance, Started: time.Now().UTC()}); err != nil {
+	owner, err := os.OpenFile(filepath.Join(dir, "owner.lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = lockOwner(owner); err != nil {
+		owner.Close()
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			owner.Close()
+		}
+	}()
+	s := &Store{root: root, instance: instance, owner: owner, maxBytes: maxBytes, queue: make(chan queued, 256), done: make(chan struct{}), state: State{Recording: true}, pending: make(map[uint64]core.Event), subscribers: make(map[*Subscription]bool)}
+	if err := writeJSON(filepath.Join(dir, "instance.json"), Instance{ID: instance, Started: time.Now().UTC(), HasSessions: new(bool)}); err != nil {
 		return nil, err
 	}
 	// Capacity counts all existing archives, not just the current process.
@@ -108,6 +126,7 @@ func Open(root, instance string, maxBytes int64) (*Store, error) {
 			return nil, err
 		}
 	}
+	started = true
 	go s.run()
 	return s, nil
 }
@@ -139,6 +158,9 @@ func (s *Store) Emit(e core.Event) {
 	defer s.mu.Unlock()
 	if s.closed {
 		return
+	}
+	if e.Session != "" {
+		s.hasSessions = true
 	}
 	s.state.LastSeq++
 	e.Seq = s.state.LastSeq
@@ -241,6 +263,17 @@ func (s *Store) run() {
 		if s.file != nil {
 			_ = s.file.Close()
 		}
+		_ = s.owner.Close()
+		s.mu.Lock()
+		empty := !s.hasSessions && s.state.Error == "" && s.state.LostEvents == 0
+		s.mu.Unlock()
+		if empty {
+			if err := os.RemoveAll(filepath.Join(s.root, s.instance)); err != nil {
+				s.mu.Lock()
+				s.failLocked("empty history cleanup: " + err.Error())
+				s.mu.Unlock()
+			}
+		}
 	}()
 	for {
 		select {
@@ -311,17 +344,38 @@ func (s *Store) append(e core.Event) error {
 	if n != len(b) {
 		return io.ErrShortWrite
 	}
-	if e.Kind == "instance" {
-		b, err := os.ReadFile(filepath.Join(dir, "instance.json"))
+	if e.Kind == "instance" || (e.Session != "" && !s.metaHasSessions) {
+		path := filepath.Join(dir, "instance.json")
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		var instance Instance
-		if err = json.Unmarshal(b, &instance); err != nil {
+		var meta Instance
+		if err = json.Unmarshal(data, &meta); err != nil {
 			return err
 		}
-		instance.Name = e.Name
-		return writeJSON(filepath.Join(dir, "instance.json"), instance)
+		changed := false
+		if e.Kind == "instance" {
+			meta.Name = e.Name
+			changed = true
+		}
+		if e.Session != "" && (meta.HasSessions == nil || !*meta.HasSessions) {
+			present := true
+			meta.HasSessions = &present
+			changed = true
+		}
+		if changed {
+			if err = writeJSON(path, meta); err != nil {
+				return err
+			}
+		}
+		if e.Session != "" {
+			s.metaHasSessions = true
+		}
+	}
+
+	if e.Kind == "instance" {
+		return nil
 	}
 	if e.Kind == "output" || e.Kind == "input" || e.Kind == "receipt" {
 		return nil
@@ -331,6 +385,7 @@ func (s *Store) append(e core.Event) error {
 
 func project(dir string, e core.Event) error {
 	r := Record{Event: e, Command: e.Command, Cwd: e.Cwd}
+	r.Event.EverConnected = e.EverConnected || (e.Kind != "connecting" && e.Status.Connected)
 	r.Event.Data = nil
 	key := e.Session
 	if e.Handle != "" {
@@ -343,6 +398,7 @@ func project(dir string, e core.Event) error {
 	if old, err := os.ReadFile(path); err == nil {
 		var prior Record
 		if json.Unmarshal(old, &prior) == nil {
+			r.Event.EverConnected = r.Event.EverConnected || prior.Event.EverConnected || (prior.Event.Kind != "connecting" && prior.Event.Status.Connected)
 			if r.Command == "" {
 				r.Command = prior.Command
 				r.Cwd = prior.Cwd
@@ -366,13 +422,34 @@ func (s *Store) Instances() ([]Instance, error) {
 			continue
 		}
 		var i Instance
-		if json.Unmarshal(b, &i) != nil {
+		if json.Unmarshal(b, &i) != nil || i.ID != d.Name() {
+			continue
+		}
+		dir := filepath.Join(s.root, d.Name())
+		if i.HasSessions != nil && !*i.HasSessions && ownerActive(dir) {
+			continue
+		}
+		if cleanupEmpty(dir) {
+			continue
+		}
+		has, known := sessionPresence(dir, i)
+		if i.ID == s.instance {
+			s.mu.Lock()
+			has = has || s.hasSessions
+			s.mu.Unlock()
+		}
+		if known && !has {
 			continue
 		}
 		i.Current = i.ID == s.instance
 		out = append(out, i)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Current != out[j].Current {
+			return out[i].Current
+		}
+		return out[i].Started.After(out[j].Started)
+	})
 	return out, nil
 }
 func (s *Store) instanceDir(instance string) (string, error) {

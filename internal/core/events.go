@@ -8,24 +8,25 @@ import (
 // Event is an independent observation, not a read receipt or proof of remote
 // execution. Only explicitly whitelisted public metadata may enter this type.
 type Event struct {
-	Instance string    `json:"instance"`
-	Seq      uint64    `json:"seq"`
-	Time     time.Time `json:"time"`
-	Kind     string    `json:"kind"`
-	Session  string    `json:"session"`
-	Handle   string    `json:"handle,omitempty"`
-	Epoch    uint64    `json:"epoch"`
-	Name     string    `json:"name,omitempty"`
-	Protocol string    `json:"protocol,omitempty"`
-	Mode     string    `json:"mode,omitempty"`
-	Encoding string    `json:"encoding,omitempty"`
-	ReadOnly bool      `json:"read_only"`
-	Disposed bool      `json:"disposed"`
-	Data     []byte    `json:"data,omitempty"`
-	Command  string    `json:"command,omitempty"`
-	Cwd      string    `json:"cwd,omitempty"`
-	Status   Result    `json:"status"`
-	Receipt  *Result   `json:"receipt,omitempty"`
+	Instance      string    `json:"instance"`
+	Seq           uint64    `json:"seq"`
+	Time          time.Time `json:"time"`
+	Kind          string    `json:"kind"`
+	Session       string    `json:"session"`
+	Handle        string    `json:"handle,omitempty"`
+	Epoch         uint64    `json:"epoch"`
+	Name          string    `json:"name,omitempty"`
+	Protocol      string    `json:"protocol,omitempty"`
+	Mode          string    `json:"mode,omitempty"`
+	Encoding      string    `json:"encoding,omitempty"`
+	ReadOnly      bool      `json:"read_only"`
+	Disposed      bool      `json:"disposed"`
+	EverConnected bool      `json:"ever_connected,omitempty"`
+	Data          []byte    `json:"data,omitempty"`
+	Command       string    `json:"command,omitempty"`
+	Cwd           string    `json:"cwd,omitempty"`
+	Status        Result    `json:"status"`
+	Receipt       *Result   `json:"receipt,omitempty"`
 }
 
 // Emit must copy ownership and enqueue without blocking or calling core. Set

@@ -200,7 +200,11 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 	c := config(t)
 	r, cancel, done := start(t, c)
 	defer func() { cancel(); <-done }()
-	a, b := newAgent(t, c), newAgent(t, c)
+	empty := newAgent(t, c)
+	emptyInfo := empty.call(t, "sess_configure", map[string]any{"instance_name": "empty agent"})
+	emptyID := emptyInfo["instance_id"].(string)
+	// b is older: it must still sort ahead of the newer a after a exits.
+	b, a := newAgent(t, c), newAgent(t, c)
 	addr, _ := testutil.SSH(t)
 	host, port, _ := net.SplitHostPort(addr)
 	n, _ := strconv.Atoi(port)
@@ -218,6 +222,13 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 		fetch(t, r.Info.URL, "api/instances", &instances)
 		return len(instances) == 2 && instances[0].Current && instances[1].Current && instances[0].Name != "" && instances[1].Name != ""
 	})
+	if _, err := os.Stat(filepath.Join(c.History.Dir, emptyID)); err != nil {
+		t.Fatal("live empty Agent removed", err)
+	}
+	empty.close(t)
+	if _, err := os.Stat(filepath.Join(c.History.Dir, emptyID)); !os.IsNotExist(err) {
+		t.Fatal("empty Agent archive not removed", err)
+	}
 	u, _ := url.Parse(r.Info.URL + "ws?instance=" + id1 + "&session=s1")
 	origin := u.Scheme + "://" + u.Host
 	u.Scheme = "ws"
@@ -289,7 +300,7 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 		fetch(t, r.Info.URL, "api/instances", &instances)
 		for _, i := range instances {
 			if i.ID == id1 {
-				return !i.Current && i.Name == "部署检查 A"
+				return !i.Current && i.Name == "部署检查 A" && instances[0].ID == id2 && instances[0].Current
 			}
 		}
 		return false

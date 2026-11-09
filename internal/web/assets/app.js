@@ -25,9 +25,12 @@ function status(text) { $('status').textContent = text; }
 function note(text) { const p = $('receipts'); p.textContent = (p.textContent + '\n' + text).slice(-24000); }
 async function api(endpoint, query = {}) { const u = new URL('api/' + endpoint, root); for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v); const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);try{const r = await fetch(u,{signal:controller.signal}); if (!r.ok) throw new Error(await r.text()); return await r.json();}finally{clearTimeout(timer);} }
 function historyState(info) { const h = info.history || info; if (h.error) warn('历史记录不完整：' + h.error + '；缺失事件 ' + (h.lost_events || 0)); }
-function firstSession(){return [...sessions.keys()].sort((a,b)=>Number(a.slice(1))-Number(b.slice(1)))[0];}
+function failedSession(e){return e.kind!=='connecting'&&!e.ever_connected&&!e.status.connected&&!!(e.status.error||e.status.disconnect_reason);}
+function sessionRank(e){return failedSession(e)?2:!e.disposed&&instance===current&&(e.status.connected||e.kind==='connecting')?0:1;}
+function sortedSessions(){return [...sessions].sort((a,b)=>sessionRank(a[1])-sessionRank(b[1])||Number(a[0].slice(1))-Number(b[0].slice(1)));}
+function firstSession(){return sortedSessions().find(([,e])=>!failedSession(e))?.[0]||'';}
 function name(e) { return e.session + (e.name ? ' · ' + e.name : ''); }
-function state(e) { if(e.kind==='connecting')return '连接中'; return e.disposed ? '已关闭 / 只读历史' : e.status.connected ? '已连接' : '已断开'; }
+function state(e) { if(failedSession(e))return '连接失败'; if(e.kind==='connecting')return e.disposed?'连接结果未知 / 只读历史':'连接中'; return e.disposed ? '已关闭 / 只读历史' : e.status.connected ? '已连接' : '已断开'; }
 function liveSession() { const e = sessions.get(selected); return instance === current && e && !e.disposed && e.status.connected; }
 function updateControls() {
  const active = liveSession(); const meta = sessions.get(selected);
@@ -43,13 +46,16 @@ function updateControls() {
  $('echo').closest('label').hidden=overviewMode;
 }
 function renderSidebar() {
- $('sessions').replaceChildren(); $('count').textContent = sessions.size;
- for (const [id, e] of [...sessions].sort((a,b) => Number(a[0].slice(1)) - Number(b[0].slice(1)))) {
+ $('session-list').replaceChildren();$('failed-sessions').replaceChildren(); $('count').textContent = sessions.size;
+ let failed=0;
+ for (const [id,e] of sortedSessions()) {
   const b = document.createElement('button'); b.className = 'session' + (selected === id ? ' active' : '');
   const strong = document.createElement('strong'); const dot = document.createElement('span'); dot.className = 'dot' + (e.status.connected && !e.disposed ? ' live' : ''); strong.append(dot, document.createTextNode(name(e)));
-  const small = document.createElement('small'); small.textContent = `${e.protocol} / ${e.mode} · ${state(e)}`; b.append(strong, small); b.onclick = () => selectSession(id); $('sessions').append(b);
+  const small = document.createElement('small'); small.textContent = `${e.protocol} / ${e.mode} · ${state(e)}`; b.append(strong, small); b.onclick = () => selectSession(id); const isFailed=failedSession(e);if(isFailed)failed++; $(isFailed?'failed-sessions':'session-list').append(b);
  }
- const e = sessions.get(selected); if (e) { $('title').textContent = name(e); $('subtitle').textContent = `${e.protocol.toUpperCase()} · ${e.mode} · ${state(e)}${e.read_only ? ' · 会话 read_only' : ''}`; }
+ $('session-errors').hidden=failed===0;$('session-error-summary').textContent=`连接失败（${failed}）`;$('session-errors').setAttribute('aria-label',`显示连接失败的会话，共 ${failed} 个`);
+ const e = sessions.get(selected); if (e) { $('title').textContent = name(e); $('subtitle').textContent = `${e.protocol.toUpperCase()} · ${e.mode} · ${state(e)}${e.read_only ? ' · 会话 read_only' : ''}${failedSession(e)&&e.status.error?' · '+e.status.error:''}`; }
+ else if(!selected){$('title').textContent='选择一个会话';$('subtitle').textContent=failed?'展开连接失败可查看诊断记录':'暂无会话';$('empty').textContent=failed?'展开左侧“连接失败”查看记录。':'会话创建后会显示在这里。';}
  updateControls();
 }
 function taskState(e) { if(e.status.warning)return 'unknown outcome'; if (instance !== current && (e.status.running || e.status.state === 'starting')) return 'unknown'; return e.status.state || (e.disposed ? 'closed' : ''); }
@@ -75,6 +81,8 @@ function renderTasks() {
 function remember(e) {
  if(e.kind==='instance')return;
  if((e.kind==='output'||e.kind==='input')&&(e.handle?tasks:sessions).has(e.handle||e.session))return;
+ const previous=(e.handle?tasks:sessions).get(e.handle||e.session);
+ e={...e,ever_connected:!!(e.ever_connected||previous?.ever_connected||(e.kind!=='connecting'&&e.status?.connected))};
  if(instance!==current){const status={...e.status,connected:false};if(status.running||status.state==='starting'){status.state='unknown';status.running=false;}e={...e,disposed:true,status};}
  const map = e.handle ? tasks : sessions; const old = map.get(e.handle || e.session);
  if(old && old.seq > e.seq)return;
@@ -247,14 +255,14 @@ $('overview-older').onclick=()=>{const list=sessionTasks(),first=list.findIndex(
 $('overview-newer').onclick=()=>{const list=sessionTasks(),last=list.findIndex(t=>t.handle===overview?.lastHandle());if(last<list.length-1)selectSession(selected,'',{overview:true,endHandle:list[Math.min(list.length-1,last+OVERVIEW_PAGE_SIZE)].handle});};
 $('overview-latest').onclick=()=>selectSession(selected,'',{overview:true});
 $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
-async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}}
+async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;$('session-errors').open=false;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(firstSession())selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}}
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));terminalResize.observe($('overview'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}overview?.refreshFonts();});
 function renderInstanceChoices(){renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)));}
 setInterval(renderInstanceChoices,60000);
 function refreshInstances(){if(!instanceRefresh)instanceRefresh=refreshInstanceList().finally(()=>{instanceRefresh=null});return instanceRefresh;}
 async function refreshInstanceList(){
- const list=await api('instances'),wasActive=activeInstances.has(instance);activeInstances=new Set(list.filter(i=>i.current).map(i=>i.id));
+ const list=(await api('instances')).sort((a,b)=>Number(b.current)-Number(a.current)||new Date(b.started)-new Date(a.started)||a.id.localeCompare(b.id)),wasActive=activeInstances.has(instance);activeInstances=new Set(list.filter(i=>i.current).map(i=>i.id));
  const saved=instance;
  if(!instance)instance=list.find(i=>i.current)?.id||list[0]?.id||'';
  current=activeInstances.has(instance)?instance:'';
@@ -265,7 +273,7 @@ async function refreshInstanceList(){
 }
 (async()=>{
  await waitForTerminalFonts();await initAppearance();const info=await api('info');serverID=info.instance_id;historyState(info);await refreshInstances();
- if(instance){await loadCatalog();if(sessions.size)await selectSession(firstSession());}
+ if(instance){await loadCatalog();if(firstSession())await selectSession(firstSession());}
  if(!selected)$('connection').textContent='等待会话';
- setInterval(async()=>{try{await refreshInstances();if(!selected&&instance){await loadCatalog();if(sessions.size)await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
+ setInterval(async()=>{try{await refreshInstances();if(!selected&&instance){await loadCatalog();if(firstSession())await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
 })().catch(e=>warn(e.message));

@@ -38,3 +38,5 @@ dialog{width:min(1100px,95vw);max-height:92vh;overflow:hidden;background:#111a28
 .instance-options button[aria-current=true]{border-color:#93d9f5;box-shadow:inset 3px 0 #93d9f5}
 @keyframes instance-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 #96f5c940}50%{opacity:.5;box-shadow:0 0 0 4px #96f5c900}}
 @media(prefers-reduced-motion:reduce){.instance-live::before{animation:none}}
+
+#session-errors{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}#session-error-summary{padding:6px 3px;color:#d6b884;font-size:12px}#failed-sessions{margin-top:8px}

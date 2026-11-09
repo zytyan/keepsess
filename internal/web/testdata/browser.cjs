@@ -30,6 +30,13 @@ const verifyTypography = require('./typography.cjs');
   assert(focused);await page.evaluate(()=>refreshInstances());assert(await page.evaluate(()=>document.activeElement===document.querySelector('#instance-options button')));
   await page.keyboard.press('Escape');assert.equal(await page.locator('#instances').getAttribute('open'),null);
 
+  assert.deepEqual(await page.locator('#session-list .session strong').allTextContents(),['s1 · production','s3 · console','s2 · closed-session']);
+  assert.equal(await page.locator('#failed-sessions .session').count(),1);assert.equal(await page.locator('#failed-sessions .session').isVisible(),false);
+  await page.locator('#session-error-summary').click();assert.equal(await page.locator('#failed-sessions .session').isVisible(),true);
+  await page.locator('#failed-sessions .session').click();await page.waitForFunction(()=>selected==='s4'&&!replaying);
+  assert.equal(await page.locator('#unlock').isDisabled(),true);assert.match(await page.locator('#subtitle').innerText(),/连接失败.*handshake/);
+  await page.locator('#session-list .session').first().click();await page.waitForFunction(()=>selected==='s1'&&!replaying);
+  await page.locator('#session-error-summary').click();
   assert.equal(await page.locator('#scrollback').inputValue(),'5000');
   assert.equal(await page.evaluate('terminal.options.scrollback'),5000);
   assert.match(await page.locator('#sessions').innerText(),/s1 · production/);assert.match(await page.locator('#sessions').innerText(),/s2 · closed-session/);

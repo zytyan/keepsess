@@ -1,7 +1,7 @@
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
 (async()=>{
- const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const browser=await chromium.launch({headless:true,ignoreDefaultArgs:['--hide-scrollbars'],args:['--no-sandbox']});
  try{
   const page=await browser.newPage({viewport:{width:1500,height:1100}}),errors=[];
   page.setDefaultTimeout(7000);
@@ -61,12 +61,47 @@ const assert=require('node:assert/strict');
   assert.equal(await page.evaluate(()=>terminal.buffer.active.length>=50000),true);
   assert.equal(await page.evaluate(()=>lastHighlightScan.length<=terminal.rows),true);
   assert.equal(await page.evaluate(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.every(m=>m.line>=terminal.buffer.active.viewportY)),true);
+  // Native wheel scrolling suppresses xterm's public onScroll notification.
+  const viewport=page.locator('#terminal .xterm-viewport');await page.locator('#terminal .xterm-screen').hover();
+  const oldView=await page.evaluate(()=>terminal.buffer.active.viewportY);
+  await page.mouse.wheel(0,-900);
+  await page.waitForFunction(old=>terminal.buffer.active.viewportY<old,oldView);
+  await page.waitForFunction(()=>{
+   const h=[...terminalHighlights].find(h=>h.term===terminal),view=terminal.buffer.active.viewportY;
+   return h.decorations.length>0&&h.markers.some(m=>m.line===view)&&h.markers.every(m=>m.line>=view&&m.line<view+terminal.rows);
+  },null,{timeout:3000});
+  const renderedRed=()=>{
+   const row=terminal.element.querySelector('.xterm-rows')?.firstElementChild;if(!row||!row.textContent.startsWith('ERROR'))return false;
+   const colors=[...row.querySelectorAll('span')].flatMap(el=>[...el.textContent].map(()=>getComputedStyle(el).color));
+   return colors.slice(0,5).length===5&&colors.slice(0,5).every(color=>color==='rgb(255, 133, 133)');
+  };
+  await page.waitForFunction(renderedRed);
+  // Give headless Chromium a conventional native scrollbar with a known thumb.
+  await page.addStyleTag({content:'#terminal .xterm-viewport::-webkit-scrollbar{width:14px}#terminal .xterm-viewport::-webkit-scrollbar-thumb{background:#999;min-height:20px}#terminal .xterm-viewport::-webkit-scrollbar-button{display:none;width:0;height:0}'});
+  // Drag the native scrollbar thumb to a different historical viewport.
+  const scroll=await viewport.evaluate(el=>{const b=el.getBoundingClientRect();return {x:b.x+b.width-5,y:b.y,h:b.height,top:el.scrollTop,total:el.scrollHeight,client:el.clientHeight};});
+  const thumb=Math.max(20,scroll.h*scroll.client/scroll.total),thumbY=scroll.y+(scroll.h-thumb)*scroll.top/(scroll.total-scroll.client)+thumb/2;
+  const beforeDrag=await page.evaluate(()=>terminal.buffer.active.viewportY);
+  await page.mouse.move(scroll.x,thumbY);await page.mouse.down();await page.mouse.move(scroll.x,scroll.y+scroll.h*.4,{steps:6});await page.mouse.up();
+  await page.waitForFunction(before=>terminal.buffer.active.viewportY!==before,beforeDrag);
+  await page.waitForFunction(renderedRed);
+  assert.equal(await page.evaluate(()=>lastHighlightScan.length<=terminal.rows),true);
   await page.evaluate(()=>terminal.scrollToTop());
   await page.waitForFunction(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.some(m=>m.line===0));
   assert.equal(await page.evaluate(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.every(m=>m.line<terminal.rows)),true);
   await page.locator('#overview-toggle').click();await page.waitForFunction(()=>typeof overview!=='undefined'&&overview);
   await page.evaluate(async()=>{const c=[...overview.cards.values()].find(c=>c.terminal);await new Promise(r=>c.terminal.write('\r\nERROR 10.0.0.1',r));});
   await page.waitForFunction(()=>[...terminalHighlights].some(h=>[...overview.cards.values()].some(c=>c.terminal===h.term)&&h.decorations.length>0));
+  await page.evaluate(async()=>{const c=[...overview.cards.values()].find(c=>c.terminal);await new Promise(r=>c.terminal.write(Array.from({length:100},(_,i)=>'ERROR card '+i+'\r\n').join(''),r));});
+  const cardScreen=page.locator('#overview .xterm-screen').first();await cardScreen.hover();
+  const cardBefore=await page.evaluate(()=>[...overview.cards.values()].find(c=>c.terminal).terminal.buffer.active.viewportY);
+  await page.mouse.wheel(0,-300);
+  await page.waitForFunction(before=>[...overview.cards.values()].find(c=>c.terminal).terminal.buffer.active.viewportY<before,cardBefore);
+  await page.waitForFunction(()=>{
+   const t=[...overview.cards.values()].find(c=>c.terminal).terminal,row=t.element.querySelector('.xterm-rows')?.firstElementChild;
+   const h=[...terminalHighlights].find(h=>h.term===t);
+   return row?.textContent.startsWith('ERROR')&&[...row.querySelectorAll('span')].slice(0,5).every(el=>getComputedStyle(el).color==='rgb(255, 133, 133)')&&h.markers.some(m=>m.line===t.buffer.active.viewportY);
+  });
   await page.evaluate(()=>{[...overview.cards.values()][0].element.style.display='none';});
   await page.waitForFunction(()=>[...terminalHighlights].every(h=>h.term===previewTerminal||h.decorations.length===0));
   await page.evaluate(()=>{[...overview.cards.values()][0].element.style.display='';});

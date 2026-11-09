@@ -44,7 +44,11 @@ class TerminalHighlight {
  constructor(term){
   this.term=term;this.decorations=[];this.markers=[];this.closed=false;this.version=0;this.timer=null;this.busy=false;this.failed=false;this.dirty=false;this.visible=false;
   terminalHighlights.add(this);
-  this.listeners=[term.onWriteParsed(()=>{this.version++;this.clear();this.schedule();}),term.onScroll(()=>{this.version++;this.clear();this.schedule();}),term.onResize(()=>{this.version++;this.clear();this.schedule();})];
+  this.viewportKey=this.viewKey();
+  this.listeners=[term.onWriteParsed(()=>this.invalidate()),term.onScroll(()=>this.invalidate()),term.onResize(()=>this.invalidate()),
+   // Native viewport scrolling suppresses onScroll in this xterm version.
+   // Decorations also trigger rendering: only invalidate when the view changed.
+   term.onRender(()=>{if(this.viewportKey!==this.viewKey())this.invalidate();})];
   this.visibility=new IntersectionObserver(entries=>{
    const visible=entries[0].isIntersecting;
    if(visible===this.visible)return;
@@ -53,7 +57,9 @@ class TerminalHighlight {
   this.visibility.observe(term.element.querySelector('.xterm-screen'));
   this.configure();term.register({dispose:()=>this.dispose()});
  }
- configure(){this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.schedule();}
+ viewKey(){const b=this.term.buffer.active;return `${b.type}/${b.viewportY}/${b.baseY}/${this.term.cols}/${this.term.rows}`;}
+ invalidate(){this.viewportKey=this.viewKey();this.version++;this.clear();this.schedule();}
+ configure(){this.viewportKey=this.viewKey();this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.schedule();}
  clear(){for(const d of this.decorations)d.dispose();for(const m of this.markers)m.dispose();this.decorations=[];this.markers=[];}
  schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||!appearance.enabled)return;this.timer=setTimeout(()=>{this.timer=null;this.scan();},80);}
  scan(){
@@ -74,11 +80,11 @@ class TerminalHighlight {
    }
   }
   if(!groups.length)return;
-  const version=this.version,rules=appearance.rules;this.busy=true;
+  const version=this.version,view=this.viewKey(),rules=appearance.rules;this.busy=true;
   highlightEngine.request(this,{lines:groups.map(g=>g.text),rules}).then(data=>{
    if(this.closed||data.cancelled)return;
    if(data.error){this.failed=true;highlightNotice('高亮规则无效：'+data.error);return;}
-   if(version!==this.version){this.dirty=true;return;}
+   if(version!==this.version||view!==this.viewKey()){this.dirty=true;return;}
    for(const hit of data.matches){
     const rule=rules[hit.rule],cells=groups[hit.line].cells.filter(c=>c.start<hit.end&&c.end>hit.start);
     let span=null;const spans=[];

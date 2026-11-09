@@ -2,16 +2,19 @@ package web
 
 import (
 	"context"
+	"net"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/zytyan/keepsess/internal/core"
 	"github.com/zytyan/keepsess/internal/history"
+	"github.com/zytyan/keepsess/internal/testutil"
 )
 
 // Optional real-browser acceptance. Go builds and normal tests require neither
@@ -54,6 +57,12 @@ func runBrowserAcceptance(t *testing.T, proxy bool) {
 	_, _ = m.Close(closed)
 	stream := connectSSH(t, m, "stream")
 	_, _ = m.RenameSession(stream, "console")
+	failedAddr := testutil.Listen(t, func(raw net.Conn) { _ = raw.Close() })
+	failedHost, failedPort, _ := net.SplitHostPort(failedAddr)
+	failedN, _ := strconv.Atoi(failedPort)
+	if _, err = m.Connect(context.Background(), core.Options{Host: failedHost, Port: failedN, Protocol: "ssh", Mode: "exec", Username: "user", Password: "secret", Name: "failed-connect"}); err == nil {
+		t.Fatal("fixture connection unexpectedly succeeded")
+	}
 	until := time.Now().Add(3 * time.Second)
 	for st.Status().WrittenSeq < st.Status().LastSeq && time.Now().Before(until) {
 		time.Sleep(time.Millisecond)
