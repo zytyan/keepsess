@@ -24,6 +24,7 @@ type Audit interface{ Record(any) error }
 type Server struct {
 	Manager *core.Manager
 	Audit   Audit
+	WebInfo func() any
 }
 type message struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -250,7 +251,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		v, e := s.Manager.TaskList(r.Session)
 		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "tasks": v}, e)
 	case "sess_list":
-		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "sessions": s.Manager.List()}, nil)
+		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "sessions": s.Manager.List(), "web": s.webInfo()}, nil)
 	case "sess_close_all":
 		s.Manager.CloseAll()
 		return toolResult(map[string]any{"reason": "closed", "connected": false}, nil)
@@ -664,7 +665,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID()}, "instructions": residentInstructions}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID(), "web": s.webInfo()}, "instructions": residentInstructions}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":
@@ -714,4 +715,11 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 			}
 		}
 	}
+}
+
+func (s *Server) webInfo() any {
+	if s.WebInfo != nil {
+		return s.WebInfo()
+	}
+	return map[string]any{"enabled": false}
 }

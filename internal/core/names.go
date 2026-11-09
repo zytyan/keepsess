@@ -76,6 +76,7 @@ func (m *Manager) RenameSession(ref, name string) (Result, error) {
 	}
 	delete(m.sessionNames, s.name)
 	s.name = name
+	s.recordLocked("session", nil, "", "", nil)
 	m.sessionNames[name] = id
 	s.lastUse = time.Now()
 	return s.statusLocked(), nil
@@ -121,6 +122,7 @@ func (m *Manager) RenameTask(ref, name string) (Result, error) {
 		return Result{}, errors.New("unknown or expired task; inspect sess_task_list")
 	}
 	selected.out.name = name
+	selected.out.recordLocked("task", nil, "", "", nil)
 	s.lastUse = time.Now()
 	return selected.out.statusLocked(), nil
 }

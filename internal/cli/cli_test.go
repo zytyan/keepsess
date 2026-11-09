@@ -64,3 +64,59 @@ func TestAuditRedaction(t *testing.T) {
 		t.Fatal(st.Mode())
 	}
 }
+
+func TestServeWebDiscoveryAndStdioIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		extra   []string
+		enabled bool
+		failure bool
+	}{
+		{"default", nil, true, false},
+		{"disabled", []string{"--web=false"}, false, false},
+		{"invalid root keeps MCP alive", []string{"--web-base-path=/{invalid}/"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"serve", "--web-listen=127.0.0.1:0", "--history-dir=" + t.TempDir()}
+			args = append(args, tc.extra...)
+			input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"sess_list\",\"arguments\":{}}}\n"
+			var out, errout bytes.Buffer
+			if e := Run(context.Background(), args, strings.NewReader(input), &out, &errout); e != nil {
+				t.Fatal(e)
+			}
+			d := json.NewDecoder(&out)
+			count := 0
+			for d.More() {
+				var response map[string]any
+				if e := d.Decode(&response); e != nil {
+					t.Fatal("non-MCP stdout", e)
+				}
+				result := response["result"].(map[string]any)
+				var info map[string]any
+				if response["id"] == float64(1) {
+					info = result["_meta"].(map[string]any)["web"].(map[string]any)
+				} else {
+					info = result["structuredContent"].(map[string]any)["web"].(map[string]any)
+				}
+				if info["enabled"] != tc.enabled {
+					t.Fatal(info)
+				}
+				if tc.enabled {
+					if !strings.HasPrefix(info["url"].(string), "http://127.0.0.1:") {
+						t.Fatal(info)
+					}
+				}
+				if tc.failure && info["error"] == nil {
+					t.Fatal(info)
+				}
+				count++
+			}
+			if count != 2 {
+				t.Fatal("missing responses", count, errout.String())
+			}
+			if tc.enabled && !strings.Contains(errout.String(), "keepsess Web:") {
+				t.Fatal(errout.String())
+			}
+		})
+	}
+}

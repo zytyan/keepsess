@@ -11,6 +11,35 @@ Optional audit: `serve --log /private/path/audit.jsonl`. Authentication fields a
 commands and send data are recorded and can contain secrets. SSH host-key verification is optional and skipped by default;
 provide known_hosts or host_key explicitly when verification is required.
 
+## Human Web terminal and persistent history
+
+`serve` also starts an embedded offline xterm.js interface, default `127.0.0.1:8765`.
+Occupied ports are retried; inspect `initialize._meta.web` or `sess_list.web` for the
+actual URL and recording health. Startup notices use stderr only. `--web=false`
+disables Web/history; never start another process just to obtain the current URL.
+The browser lists stable session IDs plus model-assigned aliases, retains closed
+sessions and offers older instance archives. Archives do not restore connections.
+Browser input is read-only until explicitly unlocked and returns to read-only on
+refresh/reconnection. Unlocking never overrides session `read_only`. Human writes
+share core write limits and receipts, and are never automatically retried.
+Terminal scrollback defaults to 5000 lines, adjustable and saved in that browser;
+this does not limit persistent disk history or change MCP output cursors. Tasks
+appear in a secondary sidebar, ordered by creation. Output follows the viewport
+only at the bottom. A new task is selected automatically only while viewing the
+latest task at its bottom; reading older output/tasks keeps the current selection.
+Pending input/receipts pause automatic switching; switching restores read-only.
+
+History defaults to the OS user config directory under `keepsess/history`, with
+private instance directories/files. Commands, raw terminal input (including passwords)
+and output are retained; structured connection credentials and env fields are excluded.
+Do not publish history directories. `--history-dir` changes the location and
+`--history-max-bytes` enables a capacity guard; default 0 retains without automatic
+cleanup. Recording failures/gaps are reported without blocking remote connections.
+For reverse proxies use `--web-base-path /keepsess/` if the prefix is forwarded;
+if stripped, retain internal `/` and set `--web-public-url https://host/keepsess/`.
+Use `--web-listen` for explicit nonlocal binding; external authentication belongs
+to the proxy. No MCP tool or Web observation may replay input after a lost receipt.
+
 ## Install only when requested
 
 `keepsess install [FILE] --client claude|cursor|vscode|codex` installs the executable, MCP entry

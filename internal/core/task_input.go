@@ -183,11 +183,13 @@ func (m *Manager) taskInput(ctx context.Context, kind string, r Request) (Result
 		v.WrittenBytes = result.n
 		v.Error = result.err.Error()
 		v.Reason = "aborted"
+		t.out.recordInput(b, c.Encoding, &v)
 		if errors.Is(result.err, context.Canceled) {
 			v.Reason = "cancelled"
 		}
 		return v, nil
 	}
+	t.out.recordInput(b, c.Encoding, &v)
 	s.writeMu.RUnlock()
 	controlLocked = false
 	t.inputMu.Unlock()

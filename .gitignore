@@ -17,3 +17,7 @@
 
 /.codegraph/
 /.mcp.json
+
+# Persistent human terminal history (never publish raw input/output)
+/keepsess-history/
+/history/

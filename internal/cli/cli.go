@@ -16,7 +16,9 @@ import (
 
 	"github.com/zytyan/keepsess/internal/buildinfo"
 	"github.com/zytyan/keepsess/internal/core"
+	"github.com/zytyan/keepsess/internal/history"
 	"github.com/zytyan/keepsess/internal/mcp"
+	"github.com/zytyan/keepsess/internal/web"
 )
 
 //go:embed skill.md
@@ -26,7 +28,7 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
 
 用法:
   keepsess help                         查看用途和子命令
-  keepsess serve [--log PATH]           显式启动 MCP stdio 服务
+  keepsess serve [--log PATH]           启动 MCP stdio 和默认只读 Web 终端
   keepsess mcp-skill                    输出 AI 操作指南
   keepsess install [FILE] [--client X]  安装二进制、MCP 配置和 skill
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
@@ -65,6 +67,11 @@ sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确�
 SSH 协议 keepalive 默认 30000ms、回复时限 10000ms；RPC 预算先到不发 TERM，保留任务 handle。
 TCP keepalive 默认 15000ms；Linux 支持 TCP 队列阈值，Windows 明确报告不支持。
 MCP 配置: {"command":"/path/to/keepsess","args":["serve"]}
+Web 默认监听 127.0.0.1:8765，端口占用自动重试；initialize._meta.web / sess_list.web 可查实际 URL。
+--web=false 关闭 Web 与历史记录；--web-listen HOST:PORT、--web-base-path /prefix/、--web-public-url URL 配置反代。
+--history-dir PATH 指定历史目录；--history-max-bytes N 设置容量保护（0 不限），历史不自动删除。
+Web 本机免登录，每次刷新/重连恢复只读，解锁仍受会话 read_only 保护；滚动历史默认 5000 行，可调整并记住。
+历史包含命令、原始输入和输出（可能包含密码）；连接认证参数/env 字段不写入。关闭会话仍保留 Web 历史。
 --log 写入 0600 JSONL 审计；认证字段脱敏，command/data 仍可能含敏感信息。
 Telnet 为明文；SSH 默认不验证主机密钥，显式 known_hosts/host_key 可启用。连接只在本次服务进程内持久化。
 `
@@ -118,6 +125,12 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		f := flag.NewFlagSet("serve", flag.ContinueOnError)
 		f.SetOutput(errout)
 		path := f.String("log", "", "Audit JSONL path (authentication redacted)")
+		webEnabled := f.Bool("web", true, "Start local human Web terminal (read-only until unlocked)")
+		webListen := f.String("web-listen", "127.0.0.1:8765", "Web listen address; occupied ports are retried")
+		webBase := f.String("web-base-path", "/", "Internal Web root path, e.g. /keepsess/")
+		webPublic := f.String("web-public-url", "", "External http(s) URL for reverse proxy access")
+		historyDir := f.String("history-dir", "", "Persistent history directory (default user config/keepsess/history)")
+		historyMax := f.Int64("history-max-bytes", 0, "Archive capacity; 0 means retain without automatic deletion")
 		if e := f.Parse(args[1:]); e != nil {
 			return e
 		}
@@ -125,6 +138,49 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 			return errors.New("unexpected arguments")
 		}
 		s := &mcp.Server{Manager: core.NewManager()}
+		if *historyMax < 0 {
+			return errors.New("history-max-bytes must be nonnegative")
+		}
+		if *webEnabled {
+			info := web.Info{}
+			if *historyDir == "" {
+				dir, e := os.UserConfigDir()
+				if e != nil {
+					info.Error = e.Error()
+				} else {
+					*historyDir = filepath.Join(dir, "keepsess", "history")
+				}
+			}
+			if info.Error == "" {
+				store, e := history.Open(*historyDir, s.Manager.InstanceID(), *historyMax)
+				if e != nil {
+					info.Error = e.Error()
+				} else {
+					defer func() {
+						store.Close()
+						if state := store.Status(); state.Error != "" {
+							fmt.Fprintln(errout, "keepsess history:", state.Error)
+						}
+					}()
+					s.Manager.SetEventSink(store)
+					ws, e := web.Start(ctx, s.Manager, store, web.Options{Listen: *webListen, BasePath: *webBase, PublicURL: *webPublic})
+					if e != nil {
+						info.Error = e.Error()
+						s.WebInfo = func() any { i := info; i.History = store.Status(); return i }
+					} else {
+						defer ws.Close()
+						s.WebInfo = func() any { return ws.Info() }
+						fmt.Fprintln(errout, "keepsess Web:", ws.Info().URL, "(local access has no login; terminal input is archived)")
+					}
+				}
+			}
+			if info.Error != "" {
+				if s.WebInfo == nil {
+					s.WebInfo = func() any { return info }
+				}
+				fmt.Fprintln(errout, "keepsess Web unavailable:", info.Error)
+			}
+		}
 		if *path != "" {
 			a, e := OpenAudit(*path)
 			if e != nil {

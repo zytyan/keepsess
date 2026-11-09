@@ -130,6 +130,9 @@ type Result struct {
 	QueuedBytes        *int          `json:"queued_bytes,omitempty"`
 }
 type Session struct {
+	events EventSink
+	epoch  uint64
+
 	sshClient                               *ssh.Client
 	tunnels                                 map[string]*Tunnel
 	nextTunnel                              uint64
@@ -165,6 +168,8 @@ type Session struct {
 	interactive, pty, stdinOpen             bool
 }
 type Manager struct {
+	events EventSink // Installed before serving; callbacks must never block.
+
 	instanceID   string
 	sessionNames map[string]string
 	mu           sync.Mutex
@@ -294,6 +299,8 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	ctx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
 	defer stop()
 	s := &Session{id: id, name: o.Name, protocol: o.Protocol, mode: o.Mode, config: cfg, last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	s.events, s.epoch = m.events, 1
+	s.record("connecting", nil, "", "", nil)
 	s.options = o
 	s.options.Config = nil // Retain connection credentials privately, not a caller-owned config map.
 	if o.Protocol == "ssh" {
@@ -313,6 +320,7 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	}
 	m.sessions[id] = s
 	m.mu.Unlock()
+	s.record("session", nil, "", "", nil)
 	go m.watch(s)
 	v := s.status()
 	s.mu.Lock()
@@ -333,6 +341,7 @@ func (s *Session) Write(p []byte) (int, error) {
 	if s.disposed {
 		return len(p), nil
 	}
+	s.recordLocked("output", p, "", "", nil)
 	s.last = time.Now()
 	s.total += int64(len(p))
 	if len(p) >= HistoryLimit {
@@ -364,6 +373,7 @@ func (s *Session) disconnectWith(code, why string) {
 		if s.handle != "" && !s.completed {
 			s.state = "unknown"
 		}
+		s.recordLocked("session", nil, "", "", nil)
 		s.mu.Unlock()
 		close(s.done)
 		s.signal()
@@ -417,6 +427,7 @@ func (s *Session) expire(now time.Time) bool {
 	if unused {
 		s.disposed = true
 		s.retiredReason = "session_idle_expired"
+		s.recordLocked("session", nil, "", "", nil)
 		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
@@ -468,6 +479,7 @@ func (m *Manager) Close(id string) (Result, error) {
 	s.mu.Lock()
 	s.disposed = true
 	s.retiredReason = "explicit_close"
+	s.recordLocked("session", nil, "", "", nil)
 	s.options = Options{}
 	s.buf = nil
 	s.base = s.total
@@ -494,6 +506,7 @@ func (m *Manager) CloseAll() {
 		s.mu.Lock()
 		s.disposed = true
 		s.retiredReason = "explicit_close"
+		s.recordLocked("session", nil, "", "", nil)
 		s.options = Options{}
 		s.buf = nil
 		s.base = s.total
@@ -579,6 +592,7 @@ func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 		return ConfigResult{}, errors.New("session disposed")
 	}
 	s.config = cfg
+	s.recordLocked("session", nil, "", "", nil)
 	if s.keepaliveWake != nil {
 		select {
 		case s.keepaliveWake <- struct{}{}:
@@ -729,6 +743,7 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return Result{}, errors.New("busy: another write owns this session; nothing sent")
 	}
 	result := s.write(ctx, kind, b, cfg)
+	s.recordInput(b, cfg.Encoding, &result)
 	s.writeMu.Unlock()
 	if result.InputState != "sent" || !collect {
 		return result, nil
@@ -887,8 +902,9 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	old.base, old.cursor = old.total, old.total
 	old.discardTasksLocked()
 	old.mu.Unlock()
-	next := &Session{id: id, name: old.name, peer: previousPeer, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
+	next := &Session{events: old.events, epoch: old.epoch + 1, id: id, name: old.name, peer: previousPeer, protocol: old.protocol, mode: old.mode, options: o, config: cfg,
 		last: time.Now(), lastUse: time.Now(), connected: true, notify: make(chan struct{}, 1), done: make(chan struct{})}
+	next.record("connecting", nil, "", "", nil)
 	dialCtx, stop := context.WithTimeout(ctx, cfg.Duration(cfg.ConnectTimeoutMS))
 	if o.Protocol == "ssh" {
 		err = next.connectSSH(dialCtx, o)
@@ -927,6 +943,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 		next.disconnect("")
 		return Result{}, errors.New("reconnect cancelled by close; use sess_connect")
 	}
+	next.record("session", nil, "", "", nil)
 	go m.watch(next)
 	v := next.status()
 	next.mu.Lock()

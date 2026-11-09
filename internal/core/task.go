@@ -81,6 +81,7 @@ func (s *Session) discardTasksLocked() {
 		t.out.disposed = true
 		t.out.buf = nil
 		t.out.base, t.out.cursor = t.out.total, t.out.total
+		t.out.recordLocked("task", nil, "", "", nil)
 		t.out.mu.Unlock()
 		t.out.disconnect("task discarded by connection close/reconnect; remote outcome may be unknown")
 	}
@@ -93,6 +94,7 @@ func (s *Session) pruneTasksLocked(now time.Time) {
 		if t.out.completed && t.out.active == 0 && now.Sub(t.finished) >= TaskRetention {
 			t.out.disposed = true
 			t.out.buf = nil
+			t.out.recordLocked("task", nil, "", "", nil)
 			delete(s.tasks, handle)
 		}
 		t.out.mu.Unlock()
@@ -105,6 +107,7 @@ func evictTaskLocked(s *Session, t *Task) {
 	t.out.mu.Lock()
 	t.out.disposed = true
 	t.out.buf = nil
+	t.out.recordLocked("task", nil, "", "", nil)
 	delete(s.tasks, t.out.handle)
 	t.out.mu.Unlock()
 }
@@ -182,7 +185,7 @@ func (m *Manager) allocateTask(s *Session, c Config, interactive, pty bool, name
 	m.nextTask++
 	now := time.Now()
 	t := &Task{session: s, sequence: m.nextTask, out: &Session{
-		id: s.id, name: name, handle: fmt.Sprintf("task%d", m.nextTask), protocol: "ssh", mode: "exec", state: "starting",
+		events: s.events, epoch: s.epoch, id: s.id, name: name, handle: fmt.Sprintf("task%d", m.nextTask), protocol: "ssh", mode: "exec", state: "starting",
 		config: c, interactive: interactive, pty: pty, connected: true, running: true, active: 1, last: now, lastUse: now,
 		notify: make(chan struct{}, 1), done: make(chan struct{}),
 	}}
@@ -278,7 +281,16 @@ func (m *Manager) startTask(ctx context.Context, s *Session, r Request, c Config
 	defer t.out.touch(-1)
 	// Pin the initial collector before publishing any command output.
 	defer t.out.readMu.Unlock()
+	displayCwd := r.Cwd
+	if displayCwd == "" {
+		displayCwd = "~"
+		if r.Login != nil && !*r.Login {
+			displayCwd = "默认目录（未探测）"
+		}
+	}
+	t.out.record("command", nil, r.Command, displayCwd, nil)
 	v = t.start(ctx, string(b), c)
+	t.out.record("receipt", nil, "", "", &v)
 	s.writeMu.RUnlock()
 	locked = false
 	if v.InputState == "not_sent" {
@@ -395,6 +407,7 @@ func (t *Task) start(ctx context.Context, command string, c Config) Result {
 func (t *Task) finish(err error) {
 	t.out.mu.Lock()
 	defer t.out.mu.Unlock()
+	defer t.out.recordLocked("task", nil, "", "", nil)
 	if t.out.disposed {
 		return
 	}

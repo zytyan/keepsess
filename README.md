@@ -23,6 +23,54 @@ keepsess install-skill --dir ./keepsess-skill
 
 0.3 API 当前提供下列 30 个工具（含 sess_help、sess_rename、sess_task_rename）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
+## 人类 Web 终端与持久历史
+
+`keepsess serve` 默认同时启动离线打包的 xterm.js 界面，监听 `127.0.0.1:8765`。
+端口占用时依次尝试后续 100 个端口，再由系统分配。实际入口写入 stderr，
+模型可以从 `initialize._meta.web` 或 `sess_list` 的 `web` 查询 URL 和历史记录状态；stdout 仍只输出 MCP。
+
+页面默认只读；手动解锁后可向 stream / interactive exec 输入，或在 exec 会话启动命令。
+刷新、切换终端、WS 重连恢复只读，解锁不覆盖会话 `read_only`。
+左侧列出稳定 `sN` 和当前别名，保留已关闭会话；exec 任务放在会话旁的二级侧栏，按创建顺序显示 `taskN`、别名、状态和命令摘要，独立展示输出。
+停在终端尾部时自动跟随新输出，向上滚动后保持阅读位置；只有停在最新任务尾部才自动切换到新任务，查看旧任务或历史内容时保持当前选择。
+自动切换仍恢复只读；尚有输入待发送或操作等待回执时不抢占终端。
+非交互命令前显示 `[s1 task2 /srv/app] $ command`，路径来自请求的 `cwd`；未指定时登录模式显示 `~`，
+非登录模式显示“默认目录（未探测）”，不额外执行目录探测。
+WS 实时更新和断线历史补齐不消耗 MCP 输出游标，不重放任何输入。
+前端滚动历史默认 **5000 行**，可在页面调整为 100..200000 行并保存在浏览器中；磁盘历史独立保留。
+
+历史默认写入系统用户配置目录的 `keepsess/history/<instance_id>/`，目录/文件在支持的平台使用 0700/0600。
+会话关闭、任务淘汰不删除历史；旧进程通过“历史归档”查看，不恢复连接或远端任务。
+日志保存 exec 命令/cwd、原始终端输入和输出，**终端中输入的密码也会保存**；不写入连接认证参数、私钥或结构化 env 字段。
+历史与可选 `--log` AI 输入审计相互独立。历史不自动删除，需手动清理不再使用的实例目录；不要发布历史目录。
+异步写盘约每秒同步一次，异常退出可能丢失尚未同步的尾部记录；归档目录索引从完整日志重建。
+记录队列、浏览器队列和内存滚动历史均有界；记录故障、缺口和容量耗尽明确提示，连接仍可继续工作。
+
+```sh
+keepsess serve --web=false                    # 禁用 Web 和持久历史
+keepsess serve --web-listen 127.0.0.1:0        # 直接由系统分配端口
+keepsess serve --history-dir /private/history # 自定义历史位置
+keepsess serve --history-max-bytes 1073741824 # 容量保护，0 为默认不限
+
+# 反代保留 /keepsess/ 前缀：
+keepsess serve --web-base-path /keepsess/ --web-public-url https://terminal.example/keepsess/
+# 反代剥离前缀，内部根保持 /：
+keepsess serve --web-public-url https://terminal.example/keepsess/
+```
+
+反代需转发 WebSocket Upgrade，并保留 Host 或使用配置的公开域名；HTTPS 页面自动使用 WSS。
+本机入口免登录；对外监听通过 `--web-listen` 显式设置，对外认证由反代负责。
+服务校验 Host/Origin，Web 只读开关用于防误输入，不代替身份认证。
+容量保护按启动时现有文件加本实例新增日志计算，多进程共用目录时不作为严格的全目录磁盘配额。
+Web 启动失败不阻止 MCP 启动，`web.error` 会报告原因。
+
+可选浏览器验收（需本地 Node.js、Playwright 和 Chromium，不影响正常 Go 构建）：
+
+```sh
+KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser(Acceptance|Following)' -v
+# 可用 KEEPSESS_NODE 指定 node 路径，PLAYWRIGHT_MODULE 指定已安装的 playwright 模块路径。
+```
+
 ## 一键安装到客户端
 
 MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；30 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
@@ -396,6 +444,15 @@ Linux 使用 SIOCOUTQ/TIOCOUTQ 查询 TCP 排队字节，包含未确认数据�
 最多 32 会话、32 tool workers、64 输出帧；输入 JSON 帧上限 12MiB+128KiB，供转义后的最大输入使用。stdio 调度、远端操作与输出写入分离；stdout 消费者阻塞 3s 后结束服务，避免队头阻塞和无限 writer。重启后须重新连接。关闭不等待活动操作，且不回吐正文。认证字段审计脱敏、文件权限 0600，但 command/data 仍可能包含秘密。Telnet 是明文。
 
 ## 构建与验证
+
+正常构建只需 **Go 1.22.1**：前端 JS/CSS 和 xterm.js 已用 `go:embed` 打包，不需要 Node.js、npm、前端打包器、CGO 或 C 编译器。首次构建需下载 Go 模块，缓存齐全后可以离线构建。
+
+```sh
+CGO_ENABLED=0 go build -o keepsess ./cmd/keepsess
+```
+
+三平台脚本另需 `sh` 和 `sha256sum`；Git 仅用于构建标识，缺失时使用 unknown。
+普通 Go 测试不需要前端工具；`-race` 需要 CGO 和 C 编译器；可选浏览器验收另需 Node.js、Playwright、Chromium。
 
 ```sh
 GOTOOLCHAIN=go1.22.1 go vet ./...
