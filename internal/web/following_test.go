@@ -25,10 +25,20 @@ import (
 
 // Real SSH output and commands drive the browser; the control endpoint belongs
 // only to this optional test fixture, never to the production Web server.
-func TestBrowserWheel(t *testing.T)      { runBrowserFixture(t, "wheel.cjs", "short-first") }
+func TestBrowserWheel(t *testing.T) { runBrowserFixture(t, "wheel.cjs", "short-first") }
+func TestBrowserPerformance(t *testing.T) {
+	if os.Getenv("KEEPSESS_PERF_DIR") == "" {
+		t.Skip("set KEEPSESS_PERF_DIR to collect headed browser traces")
+	}
+	runBrowserFixture(t, "performance.cjs", "short-first")
+}
 func TestBrowserAppearance(t *testing.T) { runBrowserFixture(t, "appearance.cjs", "short-first") }
-func TestBrowserFollowing(t *testing.T)  { runBrowserFixture(t, "following.cjs", "first") }
-func TestBrowserOverview(t *testing.T)   { runBrowserFixture(t, "overview.cjs", "short-first") }
+func TestBrowserAppearanceFallback(t *testing.T) {
+	t.Setenv("KEEPSESS_HIGHLIGHT_FALLBACK", "1")
+	runBrowserFixture(t, "appearance.cjs", "short-first")
+}
+func TestBrowserFollowing(t *testing.T) { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserOverview(t *testing.T)  { runBrowserFixture(t, "overview.cjs", "short-first") }
 func runBrowserFixture(t *testing.T, script, initial string) {
 	if os.Getenv("KEEPSESS_BROWSER_TEST") != "1" {
 		t.Skip("set KEEPSESS_BROWSER_TEST=1 with Node and Playwright installed")

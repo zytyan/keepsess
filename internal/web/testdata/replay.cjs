@@ -1,6 +1,6 @@
-const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const {launch}=require('./launch.cjs');
 const assert=require('node:assert/strict');
-(async()=>{const browser=await chromium.launch({headless:true,args:['--no-sandbox']});try{
+(async()=>{const browser=await launch({headless:true,args:['--no-sandbox']});try{
  const page=await browser.newPage({viewport:{width:1400,height:1000}});const errors=[];let snapshots=0;page.on('pageerror',e=>errors.push(e.message));page.on('response',r=>{if(r.url().includes('/api/replay?'))snapshots++;});
  await page.addInitScript(()=>{window.replayWrites=0;window.historyWasHidden=true;let terminalClass;Object.defineProperty(window,'Terminal',{configurable:true,get:()=>terminalClass,set:value=>{terminalClass=value;const write=value.prototype.write;value.prototype.write=function(data,callback){window.replayWrites++;window.historyWasHidden&&=getComputedStyle(document.getElementById('terminal')).visibility==='hidden';return write.call(this,data,callback);};}});});
  await page.goto(process.argv[2]);await page.waitForFunction(()=>typeof replaying!=='undefined'&&!replaying&&typeof terminal!=='undefined'&&terminal?.buffer.active.length>1000);

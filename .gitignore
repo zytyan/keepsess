@@ -22,6 +22,9 @@
 /keepsess-history/
 /history/
 
+# Local browser traces, portable diagnostic tools and synthetic capture files
+/.perf-tools/
+
 # Python SDK build/cache artifacts
 __pycache__/
 *.py[cod]

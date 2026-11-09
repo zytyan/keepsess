@@ -1,6 +1,6 @@
-const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const {launch}=require('../../web/testdata/launch.cjs');
 const assert=require('node:assert/strict');
-(async()=>{const browser=await chromium.launch({headless:true,args:['--no-sandbox']});try{
+(async()=>{const browser=await launch({headless:true,args:['--no-sandbox']});try{
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(process.argv[2]);await page.waitForFunction(()=>typeof selected!=='undefined'&&selected&&typeof replaying!=='undefined'&&!replaying);
  await page.waitForFunction(()=>document.querySelectorAll('#instance-options button').length===2&&document.getElementById('instances').textContent.includes('部署检查 A')&&document.getElementById('instances').textContent.includes('网络诊断 B'));
