@@ -17,7 +17,7 @@ const assert=require('node:assert/strict');
   const second=await create('short-second');await page.waitForSelector(`#tasks button[data-handle="${second.handle}"]`);
   await page.locator('#overview-toggle').click();await ready();
   await contains('task1','short-first initial line 001');await contains(second.handle,'short-second initial line 001');
-  assert.equal(await page.locator('#unlock').isDisabled(),true);assert.equal(await page.locator('#exec').isVisible(),false);
+  assert.equal(await page.locator('#unlock').isDisabled(),true);assert.equal(await page.locator('#exec').isVisible(),false);assert.equal(await page.evaluate(()=>[...overview.cards.values()].every(card=>!card.terminal||card.terminal.options.fontFamily===WEB_FONT_FAMILY)),true);
   const one=await page.locator('.overview-card[data-handle="task1"]').boundingBox(),two=await page.locator(`.overview-card[data-handle="${second.handle}"]`).boundingBox();assert(two.y>one.y&&two.y+two.height<900);
   await bytes('short-first','e4b8');await bytes('short-second','e6');await page.waitForTimeout(50);
   await bytes('short-first','ad0a');await bytes('short-second','96870a');await contains('task1','中');await contains(second.handle,'文');

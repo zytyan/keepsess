@@ -1,5 +1,6 @@
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
+const verifyTypography = require('./typography.cjs');
 (async()=>{
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try {
@@ -7,6 +8,7 @@ const assert = require('node:assert/strict');
   page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
   await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));
+  await verifyTypography(page);
   assert.equal(await page.locator('#scrollback').inputValue(),'5000');
   assert.equal(await page.evaluate('terminal.options.scrollback'),5000);
   assert.match(await page.locator('#sessions').innerText(),/s1 · production/);assert.match(await page.locator('#sessions').innerText(),/s2 · closed-session/);

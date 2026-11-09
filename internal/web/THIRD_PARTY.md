@@ -8,3 +8,20 @@ The complete license is in assets/vendor/XTERM-LICENSE.
 Only the upstream built JavaScript, stylesheet and license are embedded. The
 application needs neither a CDN nor a JavaScript build at runtime or Go build time.
 The optional Playwright test uses a separately installed Node/Playwright runtime.
+
+The interface and all terminal views also embed these SIL Open Font License 1.1
+fonts; they are served from the same local origin, with no CDN or installed font
+requirement:
+
+- JetBrains Mono 2.304, variable weight 100–800 (unmodified TTF), from
+  https://github.com/JetBrains/JetBrainsMono/tree/v2.304 . License:
+  assets/fonts/JetBrainsMono-OFL.txt.
+- Noto Sans SC 2.004, variable weight 100–900, from
+  https://github.com/notofonts/noto-cjk/tree/Sans2.004/Sans/Variable/TTF/Subset .
+  The official NotoSansSC-VF.ttf was compressed to WOFF2 without subsetting or
+  changing its character map, font names or weight axes. License/copyright:
+  assets/fonts/NotoSansSC-OFL.txt.
+
+See assets/fonts/README.md for exact source URLs and checksums. Python/fontTools
+were used only to prepare the checked-in WOFF2; normal Go builds never regenerate
+fonts or require those tools.

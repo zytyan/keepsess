@@ -26,6 +26,7 @@ keepsess install-skill --dir ./keepsess-skill
 ## 人类 Web 终端与持久历史
 
 `keepsess serve` 默认同时启动离线打包的 xterm.js 界面，监听 `127.0.0.1:8765`。
+界面、单任务终端和会话总览统一使用 JetBrains Mono（英文）与 Noto Sans SC（中文），均为非衬线字体；字体内嵌，无需 CDN 或本机安装。
 端口占用时依次尝试后续 100 个端口，再由系统分配。实际入口写入 stderr，
 模型可以从 `initialize._meta.web` 或 `sess_list` 的 `web` 查询 URL 和历史记录状态；stdout 仍只输出 MCP。
 

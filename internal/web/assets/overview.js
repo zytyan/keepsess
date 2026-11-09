@@ -51,7 +51,7 @@ class TaskOverview {
   element.append(header,command,mount,hint);this.container.append(element);
   const card={element,title,state,command,mount,hint,record,decoder:null,encoding:'',epoch:0,version:0,resizing:false,terminal:null,closed:false};
   if(record.status.pty){hint.textContent='PTY 任务请打开单任务终端查看。';return card;}
-  const terminal=card.terminal=new Terminal({rows:2,cols:80,scrollback:this.budget(),disableStdin:true,fontFamily:'monospace',fontSize:13,lineHeight:1.2,convertEol:true,theme:{background:'#0a1019',foreground:'#d7e2ed',cursor:'#0a1019',selectionBackground:'#294653'}});
+  const terminal=card.terminal=new Terminal({rows:2,cols:80,scrollback:this.budget(),disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:13,lineHeight:1.2,convertEol:true,theme:{background:'#0a1019',foreground:'#d7e2ed',cursor:'#0a1019',selectionBackground:'#294653'}});
   terminal.open(mount);
   terminal.onScroll(()=>{if(!card.resizing&&!this.terminalTail(card))card.version++;});
   for(const event of ['wheel','touchmove','pointerdown','keydown'])mount.addEventListener(event,()=>card.version++,{signal:this.events.signal,passive:true});
@@ -101,6 +101,11 @@ class TaskOverview {
    const cancel=()=>finish(false);this.waiters.add(cancel);
    card.terminal.write(text,()=>finish(true));
   });
+ }
+ refreshFonts(){
+  if(this.closed)return;const position=this.snapshot();
+  for(const card of this.cards.values())if(card.terminal){const follow=this.terminalTail(card);card.resizing=true;try{remeasureTerminalFonts(card.terminal);}finally{card.resizing=false;}this.resizeCard(card);if(follow)card.terminal.scrollToBottom();}
+  this.restore(position);
  }
  async apply(event,record){
   const card=this.cards.get(event.handle);if(this.closed||!card)return;
