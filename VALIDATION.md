@@ -1,3 +1,12 @@
+# IP 反代与相对路径入口
+
+- 修复 HTTP Host 白名单绑定后端监听 IP/端口导致内网 IP 反代和端口转发被误拒绝的问题；允许合法 IPv4/IPv6/localhost 入口的实际访问端口，仍拒绝未声明的 DNS 名称。
+- Origin 按浏览器可见的主机和端口规范化比较，支持 IPv6 等价写法、大小写、默认端口与 HTTPS/WSS 在反代终止后走 HTTP；不依赖后端 socket 的协议或信任任意 Forwarded 头。
+- 页面资源/API/WS 继续使用相对路径；保留浏览器 Host（含端口）时，通过 IP 的反代无需 --web-public-url。保留前缀用 --web-base-path，剥离前缀内部维持 /；MCP 未配置公开地址时仍诚实返回本机监听入口。
+- 测试包含 Chromium 通过保留 Host 的 IP HTTPS 反代访问完整页面/API/WS（不配置 public URL），并覆盖 IPv4/IPv6/localhost 与不同外部端口、默认端口和 IPv6 规范化、跨 IP/端口拒绝、DNS/非法 Host 与转发头伪造拒绝，以及无公开 URL 的 HTTP/HTTPS 反代保留/剥离前缀、相对资源/API 和 WS/WSS。
+
+---
+
 # 会话总览与多命令同屏
 
 - 二级侧栏增加可切换的会话总览，按 taskN 顺序纵向显示命令、各自输出与状态；默认单任务视图保持。总览始终只读，打开单任务后仍需显式解锁才能操作。

@@ -68,7 +68,9 @@ SSH 协议 keepalive 默认 30000ms、回复时限 10000ms；RPC 预算先到不
 TCP keepalive 默认 15000ms；Linux 支持 TCP 队列阈值，Windows 明确报告不支持。
 MCP 配置: {"command":"/path/to/keepsess","args":["serve"]}
 Web 默认监听 127.0.0.1:8765，端口占用自动重试；initialize._meta.web / sess_list.web 可查实际 URL。
---web=false 关闭 Web 与历史记录；--web-listen HOST:PORT、--web-base-path /prefix/、--web-public-url URL 配置反代。
+--web=false 关闭 Web 与历史记录；--web-listen HOST:PORT、--web-base-path /prefix/ 配置入口。
+IP/localhost 反代入口无需固定外部地址；保留 Host（含端口），页面/API/WS 使用相对路径。
+--web-public-url URL 可选设置外部展示地址；DNS 域名入口须显式声明。
 --history-dir PATH 指定历史目录；--history-max-bytes N 设置容量保护（0 不限），历史不自动删除。
 Web 本机免登录，每次刷新/重连恢复只读，解锁仍受会话 read_only 保护；滚动历史默认 5000 行，可调整并记住。
 历史包含命令、原始输入和输出（可能包含密码）；连接认证参数/env 字段不写入。关闭会话仍保留 Web 历史。
@@ -128,7 +130,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		webEnabled := f.Bool("web", true, "Start local human Web terminal (read-only until unlocked)")
 		webListen := f.String("web-listen", "127.0.0.1:8765", "Web listen address; occupied ports are retried")
 		webBase := f.String("web-base-path", "/", "Internal Web root path, e.g. /keepsess/")
-		webPublic := f.String("web-public-url", "", "External http(s) URL for reverse proxy access")
+		webPublic := f.String("web-public-url", "", "Optional external http(s) URL; required for DNS-name access")
 		historyDir := f.String("history-dir", "", "Persistent history directory (default user config/keepsess/history)")
 		historyMax := f.Int64("history-max-bytes", 0, "Archive capacity; 0 means retain without automatic deletion")
 		if e := f.Parse(args[1:]); e != nil {

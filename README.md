@@ -56,13 +56,19 @@ keepsess serve --web-listen 127.0.0.1:0        # 直接由系统分配端口
 keepsess serve --history-dir /private/history # 自定义历史位置
 keepsess serve --history-max-bytes 1073741824 # 容量保护，0 为默认不限
 
-# 反代保留 /keepsess/ 前缀：
+# 通过 IP 反代，保留 /keepsess/ 前缀：无需固定外部 IP/端口
+keepsess serve --web-base-path /keepsess/
+# 通过 IP 反代，剥离前缀，内部根保持 /：
+keepsess serve
+# 使用 DNS 域名时显式声明入口（也用于 MCP 展示外部 URL）：
 keepsess serve --web-base-path /keepsess/ --web-public-url https://terminal.example/keepsess/
-# 反代剥离前缀，内部根保持 /：
-keepsess serve --web-public-url https://terminal.example/keepsess/
 ```
 
-反代需转发 WebSocket Upgrade，并保留 Host 或使用配置的公开域名；HTTPS 页面自动使用 WSS。
+页面资源、API 和 WS 均使用浏览器当前地址的相对路径，访问入口应以 `/` 结尾。
+IP（IPv4/IPv6）或 localhost 入口支持不同的外部端口，不必配置 `--web-public-url`；HTTPS 在反代终止、后端走 HTTP 也支持。
+反代需转发 WebSocket Upgrade，并原样保留浏览器的 **Host（包括端口）**；Nginx 可用 `proxy_set_header Host $http_host;`，避免 `$host` 丢失非默认端口。
+WS Origin 与浏览器可见的主机/端口匹配，HTTPS 页面自动使用 WSS；不会盲信 `Forwarded` / `X-Forwarded-*` 改写访问地址。
+DNS 域名仍需通过 `--web-public-url` 显式声明；代理改写 Host 时也可用该参数声明外部 Origin。此外该参数用于让 MCP 展示外部入口；未配置时 MCP 返回实际本机监听 URL。
 本机入口免登录；对外监听通过 `--web-listen` 显式设置，对外认证由反代负责。
 服务校验 Host/Origin，Web 只读开关用于防误输入，不代替身份认证。
 容量保护按启动时现有文件加本实例新增日志计算，多进程共用目录时不作为严格的全目录磁盘配额。

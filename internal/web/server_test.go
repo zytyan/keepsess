@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -289,5 +290,138 @@ func TestWebRejectsPreviousInstanceBeforeUpgrade(t *testing.T) {
 	_, r, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Origin": []string{origin}})
 	if err == nil || r == nil || r.StatusCode != http.StatusConflict {
 		t.Fatal(err, r)
+	}
+}
+
+func TestIPAndForwardedPortsDoNotRequirePublicURL(t *testing.T) {
+	s, _, _ := setup(t, Options{Listen: "127.0.0.1:0"})
+	for _, tc := range []struct {
+		host, origin string
+		want         int
+	}{
+		{"192.168.50.20:8443", "https://192.168.50.20:8443", 200},
+		{"10.20.30.40:9000", "http://10.20.30.40:9000", 200},
+		{"172.16.2.3", "https://172.16.2.3", 200},
+		{"192.168.50.20:443", "https://192.168.50.20", 200},
+		{"[fd00:0:0:0:0:0:0:25]:9443", "https://[fd00::25]:9443", 200},
+		{"[::1]:80", "http://[0:0:0:0:0:0:0:1]", 200},
+		{"localhost:19000", "http://LOCALHOST:19000", 200},
+		{"LOCALHOST.:19000", "https://localhost:19000", 200},
+		{"192.168.50.20:8443", "https://192.168.50.20:9443", 403},
+		{"192.168.50.20:8443", "https://192.168.50.21:8443", 403},
+		{"192.168.50.20:8443", "https://evil.example:8443", 403},
+		{"192.168.50.20:8443", "null", 403},
+		{"192.168.50.20:8443", "https://192.168.50.20:8443?", 403},
+		{"192.168.50.20:8443", "https://192.168.50.20:8443#", 403},
+		{"rebind.example:8443", "https://rebind.example:8443", 403},
+	} {
+		t.Run(tc.host+"-"+tc.origin, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", "http://"+s.Info().Listen+"/api/info", nil)
+			req.Host = tc.host
+			req.Header.Set("Origin", tc.origin)
+			// Forwarded headers are deliberately not a source of authority.
+			req.Header.Set("X-Forwarded-Host", "rebind.example:8443")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			response, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != tc.want {
+				t.Fatal(response.StatusCode, tc)
+			}
+			wsURL := "ws://" + s.Info().Listen + "/ws?session=s1"
+			c, response, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Host": []string{tc.host}, "Origin": []string{tc.origin}})
+			if tc.want == 200 {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				readType(t, c, "hello")
+			} else {
+				if err == nil {
+					_ = c.Close()
+					t.Fatal("accepted mismatched origin")
+				}
+				if response == nil || response.StatusCode != tc.want {
+					t.Fatal(response, err)
+				}
+			}
+		})
+	}
+}
+
+func TestIPProxyRelativeHTTPAndWebsocketWithoutPublicURL(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		for _, strip := range []bool{false, true} {
+			t.Run(fmt.Sprintf("tls=%t/strip=%t", secure, strip), func(t *testing.T) {
+				internal := "/console/"
+				if strip {
+					internal = "/"
+				}
+				s, _, _ := setup(t, Options{Listen: "127.0.0.1:0", BasePath: internal})
+				target, _ := url.Parse("http://" + s.Info().Listen)
+				proxy := httputil.NewSingleHostReverseProxy(target)
+				director := proxy.Director
+				proxy.Director = func(r *http.Request) {
+					director(r)
+					if strip {
+						r.URL.Path = strings.TrimPrefix(r.URL.Path, "/console")
+					}
+				}
+				front := httptest.NewUnstartedServer(proxy)
+				if secure {
+					front.StartTLS()
+				} else {
+					front.Start()
+				}
+				defer front.Close()
+				entry, _ := url.Parse(front.URL + "/console/")
+				for _, asset := range []string{"", "app.js", "overview.js", "vendor/xterm.js", "api/info"} {
+					relative, _ := url.Parse(asset)
+					u := entry.ResolveReference(relative)
+					if u.Host != entry.Host {
+						t.Fatal("relative URL escaped proxy", u)
+					}
+					req, _ := http.NewRequest("GET", u.String(), nil)
+					req.Header.Set("Origin", front.URL)
+					response, err := front.Client().Do(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					b, _ := io.ReadAll(response.Body)
+					_ = response.Body.Close()
+					if response.StatusCode != 200 || len(b) == 0 {
+						t.Fatal(asset, response.StatusCode, string(b))
+					}
+				}
+				socketURL := *entry
+				socketURL.Path += "ws"
+				socketURL.RawQuery = "session=s1"
+				socketURL.Scheme = "ws"
+				if secure {
+					socketURL.Scheme = "wss"
+				}
+				dialer := websocket.Dialer{HandshakeTimeout: 3 * time.Second, TLSClientConfig: front.Client().Transport.(*http.Transport).TLSClientConfig}
+				c, _, err := dialer.Dial(socketURL.String(), http.Header{"Origin": []string{front.URL}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				readType(t, c, "hello")
+			})
+		}
+	}
+}
+
+func TestHostValidationRetainsDNSProtectionAndNormalizesPublicOrigin(t *testing.T) {
+	s, _, _ := setup(t, Options{Listen: "127.0.0.1:0", PublicURL: "https://terminal.example/console/"})
+	if !s.hostOK("TERMINAL.EXAMPLE:443") || !s.originOK(&http.Request{Host: "terminal.example:443"}, "https://TERMINAL.EXAMPLE") {
+		t.Fatal("equivalent configured authorities rejected")
+	}
+	for _, bad := range []string{"evil.example", "user@127.0.0.1", "127.0.0.1/path", "localhost?", "127.0.0.1#", "127.0.0.1?x=1", "127.0.0.1#x", "127.0.0.1:", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:bad", "999.999.999.999", "2001:db8::1", "127.0.0.1\\evil"} {
+		if s.hostOK(bad) {
+			t.Fatal("accepted invalid/unconfigured authority", bad)
+		}
 	}
 }

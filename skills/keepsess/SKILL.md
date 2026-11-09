@@ -41,7 +41,14 @@ Do not publish history directories. `--history-dir` changes the location and
 `--history-max-bytes` enables a capacity guard; default 0 retains without automatic
 cleanup. Recording failures/gaps are reported without blocking remote connections.
 For reverse proxies use `--web-base-path /keepsess/` if the prefix is forwarded;
-if stripped, retain internal `/` and set `--web-public-url https://host/keepsess/`.
+if stripped, retain internal `/`. Browser assets/API/WS resolve relative to the
+current page URL, whose entry path should end in `/`. IP/localhost access needs
+no fixed public URL and may use a different external port. Preserve the browser
+Host including its port; HTTPS/WSS can terminate at the proxy with HTTP upstream.
+DNS names still require an explicit `--web-public-url https://host/keepsess/`;
+it can also declare the external Origin when a proxy rewrites Host. Forwarded
+headers are not used to bypass Host/Origin checks. Without a public URL, MCP
+advertises the actual local listen address, not an inferred external proxy URL.
 Use `--web-listen` for explicit nonlocal binding; external authentication belongs
 to the proxy. No MCP tool or Web observation may replay input after a lost receipt.
 

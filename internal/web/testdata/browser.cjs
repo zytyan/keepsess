@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 (async()=>{
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try {
-  const page=await browser.newPage({viewport:{width:1400,height:1000}});const errors=[];
+  const page=await browser.newPage({viewport:{width:1400,height:1000},ignoreHTTPSErrors:process.env.KEEPSESS_BROWSER_INSECURE_TLS_TEST==='1'});const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
   await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));

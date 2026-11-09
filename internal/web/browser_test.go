@@ -2,6 +2,9 @@ package web
 
 import (
 	"context"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"testing"
@@ -13,7 +16,9 @@ import (
 
 // Optional real-browser acceptance. Go builds and normal tests require neither
 // Node nor Playwright; opt in with KEEPSESS_BROWSER_TEST=1.
-func TestBrowserAcceptance(t *testing.T) {
+func TestBrowserAcceptance(t *testing.T) { runBrowserAcceptance(t, false) }
+func TestBrowserIPProxy(t *testing.T)    { runBrowserAcceptance(t, true) }
+func runBrowserAcceptance(t *testing.T, proxy bool) {
 	if os.Getenv("KEEPSESS_BROWSER_TEST") != "1" {
 		t.Skip("set KEEPSESS_BROWSER_TEST=1 with Node and Playwright installed")
 	}
@@ -59,7 +64,17 @@ func TestBrowserAcceptance(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, node, "testdata/browser.cjs", s.Info().URL)
+	entry := s.Info().URL
+	if proxy {
+		target, _ := url.Parse("http://" + s.Info().Listen)
+		front := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+		defer front.Close()
+		entry = front.URL + s.Info().BasePath
+	}
+	cmd := exec.CommandContext(ctx, node, "testdata/browser.cjs", entry)
+	if proxy {
+		cmd.Env = append(os.Environ(), "KEEPSESS_BROWSER_INSECURE_TLS_TEST=1")
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, out)

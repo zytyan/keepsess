@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strconv"
@@ -144,17 +145,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "GET required", 405)
 			return
 		}
-		host, _, _ := net.SplitHostPort(s.info.Listen)
-		_, port, _ := net.SplitHostPort(s.info.Listen)
-		allowed := r.Host == s.info.Listen || r.Host == net.JoinHostPort("localhost", port) || r.Host == net.JoinHostPort("127.0.0.1", port) || r.Host == net.JoinHostPort("::1", port)
-		if s.public != nil && r.Host == s.public.Host {
-			allowed = true
-		}
-		if host != "" && host != "0.0.0.0" && host != "::" && r.Host == net.JoinHostPort(host, port) {
-			allowed = true
-		}
-		if !allowed {
-			http.Error(w, "unrecognized Host; configure --web-public-url for the reverse proxy", 403)
+		if !s.hostOK(r.Host) {
+			http.Error(w, "unrecognized Host; use an IP/localhost address or configure --web-public-url for a DNS name", 403)
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !s.originOK(r, origin) {
@@ -168,19 +160,80 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-func (s *Server) originOK(r *http.Request, origin string) bool {
-	u, err := url.Parse(origin)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
+
+// A proxy/tunnel may change the externally visible IP or port. IP literals
+// and localhost do not depend on DNS, so permit them without pinning a public
+// URL. DNS names still require an explicit public URL to retain the local
+// unauthenticated service's protection against DNS rebinding.
+func (s *Server) hostOK(authority string) bool {
+	host, _, ok := parseAuthority(authority, "http")
+	if !ok {
 		return false
 	}
-	if s.public != nil && u.Scheme == s.public.Scheme && u.Host == s.public.Host {
+	if host == "localhost" {
 		return true
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
 	}
-	return u.Scheme == scheme && u.Host == r.Host
+	if s.public != nil {
+		return sameAuthority(authority, s.public.Host, s.public.Scheme)
+	}
+	return false
+}
+func parseAuthority(authority, scheme string) (string, string, bool) {
+	if (scheme != "http" && scheme != "https") || strings.ContainsAny(authority, "/?#@\\") {
+		return "", "", false
+	}
+	u, err := url.Parse("//" + authority)
+	if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Host == "" {
+		return "", "", false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || strings.IndexFunc(host, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return "", "", false
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		host = ip.Unmap().String()
+	} else if strings.ContainsAny(host, ":%[]\\") {
+		return "", "", false
+	}
+	port := u.Port()
+	if port == "" {
+		if strings.HasSuffix(authority, ":") {
+			return "", "", false
+		}
+		port = "80"
+		if scheme == "https" {
+			port = "443"
+		}
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", "", false
+	}
+	return host, strconv.Itoa(n), true
+}
+func sameAuthority(a, b, scheme string) bool {
+	ah, ap, aok := parseAuthority(a, scheme)
+	bh, bp, bok := parseAuthority(b, scheme)
+	return aok && bok && ah == bh && ap == bp
+}
+func (s *Server) originOK(r *http.Request, origin string) bool {
+	if strings.ContainsAny(origin, "?#") {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || u.Host == "" {
+		return false
+	}
+	if s.public != nil && u.Scheme == s.public.Scheme && sameAuthority(u.Host, s.public.Host, u.Scheme) {
+		return true
+	}
+	// Match the browser's authority, not the backend socket's address/protocol.
+	// This also works for HTTPS/WSS terminated at a Host-preserving proxy. Do not
+	// infer a different authority from untrusted Forwarded/X-Forwarded-* headers.
+	return sameAuthority(u.Host, r.Host, u.Scheme)
 }
 func respond(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
