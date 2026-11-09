@@ -7,7 +7,7 @@
 <div id="warning" role="status" hidden></div><div id="highlight-notice" role="status" hidden></div>
 <section class="terminal-panel"><div class="terminal-bar"><span id="terminal-label">TERMINAL</span><span id="mode" class="muted">READ ONLY</span></div><div id="empty">会话创建后会显示在这里。<br><small>关闭的会话仍可查看；旧实例在左上角归档中。</small></div><div id="terminal"></div><div id="overview-toolbar" class="overview-toolbar" hidden><span id="overview-range"></span><button id="overview-older" class="quiet">更早</button><button id="overview-newer" class="quiet">较新</button><button id="overview-latest" class="quiet">最新</button></div><div id="overview" class="overview" tabindex="0" hidden></div><div id="loading" hidden>正在回放历史…</div></section>
 <form id="exec" hidden><label class="field">命令<textarea id="command" rows="2" placeholder="输入命令；每次执行创建独立任务"></textarea></label><div class="exec-options"><input id="cwd" placeholder="cwd（可选，默认登录目录）"><label><input id="interactive" type="checkbox"> interactive</label><label><input id="pty" type="checkbox"> PTY</label><button id="run" type="submit" disabled>执行</button></div></form>
-<div class="bottom"><span id="status">默认只读。解锁后才能发送输入。</span><label><input id="echo" type="checkbox"> 本地回显</label></div><details><summary>输入记录与发送回执</summary><pre id="receipts">终端输入可能包含密码等敏感内容，并会保存在本机历史中。</pre></details>
+<div class="bottom"><span id="status">默认只读。解锁后才能发送输入。</span><label><input id="echo" type="checkbox"> 本地回显（临时预览）</label></div><details><summary>输入记录与发送回执</summary><pre id="receipts">终端输入可能包含密码等敏感内容，并会保存在本机历史中。</pre></details>
 </main>
 <dialog id="appearance-dialog" aria-labelledby="appearance-title"><div class="appearance-heading"><h2 id="appearance-title">显示与高亮</h2><button id="appearance-close" type="button">关闭</button></div>
 <p>高对比主题 · 高亮只改变网页显示，复制和原始历史保持原文。全屏程序使用的备用屏幕不应用高亮。</p>
@@ -16,4 +16,4 @@
 <div id="highlight-rules"></div><div class="appearance-actions"><button id="highlight-add" type="button">添加规则</button><button id="highlight-defaults" type="button">恢复默认规则</button><button id="highlight-apply" type="button">应用预览</button><button id="highlight-save" type="button">保存到本机配置</button></div>
 <p>修改后点击“应用预览”检查效果；关闭撤销未保存的预览。保存将更新 ~/.keepsess.toml，其他浏览器约 10 秒内生效。每次最多扫描 200 行 / 64KiB 文本、1024 个匹配，规则计算超过 1 秒暂停高亮。</p>
 <div id="highlight-preview" aria-label="高亮效果预览"></div><p id="highlight-status" role="status"></p></dialog>
-<script src="vendor/xterm.js"></script><script src="fonts.js"></script><script src="transport.js"></script><script src="appearance.js"></script><script src="overview.js"></script><script src="app.js"></script></body></html>
+<script src="vendor/xterm.js"></script><script src="fonts.js"></script><script src="transport.js"></script><script src="appearance.js"></script><script src="overview.js"></script><script src="local-echo.js"></script><script src="app.js"></script></body></html>

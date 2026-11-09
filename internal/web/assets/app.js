@@ -6,6 +6,7 @@ let serverID='',activeInstances=new Set(),instanceListKey='',instanceRefresh=nul
 let instance = '', current = '', selected = '', handle = '', socket = null;
 let unlocked = false, cursor = 0, generation = 0, replaying = false;
 let overview=null, overviewMode=false;
+let localEcho=null;
 let terminal = null, decoder = null, decoderEncoding = '', decoderEpoch = 0;
 let pipeline = Promise.resolve(), buffered = 0, operationPending = false;
 let inputQueue = "", inputTimer = null;
@@ -37,6 +38,7 @@ function updateControls() {
  $('run').disabled = !unlocked || !writable || operationPending;
  const task=tasks.get(handle);const stdinAvailable=meta?.mode==='stream'||!!(task?.status.interactive&&task.status.stdin_open&&task.status.state==='running'&&!task.disposed);
  if (terminal) terminal.options.disableStdin = !unlocked || !writable || replaying || !stdinAvailable;
+ if(!unlocked||!writable||replaying||!stdinAvailable)localEcho?.clear();
  $('exec').hidden = overviewMode || !meta || meta.mode !== 'exec';
  $('echo').closest('label').hidden=overviewMode;
 }
@@ -107,14 +109,14 @@ function updateOverviewPager(){
  $('overview-older').disabled=first<=0;$('overview-newer').disabled=last>=list.length-1;$('overview-latest').disabled=last>=list.length-1;
 }
 function createOverview(records){
- terminalEvents.abort();if(terminal)terminal.dispose();terminal=null;decoder=null;decoderEncoding='';decoderEpoch=0;$('terminal').replaceChildren();
+ localEcho?.dispose();localEcho=null;terminalEvents.abort();if(terminal)terminal.dispose();terminal=null;decoder=null;decoderEncoding='';decoderEpoch=0;$('terminal').replaceChildren();
  overview=new TaskOverview($('overview'),records,{scrollback:()=>scrollback,state:taskState,onOpen:id=>selectSession(selected,id)});updateOverviewPager();
 }
 function createTerminal() {
- terminalEvents.abort();terminalEvents=new AbortController();
+ localEcho?.dispose();localEcho=null;terminalEvents.abort();terminalEvents=new AbortController();
  if (terminal) terminal.dispose(); $('terminal').replaceChildren(); decoder=null;decoderEncoding='';decoderEpoch=0;
  terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
- terminal.open($('terminal')); attachTerminalAppearance(terminal); fit();
+ terminal.open($('terminal')); attachTerminalAppearance(terminal); fit();localEcho=new LocalEchoPreview(terminal);
  const owned=terminal;owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
  for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
  const queueInput = data => {
@@ -122,7 +124,7 @@ function createTerminal() {
   if (sessions.get(selected)?.mode === 'exec' && !handle) return;
   if (new TextEncoder().encode(inputQueue + data).length > 65536) { status('输入缓冲已满；本次输入未发送。'); return; }
   inputQueue += data;
-  if ($('echo').checked) terminal.write(data.replace(/\r/g,'\r\n').replace(/\x7f/g,'\b \b'));
+  if ($('echo').checked) localEcho.add(data);
   clearTimeout(inputTimer); inputTimer=setTimeout(flushInput,10);
  };
  // onData also contains parser-generated replies. Forward trusted human key,
@@ -156,8 +158,10 @@ async function apply(e, gen, live=false) {
  }
  if (!overviewMode&&e.session === selected && (e.handle || '') === handle) {
   if (e.kind === 'output' && e.data) {
+   // Any remote bytes invalidate the whole preview, before decoding (even partial UTF-8).
+   const raw=outputBytes(e.data);if(raw.length)localEcho?.clear();
    if (!decoder || decoderEpoch !== e.epoch || decoderEncoding !== e.encoding) { if (decoder) await termWrite(decoder.decode(),gen); if(gen!==generation)return; decoderEncoding=e.encoding; decoderEpoch=e.epoch; try{decoder=new TextDecoder(e.encoding==='shift-jis'?'shift_jis':e.encoding||'utf-8');}catch(_){decoder=new TextDecoder();} }
-   const raw=outputBytes(e.data); await termWrite(decoder.decode(raw,{stream:true}),gen);
+   await termWrite(decoder.decode(raw,{stream:true}),gen);
   } else if (e.kind === 'command') { await termWrite(`[${e.session} ${e.handle} ${e.cwd || '~'}] $ ${e.command}\r\n`,gen); }
   else if (e.kind === 'input' && e.data) { const raw=outputBytes(e.data); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
   if (e.kind === 'task' || e.disposed) { if(decoder) await termWrite(decoder.decode(),gen); if(gen!==generation)return; if(e.status.warning||e.status.error)status(e.status.warning||e.status.error); }
@@ -220,7 +224,7 @@ async function receiveReceipt(msg,gen,ws){
  const follow=pendingFollow;pendingFollow=null;
  const r=msg.result||{},exec=!!r.handle&&msg.id.startsWith('exec-'),sent=!msg.error&&!r.error&&r.input_state==='sent';
  if(!exec)operationPending=false;
- if(!sent){if(inputQueue)note('后续待发送输入已丢弃，未自动重试。');inputQueue='';}
+ if(!sent){localEcho?.clear();if(inputQueue)note('后续待发送输入已丢弃，未自动重试。');inputQueue='';}
  note(JSON.stringify(msg));status(msg.error||r.error||`${r.input_state||'unknown'} · 已确认写入 ${r.written_bytes||0} 字节；不证明远端收到`);
  if(exec){
   // Keep input/command submission busy until catalog lookup and the optional
@@ -233,6 +237,7 @@ async function receiveReceipt(msg,gen,ws){
 }
 function send(req) { if(!unlocked||operationPending||socket?.readyState!==1)return;req.id=(req.type==='exec'?'exec-':'input-')+Date.now()+'-'+Math.random().toString(16).slice(2);req.session=selected;pendingFollow=req.type==='exec'&&followsLatest()?{generation,session:selected,handle,scroll:scrollVersion}:null;operationPending=true;updateControls();socket.send(JSON.stringify(req)); }
 function flushInput(){if(!inputQueue||operationPending||!unlocked)return;const data=inputQueue.slice(0,4096);inputQueue=inputQueue.slice(data.length);send({type:'input',data,handle});}
+$('echo').onchange=()=>{if(!$('echo').checked)localEcho?.clear();};
 $('unlock').onclick=()=>{if(socket?.readyState===1){const enable=!unlocked;if(!enable){unlocked=false;inputQueue='';updateControls();}socket.send(JSON.stringify({type:'unlock',enabled:enable}));}};
 $('exec').onsubmit=event=>{event.preventDefault();if(!$('command').value)return;send({type:'exec',command:$('command').value,cwd:$('cwd').value,interactive:$('interactive').checked,pty:$('pty').checked});};
 $('pty').onchange=()=>{if($('pty').checked)$('interactive').checked=true};$('interactive').onchange=()=>{if(!$('interactive').checked)$('pty').checked=false};
@@ -242,7 +247,7 @@ $('overview-older').onclick=()=>{const list=sessionTasks(),first=list.findIndex(
 $('overview-newer').onclick=()=>{const list=sessionTasks(),last=list.findIndex(t=>t.handle===overview?.lastHandle());if(last<list.length-1)selectSession(selected,'',{overview:true,endHandle:list[Math.min(list.length-1,last+OVERVIEW_PAGE_SIZE)].handle});};
 $('overview-latest').onclick=()=>selectSession(selected,'',{overview:true});
 $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
-$('instances').onchange=async()=>{generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=$('instances').value;current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}};
+$('instances').onchange=async()=>{localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=$('instances').value;current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}};
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));terminalResize.observe($('overview'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}overview?.refreshFonts();});
 function refreshInstances(){if(!instanceRefresh)instanceRefresh=refreshInstanceList().finally(()=>{instanceRefresh=null});return instanceRefresh;}

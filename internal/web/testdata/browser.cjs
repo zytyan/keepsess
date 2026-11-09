@@ -32,12 +32,35 @@ const verifyTypography = require('./typography.cjs');
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('show version');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>!operationPending&&!inputQueue.length);
   assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join('')),'show version\r');
+  assert.equal(await page.locator('.local-echo-preview').textContent(),'show version');
+  assert.equal(await page.evaluate(()=>terminal.getSelection()),'');
+  assert.equal(await page.evaluate(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('show version')),false);
+  assert.equal(await page.locator('.local-echo-preview').evaluate(el=>getComputedStyle(el).opacity),'0.45');
   // This minimal SSH simulator has no PTY line discipline; LF explicitly
   // completes its line reader after verifying raw Enter was sent as CR.
   await page.keyboard.press('Control+j');
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('SwitchOS 1.0'));
+  assert.equal(await page.locator('.local-echo-preview').textContent(),'');
   const sentText=await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join(''));assert.equal(sentText,'show version\r\n');
   await page.keyboard.insertText('中文');await page.keyboard.press('Control+j');await page.waitForFunction(()=>document.getElementById('receipts').textContent.includes('中文'));await page.waitForFunction(()=>!operationPending&&!inputQueue.length);assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join('')),'show version\r\n中文\n');
+  await page.evaluate(async()=>{
+   const check=(ok,label)=>{if(!ok)throw Error(label);};
+   const text=()=>localEcho.layer.textContent;
+   localEcho.add('ab中');localEcho.add('\x7f');check(text()==='ab','grapheme backspace');
+   localEcho.add('\x1b[');localEcho.add('D');check(text()==='ab','split arrow suppressed');
+   localEcho.add('\x1bOD');check(text()==='ab','application arrow suppressed');
+   localEcho.add('\x1b]title\x07');check(text()==='ab','OSC suppressed');
+   const event={kind:'output',session:selected,handle,encoding:'utf-8',epoch:decoderEpoch,seq:cursor+1,data:btoa('unrelated')};
+   await apply({...event,session:'another-session'},generation,true);check(text()==='ab','other session preserves preview');
+   await apply({...event,data:''},generation,true);check(text()==='ab','empty event preserves preview');
+   await apply(event,generation,true);check(text()==='','unrelated output clears whole preview');
+   localEcho.add('pending');await apply({...event,data:btoa('\x1b[0m')},generation,true);check(text()==='','control-only output clears');
+   localEcho.add('pending');await apply({...event,data:btoa(String.fromCharCode(0xe4))},generation,true);check(text()==='','partial UTF-8 clears');
+   localEcho.add('pending');await receiveReceipt({id:'input-preview-test',error:'test not_sent'},generation,socket);check(text()==='','failed send clears');
+   localEcho.add('pending');document.getElementById('echo').checked=false;document.getElementById('echo').onchange();check(text()==='','disable clears');
+   document.getElementById('echo').checked=true;localEcho.add('x'.repeat(7000));check(localEcho.text.length<=4096,'bounded preview');
+   unlocked=false;updateControls();check(text()==='','lock clears');
+  });
   await page.screenshot({path:process.env.KEEPSESS_SCREENSHOT||'/tmp/keepsess-web.png',fullPage:true});
   await page.locator('#instances').selectOption('archived');
   await page.waitForFunction(()=>document.getElementById('title').textContent==='s1 · archived-console');
