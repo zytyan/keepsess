@@ -1,8 +1,8 @@
-const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const {launch}=require('./launch.cjs');
 const assert = require('node:assert/strict');
 const verifyTypography = require('./typography.cjs');
 (async()=>{
- const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const browser=await launch({headless:true,args:['--no-sandbox']});
  try {
   const page=await browser.newPage({viewport:{width:1400,height:1000},ignoreHTTPSErrors:process.env.KEEPSESS_BROWSER_INSECURE_TLS_TEST==='1'});const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
@@ -89,7 +89,7 @@ const verifyTypography = require('./typography.cjs');
    document.getElementById('echo').checked=true;localEcho.add('x'.repeat(7000));check(localEcho.text.length<=4096,'bounded preview');
    unlocked=false;updateControls();check(text()==='','lock clears');
   });
-  await page.screenshot({path:process.env.KEEPSESS_SCREENSHOT||'/tmp/keepsess-web.png',fullPage:true});
+  await page.screenshot({path:process.env.KEEPSESS_SCREENSHOT||require('node:path').join(require('node:os').tmpdir(),'keepsess-web.png'),fullPage:true});
   await page.locator('#instance-selected').click();
   await page.getByRole('button',{name:/归档，只读/}).click();
   await page.waitForFunction(()=>document.getElementById('title').textContent==='s1 · archived-console');

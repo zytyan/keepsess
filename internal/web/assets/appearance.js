@@ -5,7 +5,7 @@ let appearance={enabled:false,rules:[]},appearanceDefaults=appearance,appearance
 const terminalHighlights=new Set();
 function highlightNotice(message){document.getElementById('highlight-status').textContent=message;const notice=document.getElementById('highlight-notice');notice.textContent=message;notice.hidden=!message;}
 function applyAppearance(value){appearance={...value,rules:value.rules||[]};highlightNotice('');highlightEngine.reset();for(const h of terminalHighlights)h.configure();}
-// Scan only visible cells, never the history or incoming byte chunks. Decorations
+// Scan a bounded window near visible cells, never all history or incoming chunks. Painting
 // cannot alter copied text or trigger terminal replies. Alternate screens stay raw.
 // One Worker for all terminals; at most one job per owner and 32 queued.
 class HighlightEngine {
@@ -40,19 +40,24 @@ class HighlightEngine {
  }
 }
 const highlightEngine=new HighlightEngine();
+const syncHighlightMatcher=new HighlightMatcher();
 class TerminalHighlight {
  constructor(term){
   this.term=term;this.decorations=[];this.markers=[];this.closed=false;this.version=0;this.timer=null;this.busy=false;this.failed=false;this.dirty=false;this.visible=false;this.scrollUntil=0;
+  this.layer=DOMKeywordLayer.supported(term)?new DOMKeywordLayer(term):null;
+  this.generation=0;this.cache=new Map();this.direction=-1;this.lastView=term.buffer.active.viewportY;
+  this.renderPending=false;
+  this.renderFilter=this.layer?term.registerDOMRenderFilter(()=>this.prepareRender()):null;
   terminalHighlights.add(this);
   this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();
-  // Wheel bursts must not rebuild DOM decorations on every frame.
-  // Clear once at burst start; rebuild only after input and viewport settle.
-  this.wheel=()=>{this.scrollUntil=performance.now()+140;this.version++;if(this.decorations.length)this.clear();this.schedule();};
+  // Legacy DOM decorations wait for a settled view. Synchronous text highlights can
+  // follow rendered rows without clearing colors or forcing xterm to rerender.
+  this.wheel=()=>{if(this.layer)return;this.scrollUntil=performance.now()+140;this.version++;if(this.decorations.length)this.clear();this.schedule();};
   term.element.addEventListener('wheel',this.wheel,{capture:true,passive:true});
   this.listeners=[term.onWriteParsed(()=>this.invalidate()),term.onScroll(()=>this.viewportChanged()),term.onResize(()=>this.invalidate()),
    // Native viewport scrolling suppresses onScroll in this xterm version.
    // Decorations also trigger rendering: only invalidate when the view changed.
-   term.onRender(()=>this.viewportChanged())];
+   term.onRender(()=>{this.viewportChanged();if(this.layer)this.project();})];
   this.visibility=new IntersectionObserver(entries=>{
    const visible=entries[0].isIntersecting;
    if(visible===this.visible)return;
@@ -65,21 +70,56 @@ class TerminalHighlight {
  contentViewKey(){const b=this.term.buffer.active;return `${b.type}/${b.baseY}/${this.term.cols}/${this.term.rows}`;}
  viewportChanged(){
   const key=this.viewKey();if(key===this.viewportKey)return;
+  const y=this.term.buffer.active.viewportY;if(y!==this.lastView)this.direction=Math.sign(y-this.lastView);this.lastView=y;
   if(this.contentKey!==this.contentViewKey()){this.invalidate();return;}
-  this.viewportKey=key;this.version++;this.scrollUntil=performance.now()+140;if(this.decorations.length)this.clear();this.schedule();
+  this.viewportKey=key;this.version++;if(!this.layer){this.scrollUntil=performance.now()+140;if(this.decorations.length)this.clear();}this.schedule();
  }
  invalidate(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.version++;this.clear();this.schedule();}
- configure(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.schedule();}
- clear(){for(const d of this.decorations)d.dispose();for(const m of this.markers)m.dispose();this.decorations=[];this.markers=[];}
- schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||!appearance.enabled)return;this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
+ configure(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.layer?.configure(appearance.rules);this.syncRules=appearance.rules.every(r=>!r.regex||appearanceDefaults.rules.some(d=>d.regex&&d.pattern===r.pattern));if(!appearance.enabled)this.resumeRender();this.schedule();}
+ clearView(paint=true){if(this.layer){if(paint)this.layer.clear();}else for(const d of this.decorations)d.dispose();for(const m of this.markers)m.dispose();this.decorations=[];this.markers=[];this.projectedView=null;this.projectedCache=null;}
+ clear(){this.generation++;this.cache.clear();this.clearView();}
+ resumeRender(){if(this.renderPending){this.renderPending=false;this.term.refresh(0,this.term.rows-1);}}
+ readyView(){const b=this.term.buffer.active;for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows,b.viewportY+200);y++)if(!this.cache.has(y))return false;return true;}
+ prepareRender(){
+  if(this.closed||!this.visible||this.failed||!appearance.enabled||this.term.buffer.active.type!=='normal'){this.renderPending=false;return true;}
+  this.viewportChanged();
+  if(this.readyView()){this.renderPending=false;return true;}
+  // Keep the last colored frame until this uncached viewport can be committed
+  // with its colors. Never expose an uncolored intermediate page on a thumb jump.
+  this.renderPending=true;this.dirty=true;
+  if(!this.busy){if(this.timer){cancelAnimationFrame(this.timer);this.timer=null;}this.syncPreparing=true;try{this.scan();}finally{this.syncPreparing=false;}}
+  if(this.readyView()){this.renderPending=false;return true;}
+  return false;
+ }
+ project(){
+  if(this.renderPending||!this.visible||this.closed||!appearance.enabled||this.term.buffer.active.type!=='normal')return;
+  const term=this.term,b=term.buffer.active,view=this.viewKey();
+  if(this.projectedView!==view||this.projectedCache!==this.cache){
+  this.clearView(false);
+  for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows);y++){
+   const spans=this.cache.get(y);if(!spans?.length)continue;
+   const marker=term.registerMarker(y-(b.baseY+b.cursorY));if(!marker)continue;this.markers.push(marker);
+   for(const s of spans){if(this.decorations.length>=1024)break;this.decorations.push({marker,options:{x:s.x,width:s.width},rule:s.rule});}
+  }
+  this.projectedView=view;this.projectedCache=this.cache;
+  }
+  this.layer.paint(this.decorations);
+ }
+ schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||!appearance.enabled)return;if(this.layer){this.timer=requestAnimationFrame(()=>{this.timer=null;this.scan();});return;}this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
  scan(){
   if(this.closed||!this.visible||this.failed||!appearance.enabled)return;this.dirty=false;
   const term=this.term,b=term.buffer.active;
   if(b.type!=='normal'){this.clear();return;}
-  const groups=[];let scanned=0;
-  for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows,b.viewportY+200)&&scanned<32768;y++){
+  const groups=[],scannedRows=new Set();let scanned=0;
+  // Visible rows get the match/byte budget first. Prefetch in the travel
+  // direction, then behind, so the next rendered frame can use cached matches.
+  const viewEnd=Math.min(b.length,b.viewportY+term.rows),bands=[[b.viewportY,viewEnd]];
+  if(this.layer&&!this.syncRules){const above=[Math.max(0,b.viewportY-term.rows),b.viewportY],below=[viewEnd,Math.min(b.length,viewEnd+term.rows)];bands.push(...(this.direction<0?[above,below]:[below,above]));}
+  for(const [priority,[startY,endY]] of bands.entries()){let first=true;
+  for(let y=startY;y<endY&&scannedRows.size<200&&scanned<32768;y++){
    const line=b.getLine(y);if(!line)continue;
-   let g=groups[groups.length-1];if(!line.isWrapped||!g||g.text.length>=8192){g={text:'',cells:[]};groups.push(g);}
+   scannedRows.add(y);
+   let g=groups[groups.length-1];if(first||!line.isWrapped||!g||g.text.length>=8192){g={text:'',cells:[],rows:[],priority};groups.push(g);}first=false;g.rows.push(y);
    // Omit unwritten padding, retain spaces actually present in the terminal.
    let end=Math.min(term.cols,4096);
    while(end>0){const c=line.getCell(end-1);if(c&&(c.getChars()||!c.getWidth()))break;end--;}
@@ -89,14 +129,23 @@ class TerminalHighlight {
     g.cells.push({y,x,width:c.getWidth(),start,end:g.text.length,ansi:!c.isFgDefault()||!c.isBgDefault()});
    }
   }
+  }
   if(!groups.length){this.clear();return;}
-  const version=this.version,view=this.viewKey(),rules=appearance.rules;this.busy=true;
-  highlightEngine.request(this,{lines:groups.map(g=>g.text),rules}).then(data=>{
+  if(this.layer){const distance=g=>Math.max(0,b.viewportY-(g.cells.at(-1)?.y??b.viewportY),(g.cells[0]?.y??viewEnd)-viewEnd+1);groups.sort((a,c)=>a.priority-c.priority||distance(a)-distance(c));}
+  const version=this.version,view=this.viewKey(),generation=this.generation,content=this.contentViewKey(),rules=appearance.rules;this.busy=true;
+  const apply=data=>{
    if(this.closed||data.cancelled)return;
-   if(data.error){this.failed=true;this.clear();highlightNotice('高亮规则无效：'+data.error);return;}
-   if(version!==this.version||view!==this.viewKey()){this.dirty=true;return;}
+   if(data.error){this.failed=true;this.clear();this.resumeRender();highlightNotice('高亮规则无效：'+data.error);return;}
+   if(this.layer?generation!==this.generation||content!==this.contentViewKey():version!==this.version||view!==this.viewKey()){this.dirty=true;return;}
+   if(this.layer){
+    this.cache=new Map();for(let index=0;index<groups.length;index++)if(index<(data.completed_lines??groups.length)||groups[index].priority===0)for(const y of groups[index].rows)this.cache.set(y,[]);
+    // A visible scan may reach its intentional byte/row budget; do not wait
+    // forever for rows deliberately outside that bounded scan.
+    if(view===this.viewKey())for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows,b.viewportY+200);y++)if(!this.cache.has(y))this.cache.set(y,[]);
+    if(view!==this.viewKey())this.dirty=true;
+   }
    // Swap once, after matching; do not render an empty intermediate view.
-   this.clear();const rowMarkers=new Map();
+   if(!this.layer)this.clear();const rowMarkers=new Map();let cached=0;
    for(const hit of data.matches){
     const rule=rules[hit.rule],all=groups[hit.line].cells,cells=[];
     let lo=0,hi=all.length;while(lo<hi){const mid=(lo+hi)>>>1;if(all[mid].end<=hit.start)lo=mid+1;else hi=mid;}
@@ -108,6 +157,7 @@ class TerminalHighlight {
      else{span={y:c.y,x:c.x,width:c.width};spans.push(span);}
     }
     for(const s of spans){
+     if(this.layer){if(cached<1024){this.cache.get(s.y)?.push({...s,rule:hit.rule});cached++;}continue;}
      if(this.decorations.length>=1024)break;
      let marker=rowMarkers.get(s.y);
      if(!marker){marker=term.registerMarker(s.y-(b.baseY+b.cursorY));if(!marker)continue;rowMarkers.set(s.y,marker);this.markers.push(marker);}
@@ -115,10 +165,20 @@ class TerminalHighlight {
      if(d)this.decorations.push(d);
     }
    }
-   if(data.limited)highlightNotice('高亮已达到每视图 1024 个匹配上限；原文保留。');
-  }).catch(error=>{if(this.closed)return;this.failed=true;this.clear();highlightNotice(error.message);}).finally(()=>{this.busy=false;if(this.dirty)this.schedule();});
+   if(this.layer){if(this.renderPending&&this.readyView()){if(!this.syncPreparing)term.refresh(0,term.rows-1);}else this.project();}
+   // Exhausting speculative rows must not show a per-view warning (or resize
+   // the terminal). The visible view gets the budget before prefetch work.
+   if(data.limited&&(!this.layer||this.decorations.length>=1024))highlightNotice('高亮已达到每视图 1024 个匹配上限；原文保留。');
+  };
+  const failed=error=>{if(this.closed)return;this.failed=true;this.clear();this.resumeRender();highlightNotice(error.message);};
+  const finished=()=>{this.busy=false;if(this.dirty)this.schedule();};
+  const lines=groups.map(g=>g.text);
+  // Literals and exact bundled default regex patterns have bounded matching.
+  // Arbitrary custom regex must remain isolated in the Worker.
+  if(this.layer&&this.syncRules){try{apply(syncHighlightMatcher.match(lines,rules));}catch(error){failed(error);}finally{finished();}}
+  else highlightEngine.request(this,{lines,rules}).then(apply).catch(failed).finally(finished);
  }
- dispose(){if(this.closed)return;this.closed=true;this.term.element?.removeEventListener('wheel',this.wheel,{capture:true});this.visibility.disconnect();clearTimeout(this.timer);highlightEngine.cancel(this);this.clear();for(const l of this.listeners)l.dispose();terminalHighlights.delete(this);}
+ dispose(){if(this.closed)return;this.closed=true;this.renderFilter?.dispose();this.term.element?.removeEventListener('wheel',this.wheel,{capture:true});this.visibility.disconnect();if(this.layer)cancelAnimationFrame(this.timer);else clearTimeout(this.timer);highlightEngine.cancel(this);this.clear();this.layer?.dispose();for(const l of this.listeners)l.dispose();terminalHighlights.delete(this);}
 }
 function attachTerminalAppearance(term){return new TerminalHighlight(term);}
 function cloneAppearance(a){return JSON.parse(JSON.stringify(a));}

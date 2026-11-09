@@ -1,7 +1,7 @@
-const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const {launch}=require('./launch.cjs');
 const assert=require('node:assert/strict');
 (async()=>{
- const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const browser=await launch({headless:true,args:['--no-sandbox']});
  try{
   const page=await browser.newPage({viewport:{width:1500,height:900}});page.setDefaultTimeout(10000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
