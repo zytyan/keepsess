@@ -37,7 +37,7 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess version                     查看版本
   keepsess daemon status|stop|run      查询 / 停止 / 前台运行共享 daemon
 
-默认展示 17 个常用工具；[tools] profile="full" 展示完整 30 个工具（旧接口仍接受调用）。
+默认展示 18 个常用工具；[tools] profile="full" 展示完整 30 个工具（旧接口仍接受调用）。
 sess_configure(tool_profile="full") 可在当前实例临时展开完整集；返回 standard 恢复精简。
 完整接口：get_file/put_file、tunnel_open/list/close、help、connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。

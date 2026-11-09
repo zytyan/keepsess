@@ -276,3 +276,9 @@ Go 1.22.1 全量 race 与 SESSMCP_LONG_TEST=1 长测试通过：core 包 112.674
 - 二进制 WS 实测：80 条小输出由 19760 字节 JSON 合为 427 字节二进制帧（压缩前、测试数据），原始字节/顺序/编码不变。600 条历史输出合为一个输出帧；超过单快照上限的 240 × 48KiB 原始历史有界续取，无缺口或重复。
 - Chromium 实测：1200 条历史只请求一个快照、一次 xterm.write，恢复期间隐藏终端，结束后一次展示；字体刷新传输 0 字节。回归通过只读、输入回执、独立 UTF-8/GBK 解码、并行命令总览、滚动跟随、切换取消和 IP/HTTPS 反代路径。
 - CGO_ENABLED=0 交叉编译 linux/amd64、linux/arm64、windows/amd64；运行验证在 Linux amd64，Windows/ARM64 仅验证编译，不宣称目标系统运行实测。
+
+2026-11-09 默认转义工具发现调整：
+
+- 标准集恢复 sess_send_escaped（18 个工具），保持 sess_sendline_escaped 仅在 full 展示；运行时完整 30 工具接口与线上字节语义保持。
+- MCP/CLI/settings 回归通过；验证 standard → full → standard 后，send_escaped 可发现而 sendline_escaped 继续隐藏，既有接口仍可调用。
+- 初始化说明、配置模板、帮助与内置/分发 skill 同步更新：转义 send 不追加行尾，CR/LF 由调用者显式指定。

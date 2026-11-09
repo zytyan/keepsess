@@ -5,7 +5,7 @@ import "errors"
 var standardTools = []string{
 	"sess_help", "sess_connect", "sess_reconnect", "sess_configure", "sess_list",
 	"sess_exec", "sess_task_list", "sess_task_wait", "sess_task_signal", "sess_task_close_stdin",
-	"sess_send_text", "sess_sendline_text", "sess_read_available", "sess_read_until",
+	"sess_send_text", "sess_send_escaped", "sess_sendline_text", "sess_read_available", "sess_read_until",
 	"sess_get_file", "sess_put_file", "sess_close",
 }
 

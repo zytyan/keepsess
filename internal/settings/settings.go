@@ -38,7 +38,7 @@ const Template = `# keepsess user configuration. Agent command: keepsess serve
 # audit_log = "" # Optional JSONL audit; terminal commands may contain secrets.
 
 [tools]
-profile = "standard" # 17 daily tools; "full" exposes all 30.
+profile = "standard" # 18 daily tools; "full" exposes all 30.
 
 [web]
 enabled = true

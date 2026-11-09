@@ -44,9 +44,11 @@ After the first successful connect, give the current Agent instance a work label
 `sess_configure({"instance_name":"short task label"})`, without session/settings.
 Labels support 1..64 printable Unicode characters and do not change instance_id.
 
-Default tools/list exposes 17 daily tools. Use
+Default tools/list exposes 18 daily tools, including sess_send_escaped for exact
+byte control with no appended line ending; include CR/LF explicitly when needed.
+sess_sendline_escaped remains in the full profile for compatibility. Use
 `sess_configure({"tool_profile":"full"})` to expose all 30 when tunnels, escaped
-I/O, raw history, alias or retention tools are needed; standard restores the daily
+sendline, raw history, alias or retention tools are needed; standard restores the daily
 set. The server sends tools/list_changed. Existing tool calls remain compatible,
 and sess_help still covers the complete API. Inspect effective session settings
 using `sess_configure({"session":"s1"})` with no patch.
@@ -89,7 +91,7 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-The standard profile discovers 17 tools; the full profile discovers all 30 through MCP tools/list, not individual installation.
+The standard profile discovers 18 tools; the full profile discovers all 30 through MCP tools/list, not individual installation.
 
 ## Progressive built-in help
 
@@ -221,7 +223,7 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 | Task | Connection and tools |
 |---|---|
 | Independent non-interactive SSH command with protocol exit status | SSH mode=exec; sess_exec |
-| Interactive Bash/shell, persistent cwd/environment, login dialog, switch/console | SSH mode=stream; sess_sendline_text/sess_sendline_escaped and read tools |
+| Interactive Bash/shell, persistent cwd/environment, login dialog, switch/console | SSH mode=stream; sess_sendline_text/sess_send_escaped and read tools |
 | Explicit interactive process such as GDB | SSH mode=exec; interactive=true, optional pty=true; send/read with task handle |
 | Any Telnet connection, including username/password input | mode=stream; send/read tools only, NEVER sess_exec |
 
@@ -229,7 +231,7 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 - For sess_exec, session may be omitted: infer it only with exactly one retained session, counting disconnected and stream sessions too. No sessions: connect first. Multiple sessions: specify session explicitly; never select by connectivity, mode or recency. A disconnected sole session requires explicit reconnect. Explicit invalid sessions never fall back. Results retain the actual session. Task tools still require handle; task_list() still lists all tasks.
 - `sess_exec(command, session?, exec_total_timeout_ms?, term_on_timeout?, ...settings?)`: **SSH mode=exec only**, with stdin EOF by default.
   SSH mode=stream and all Telnet sessions immediately return a tool error without sending
-  input; there is no fallback to a shell. Use sess_sendline_text/sess_sendline_escaped for
+  input; there is no fallback to a shell. Use sess_sendline_text/sess_send_escaped for
   interactive streams, never probe the same command with exec first. Uses a fresh SSH channel on the
   persistent transport; shell cwd/variables do not persist. Combined stdout/stderr and protocol
   exit status determine completion, never text markers. If running=true, read the existing

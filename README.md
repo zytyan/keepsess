@@ -21,7 +21,7 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 保留完整 30 个工具（含 sess_help、sess_rename、sess_task_rename），默认 `tools/list` 展示 17 个常用工具。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 保留完整 30 个工具（含 sess_help、sess_rename、sess_task_rename），默认 `tools/list` 展示 18 个常用工具。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 人类 Web 终端与持久历史
 
@@ -56,7 +56,7 @@ SSH/Telnet 和任务仍在各自 Agent 进程里；daemon 重启后自动注册�
 # audit_log = "~/keepsess-audit.jsonl"
 
 [tools]
-profile = "standard" # 默认 17 个常用工具；full 展示全部 30 个。
+profile = "standard" # 默认 18 个常用工具；full 展示全部 30 个。
 
 [web]
 enabled = true
@@ -83,8 +83,9 @@ keepsess daemon run     # 前台运行，用于诊断；日志默认 ~/.keepsess
 
 实例首次连接成功会提示 AI 调用 `sess_configure({"instance_name":"当前任务名称"})`，不用传 `session`。
 实例名允许 1..64 个可见 Unicode 字符，显示在活动/归档列表；不改变稳定 `instance_id`，不同实例可重名。
-默认精简集保留连接、执行、任务等待/信号/EOF、文字发送/读取、文件传输和关闭。
-隧道、转义发送、别名调整、单独状态/释放、历史 tail/history、close_all 位于完整集。
+默认精简集保留连接、执行、任务等待/信号/EOF、文字发送/读取、精确转义发送、文件传输和关闭。
+隧道、转义 sendline、别名调整、单独状态/释放、历史 tail/history、close_all 位于完整集。
+`sess_send_escaped` 默认展示，只解码一层转义，不追加行尾；需要 CR/LF 时在 data 中明确指定。`sess_sendline_escaped` 继续仅在完整集中展示。
 Agent 可用 `sess_configure({"tool_profile":"full"})` 临时展开，`standard` 恢复精简；服务发送 `notifications/tools/list_changed`，客户端需重新获取工具。
 旧接口仍接受调用，`sess_help` 仍能查询完整说明；配置查询直接使用 `sess_configure({"session":"s1"})`，无需单独的 get_config 入口。
 
@@ -115,7 +116,7 @@ KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser' -v
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；默认 17 个常用工具由客户端连接后自动发现，完整集为 30 个，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；默认 18 个常用工具由客户端连接后自动发现，完整集为 30 个，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json

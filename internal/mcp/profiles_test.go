@@ -15,19 +15,19 @@ func TestStandardFullDiscoveryAndCompatibleCalls(t *testing.T) {
 		return c.receive(t, id, time.Second)["result"].(map[string]any)["tools"].([]any)
 	}
 	initial := list("initial")
-	if len(initial) != 17 {
+	if len(initial) != 18 {
 		t.Fatal(len(initial))
 	}
 	have := map[string]bool{}
 	for _, v := range initial {
 		have[v.(map[string]any)["name"].(string)] = true
 	}
-	for _, key := range []string{"sess_help", "sess_configure", "sess_exec", "sess_send_text", "sess_read_until", "sess_task_wait", "sess_task_signal"} {
+	for _, key := range []string{"sess_help", "sess_configure", "sess_exec", "sess_send_text", "sess_send_escaped", "sess_read_until", "sess_task_wait", "sess_task_signal"} {
 		if !have[key] {
 			t.Fatal("missing essential tool", key)
 		}
 	}
-	if have["sess_tunnel_open"] || have["sess_send_escaped"] || have["sess_task_release"] {
+	if have["sess_tunnel_open"] || have["sess_sendline_escaped"] || have["sess_task_release"] {
 		t.Fatal("advanced discovery leaked")
 	}
 	c.tool(t, "expand", "sess_configure", map[string]any{"tool_profile": "full"})
@@ -47,8 +47,16 @@ func TestStandardFullDiscoveryAndCompatibleCalls(t *testing.T) {
 	c.tool(t, "compact", "sess_configure", map[string]any{"tool_profile": "standard"})
 	structured(t, c.receive(t, "compact", time.Second))
 	c.receive(t, "", time.Second)
-	if len(list("compact-list")) != 17 {
+	compact := list("compact-list")
+	if len(compact) != 18 {
 		t.Fatal("did not restore standard")
+	}
+	compactNames := map[string]bool{}
+	for _, v := range compact {
+		compactNames[v.(map[string]any)["name"].(string)] = true
+	}
+	if !compactNames["sess_send_escaped"] || compactNames["sess_sendline_escaped"] {
+		t.Fatal("restored standard profile changed escaped-send visibility")
 	}
 	// Runtime compatibility includes tools omitted from the current discovery.
 	c.tool(t, "legacy", "sess_task_status", map[string]any{"handle": "task999"})
