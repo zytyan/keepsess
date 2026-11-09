@@ -4,7 +4,7 @@ const OVERVIEW_PAGE_SIZE = 20;
 class TaskOverview {
  constructor(container, records, options) {
   this.container=container;this.options=options;this.cards=new Map();this.ids=[];
-  this.closed=false;this.replaying=true;this.version=0;this.waiters=new Set();
+  this.pending=new Map();this.pendingSize=0;this.closed=false;this.replaying=true;this.version=0;this.waiters=new Set();
   this.events=new AbortController();this.expectedScroll=0;
   container.replaceChildren();container.scrollTop=0;
   const opts={signal:this.events.signal,passive:true};
@@ -49,7 +49,7 @@ class TaskOverview {
   const mount=document.createElement('div');mount.className='overview-terminal';
   const hint=document.createElement('div');hint.className='overview-hint';
   element.append(header,command,mount,hint);this.container.append(element);
-  const card={element,title,state,command,mount,hint,record,decoder:null,encoding:'',epoch:0,version:0,resizing:false,terminal:null,closed:false};
+  const card={element,title,state,command,mount,hint,record:null,decoder:null,encoding:'',epoch:0,version:0,resizing:false,terminal:null,closed:false};
   if(record.status.pty){hint.textContent='PTY 任务请打开单任务终端查看。';return card;}
   const terminal=card.terminal=new Terminal({rows:2,cols:80,scrollback:this.budget(),disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:13,lineHeight:1.2,convertEol:true,theme:{background:'#0a1019',foreground:'#d7e2ed',cursor:'#0a1019',selectionBackground:'#294653'}});
   terminal.open(mount);
@@ -59,7 +59,8 @@ class TaskOverview {
   this.resizeCard(card);return card;
  }
  budget(){return Math.max(0,Math.floor(this.options.scrollback()/OVERVIEW_PAGE_SIZE));}
- update(card,record){
+ update(card,record,force=false){
+  if(!force&&card.record===record)return;
   card.record=record;card.title.textContent=record.handle+(record.name?' · '+record.name:'');
   const code=record.status.exit_code;card.state.textContent=this.options.state(record)+(code!==undefined?' ('+code+')':'');
   card.command.textContent=`[${record.cwd||'~'}] $ ${record.command||'(命令记录不可用)'}`;
@@ -84,18 +85,23 @@ class TaskOverview {
   for(const card of this.cards.values()){
    const follow=this.terminalTail(card);if(card.terminal)card.terminal.options.scrollback=this.budget();
    this.resizeCard(card);if(follow)card.terminal?.scrollToBottom();
-   this.update(card,card.record);
+   this.update(card,card.record,true);
   }
   this.restore(position);
  }
  write(card,text){
+  if(this.replaying){if(text&&!this.closed&&!card.closed&&card.terminal){let chunks=this.pending.get(card);if(!chunks){chunks=[];this.pending.set(card,chunks);}chunks.push(text);this.pendingSize+=text.length;if(this.pendingSize>=512*1024)return this.flushReplay();}return Promise.resolve();}
+  return this.writeNow(card,text);
+ }
+ async flushReplay(){const pending=this.pending;this.pending=new Map();this.pendingSize=0;await Promise.all([...pending].map(([card,chunks])=>this.writeNow(card,chunks.join(''))));}
+ writeNow(card,text){
   if(!text||this.closed||card.closed||!card.terminal)return Promise.resolve();
-  const position=this.snapshot(),version=card.version,follow=this.terminalTail(card);
+  const position=this.replaying?null:this.snapshot(),version=card.version,follow=this.terminalTail(card);
   return new Promise(resolve=>{
    let complete=false;
    const finish=rendered=>{
     if(complete)return;complete=true;this.waiters.delete(cancel);
-    if(rendered&&!this.closed&&!card.closed){this.resizeCard(card);if(follow&&version===card.version)card.terminal.scrollToBottom();this.restore(position);}
+    if(rendered&&!this.closed&&!card.closed&&!this.replaying){this.resizeCard(card);if(follow&&version===card.version)card.terminal.scrollToBottom();this.restore(position);}
     resolve();
    };
    const cancel=()=>finish(false);this.waiters.add(cancel);
@@ -116,13 +122,14 @@ class TaskOverview {
     card.encoding=event.encoding;card.epoch=event.epoch;
     try{card.decoder=new TextDecoder(event.encoding==='shift-jis'?'shift_jis':event.encoding||'utf-8');}catch(_){card.decoder=new TextDecoder();}
    }
-   const raw=Uint8Array.from(atob(event.data),c=>c.charCodeAt(0));await this.write(card,card.decoder.decode(raw,{stream:true}));
+   const raw=outputBytes(event.data);await this.write(card,card.decoder.decode(raw,{stream:true}));
   }
-  if(!this.closed&&!card.closed&&card.decoder&&(event.disposed||event.status.state==='finished'||event.status.state==='unknown'||!event.status.connected))await this.write(card,card.decoder.decode());
+  if(!this.closed&&!card.closed&&card.decoder&&(event.disposed||event.status?.state==='finished'||event.status?.state==='unknown'||event.status&& !event.status.connected))await this.write(card,card.decoder.decode());
  }
  async finishReplay(latest){
   for(const card of this.cards.values())if(card.decoder&&(card.record.disposed||!card.record.status.connected||card.record.status.state==='finished'||card.record.status.state==='unknown'))await this.write(card,card.decoder.decode());
-  if(this.closed)return;
+  await this.flushReplay();if(this.closed)return;
+  for(const card of this.cards.values()){this.resizeCard(card);card.terminal?.scrollToBottom();}
   this.replaying=false;if(this.initialVersion===this.version)this.setScroll(latest?this.container.scrollHeight:0);
  }
  disposeCard(card){card.closed=true;card.terminal?.dispose();card.element.remove();}

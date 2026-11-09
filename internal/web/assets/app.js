@@ -11,7 +11,9 @@ let inputQueue = "", inputTimer = null;
 let scrollVersion=0, pendingFollow=null, renderedTask='';
 const sessions = new Map(), tasks = new Map();
 const renderWaiters=new Set();
-let terminalEvents=new AbortController();
+let terminalEvents=new AbortController(), replayRequest=null;
+let replayChunks=[],replaySize=0;
+const REPLAY_WRITE_SIZE=512*1024;
 function cancelRender(){for(const finish of [...renderWaiters])finish();}
 let scrollback = 5000;
 try { const n = Number(localStorage.getItem('keepsess.scrollback')); if (n >= 100 && n <= 200000) scrollback = Math.floor(n); } catch (_) {}
@@ -68,6 +70,7 @@ function renderTasks() {
 }
 
 function remember(e) {
+ if((e.kind==='output'||e.kind==='input')&&(e.handle?tasks:sessions).has(e.handle||e.session))return;
  if(instance!==current){const status={...e.status,connected:false};if(status.running||status.state==='starting'){status.state='unknown';status.running=false;}e={...e,disposed:true,status};}
  const map = e.handle ? tasks : sessions; const old = map.get(e.handle || e.session);
  if(old && old.seq > e.seq)return;
@@ -132,7 +135,12 @@ function createTerminal() {
 
  updateControls();
 }
-function termWrite(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);owned.write(text,()=>finish(true));});}
+function termWrite(text,gen){
+ if(replaying){if(text&&gen===generation){replayChunks.push(text);replaySize+=text.length;if(replaySize>=REPLAY_WRITE_SIZE)return flushReplay(gen);}return Promise.resolve();}
+ return writeTerminalNow(text,gen);
+}
+function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];replaySize=0;return writeTerminalNow(text,gen);}
+function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);owned.write(text,()=>finish(true));});}
 async function apply(e, gen, live=false) {
  if (gen !== generation) return;
  const newOverview=overviewMode&&live&&e.kind==='command'&&e.session===selected&&e.handle&&!tasks.has(e.handle);
@@ -146,17 +154,17 @@ async function apply(e, gen, live=false) {
  if (!overviewMode&&e.session === selected && (e.handle || '') === handle) {
   if (e.kind === 'output' && e.data) {
    if (!decoder || decoderEpoch !== e.epoch || decoderEncoding !== e.encoding) { if (decoder) await termWrite(decoder.decode(),gen); if(gen!==generation)return; decoderEncoding=e.encoding; decoderEpoch=e.epoch; try{decoder=new TextDecoder(e.encoding==='shift-jis'?'shift_jis':e.encoding||'utf-8');}catch(_){decoder=new TextDecoder();} }
-   const raw=Uint8Array.from(atob(e.data),c=>c.charCodeAt(0)); await termWrite(decoder.decode(raw,{stream:true}),gen);
+   const raw=outputBytes(e.data); await termWrite(decoder.decode(raw,{stream:true}),gen);
   } else if (e.kind === 'command') { await termWrite(`[${e.session} ${e.handle} ${e.cwd || '~'}] $ ${e.command}\r\n`,gen); }
-  else if (e.kind === 'input' && e.data) { const raw=Uint8Array.from(atob(e.data),c=>c.charCodeAt(0)); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
+  else if (e.kind === 'input' && e.data) { const raw=outputBytes(e.data); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
   if (e.kind === 'task' || e.disposed) { if(decoder) await termWrite(decoder.decode(),gen); if(gen!==generation)return; if(e.status.warning||e.status.error)status(e.status.warning||e.status.error); }
  }
  if(gen!==generation)return;
- cursor=Math.max(cursor,e.seq); if (e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
+ cursor=Math.max(cursor,e.seq); if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
  if(followNew)await selectSession(selected,e.handle,{followLatest:true});
 }
 async function selectSession(id, task, options={}) {
- generation++;cancelRender(); inputQueue=""; clearTimeout(inputTimer); const gen=generation; if(socket)socket.close();socket=null;unlocked=false;operationPending=false;pendingFollow=null;selected=id;cursor=0;
+ generation++;cancelRender();replayRequest?.abort();replayRequest=new AbortController();replayChunks=[];replaySize=0; inputQueue=""; clearTimeout(inputTimer); const gen=generation; if(socket)socket.close();socket=null;unlocked=false;operationPending=false;pendingFollow=null;selected=id;cursor=0;
  const e=sessions.get(id);overviewMode=!!options.overview&&e?.mode==='exec';handle=overviewMode?'':task||'';
  if(e?.mode==='exec'&&!handle&&!overviewMode)handle=latestTaskId();
  if(overview){overview.dispose();overview=null;}
@@ -164,34 +172,43 @@ async function selectSession(id, task, options={}) {
  $('empty').hidden=true;$('terminal').hidden=overviewMode;$('overview').hidden=!overviewMode;$('overview-toolbar').hidden=!overviewMode;$('receipts').textContent='终端输入（包括密码）会原样保存在本机历史中。';$('echo').checked=e?.protocol==='ssh';
  if(overviewMode)createOverview(overviewRecords(options.endHandle));else createTerminal();
  renderSidebar();renderTasks();$('terminal-label').textContent=overviewMode?'SESSION OVERVIEW':handle||id;
- replaying=true;$('loading').hidden=false;updateControls();
+ replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').hidden=false;updateControls();
  try {
-  do { const before=cursor;const p=await api('history',{instance,session:id,after:cursor});if(gen!==generation)return;for(const event of p.events)await apply(event,gen);if(gen!==generation)return;cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break; } while(gen===generation);
+  do {
+   const before=cursor,u=new URL('api/replay',root);u.searchParams.set('instance',instance);u.searchParams.set('session',id);u.searchParams.set('after',cursor);
+   u.searchParams.set(overviewMode?'handles':'handle',overviewMode?overview.ids.join(','):handle);
+   const response=await fetch(u,{signal:replayRequest.signal});if(!response.ok)throw new Error(await response.text());
+   const messages=replayMessages(await response.arrayBuffer());if(gen!==generation)return;
+   const p=messages.pop();if(p.instance_id!==current)throw new Error('服务实例已变化，请刷新页面。');
+   for(const message of messages){await apply(message.event,gen);if(gen!==generation)return;}
+   cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
+  } while(gen===generation);
   if(gen!==generation)return;
   if(overviewMode)await overview.finishReplay(overview.lastHandle()===latestTaskId());
   if(gen!==generation)return;
   if(!overviewMode&&decoder && (instance!==current || !liveSession())) await termWrite(decoder.decode(),gen);
   if(gen!==generation)return;
-  replaying=false;$('loading').hidden=true;
+  await flushReplay(gen);if(gen!==generation)return;replaying=false;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
   if(options.followLatest&&initialScroll===scrollVersion&&atTail()&&latestTaskId()&&latestTaskId()!==handle){await selectSession(id,latestTaskId(),options);return;}
   updateControls();if(overviewMode)status('会话总览只读；打开单任务可查看和操作。');if(instance===current)connect(gen);else{$('connection').textContent='历史归档 · 只读';status('归档只读。旧实例运行中任务的最终结果可能未知。');}
- } catch(err){if(gen===generation){replaying=false;$('loading').hidden=true;warn(err.message);updateControls();}}
+ } catch(err){if(gen===generation){replaying=false;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;warn(err.message);updateControls();}}
 }
 function connect(gen) {
  if(gen!==generation)return;
- const u=new URL('ws',root);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.searchParams.set('instance',instance);u.searchParams.set('session',selected);u.searchParams.set('after',cursor);
- const ws=new WebSocket(u);socket=ws;unlocked=false;buffered=0;pipeline=Promise.resolve();updateControls();
+ const u=new URL('ws',root);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.searchParams.set('instance',instance);u.searchParams.set('session',selected);u.searchParams.set('after',cursor);u.searchParams.set('format','binary-v1');if(!overviewMode)u.searchParams.set('handle',handle);
+ const ws=new WebSocket(u);ws.binaryType='arraybuffer';socket=ws;unlocked=false;buffered=0;pipeline=Promise.resolve();updateControls();
  ws.onopen=()=>{if(gen!==generation)return;$('connection').textContent='● 实时连接';updateControls();};
  ws.onmessage=event=>{
-  if(gen!==generation||socket!==ws)return;let msg;try{msg=JSON.parse(event.data)}catch(_){ws.close();return}
-  buffered+=event.data.length;if(buffered>4*1024*1024){ws.close();status('显示较慢，正在通过历史补齐；不会重发输入。');return;}
+  if(gen!==generation||socket!==ws)return;let msg;try{msg=typeof event.data==='string'?JSON.parse(event.data):outputMessage(event.data)}catch(_){ws.close();return}
+  const size=typeof event.data==='string'?event.data.length*2:event.data.byteLength;buffered+=size;if(buffered>4*1024*1024){ws.close();status('显示较慢，正在通过历史补齐；不会重发输入。');return;}
   pipeline=pipeline.then(async()=>{if(gen!==generation||socket!==ws)return;
    if(msg.type==='event'){if(msg.event.seq>cursor)await apply(msg.event,gen,true);}
+   else if(msg.type==='checkpoint'){cursor=Math.max(cursor,msg.seq);}
    else if(msg.type==='lock'){unlocked=!!msg.unlocked;updateControls();status(unlocked?'已解锁，输入将发送到当前终端。':'只读。');}
    else if(msg.type==='receipt')await receiveReceipt(msg,gen,ws);
    else if(msg.type==='hello'||msg.type==='status'){historyState(msg.info);}
    else if(msg.type==='error')warn(msg.error);
-  }).catch(err=>{if(gen===generation&&socket===ws)warn(err.message);ws.close();}).finally(()=>{if(gen===generation&&socket===ws)buffered-=event.data.length;});
+  }).catch(err=>{if(gen===generation&&socket===ws)warn(err.message);ws.close();}).finally(()=>{if(gen===generation&&socket===ws)buffered-=size;});
  };
  ws.onclose=()=>{if(gen!==generation||socket!==ws)return;unlocked=false;operationPending=false;pendingFollow=null;inputQueue='';updateControls();$('connection').textContent='实时连接已断开 · 等待补齐';status('已恢复只读。未收到回执的输入结果未知，不会自动重发。');pipeline.finally(()=>setTimeout(async()=>{if(gen!==generation||socket!==ws)return;try{const info=await api('info');if(gen!==generation||socket!==ws)return;if(info.instance_id!==current){generation++;cancelRender();socket=null;warn('服务实例已变化。请刷新页面查看新实例；不会恢复解锁状态或重发输入。');status('旧终端只读，原任务结果可能未知。');updateControls();return;}}catch(_){}if(gen===generation&&socket===ws)connect(gen)},1200));};
  ws.onerror=()=>ws.close();

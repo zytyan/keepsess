@@ -9,7 +9,7 @@ The final generic fallback is `sans-serif` for every visible text surface.
 Source (unmodified):
 https://raw.githubusercontent.com/JetBrains/JetBrainsMono/v2.304/fonts/variable/JetBrainsMono%5Bwght%5D.ttf
 
-Bundled file: JetBrainsMono-Variable.ttf
+Bundled file: JetBrainsMono-662a196d58f1.ttf
 SHA256: 662a196d58f1183bf2d77428b6d5283fe3f45161ab021bea4036bc98e5cac016
 Weight axis: 100–800. License: JetBrainsMono-OFL.txt.
 
@@ -19,7 +19,7 @@ Source:
 https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/Variable/TTF/Subset/NotoSansSC-VF.ttf
 
 Source SHA256: d68bafcb48a2707749396aa12bbbd833cb70401f3a9a689fd2902c7e0d295964
-Bundled file: NotoSansSC-Variable.woff2
+Bundled file: NotoSansSC-2057fd5e1572.woff2
 Bundled SHA256: 2057fd5e15729286c5585a2d36b799c010f9e1cf9ad3604dd238cc0feca6cacf
 Weight axis: 100–900. License: NotoSansSC-OFL.txt.
 

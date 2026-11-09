@@ -3,6 +3,7 @@
 package web
 
 import (
+	"compress/flate"
 	"context"
 	"embed"
 	"encoding/json"
@@ -50,6 +51,7 @@ type Server struct {
 	wg        sync.WaitGroup
 	clientsMu sync.Mutex
 	clients   map[*websocket.Conn]bool
+	replays   chan struct{}
 }
 
 func Start(parent context.Context, m *core.Manager, store *history.Store, o Options) (*Server, error) {
@@ -100,7 +102,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	s := &Server{Manager: m, Store: store, public: public, listener: ln, ctx: ctx, cancel: cancel, clients: make(map[*websocket.Conn]bool)}
+	s := &Server{Manager: m, Store: store, public: public, listener: ln, ctx: ctx, cancel: cancel, clients: make(map[*websocket.Conn]bool), replays: make(chan struct{}, 4)}
 	accessHost, accessPort, _ := net.SplitHostPort(ln.Addr().String())
 	if accessHost == "" || accessHost == "0.0.0.0" || accessHost == "::" {
 		accessHost = "127.0.0.1"
@@ -115,9 +117,10 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 	mux.HandleFunc(o.BasePath+"api/instances", s.instances)
 	mux.HandleFunc(o.BasePath+"api/catalog", s.catalog)
 	mux.HandleFunc(o.BasePath+"api/history", s.read)
+	mux.HandleFunc(o.BasePath+"api/replay", s.replay)
 	mux.HandleFunc(o.BasePath+"api/info", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Info()) })
 	mux.HandleFunc(o.BasePath+"ws", s.socket)
-	mux.Handle(o.BasePath, http.StripPrefix(o.BasePath, files))
+	mux.Handle(o.BasePath, http.StripPrefix(o.BasePath, fontCache(files)))
 	if o.BasePath != "/" {
 		mux.HandleFunc(strings.TrimSuffix(o.BasePath, "/"), func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, o.BasePath, http.StatusTemporaryRedirect)
@@ -332,10 +335,14 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sub.Close()
-	up := websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(r *http.Request) bool { return s.originOK(r, r.Header.Get("Origin")) }}
+	binaryMode := r.URL.Query().Get("format") == "binary-v1"
+	up := websocket.Upgrader{EnableCompression: binaryMode, ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(r *http.Request) bool { return s.originOK(r, r.Header.Get("Origin")) }}
 	c, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		return
+	}
+	if binaryMode {
+		_ = c.SetCompressionLevel(flate.BestSpeed)
 	}
 	s.clientsMu.Lock()
 	if s.ctx.Err() != nil {
@@ -410,20 +417,69 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	if write(map[string]any{"type": "hello", "unlocked": false, "info": s.Info()}) != nil {
 		return
 	}
+	batch := outputBatch{emit: func(data []byte) error {
+		_ = c.SetWriteDeadline(time.Now().Add(3 * time.Second))
+		return c.WriteMessage(websocket.BinaryMessage, data)
+	}}
+	// A one-shot timer bounds latency without a permanent per-client 50Hz tick.
+	var timer *time.Timer
+	var flushC <-chan time.Time
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	schedule := func() {
+		if flushC == nil {
+			if timer == nil {
+				timer = time.NewTimer(20 * time.Millisecond)
+			} else {
+				timer.Reset(20 * time.Millisecond)
+			}
+			flushC = timer.C
+		}
+	}
+	checkpoint := after
+	flush := func() error {
+		if err := batch.flush(); err != nil {
+			return err
+		}
+		if binaryMode && after > checkpoint {
+			if err := write(map[string]any{"type": "checkpoint", "seq": after}); err != nil {
+				return err
+			}
+			checkpoint = after
+		}
+		return nil
+	}
 	send := func(e core.Event) error {
 		if e.Seq <= after {
 			return nil
 		}
 		after = e.Seq
-		if (e.Kind == "output" || e.Kind == "input") && e.Session != session {
-			return nil
+		if binaryMode {
+			schedule()
+		}
+		if e.Kind == "output" || e.Kind == "input" {
+			if e.Session != session {
+				return nil
+			}
+			if h, ok := r.URL.Query()["handle"]; binaryMode && ok && e.Handle != h[0] {
+				return nil
+			}
+		}
+		if binaryMode && e.Kind == "output" {
+			return batch.add(e)
+		}
+		if err := batch.flush(); err != nil {
+			return err
 		}
 		return write(map[string]any{"type": "event", "event": e})
 	}
 	// Subscribe before replay. Pending records cover the append queue; duplicates
 	// visible through both disk and pending/live are removed by sequence number.
 	for after < written {
-		p, e := s.Store.Read(s.Manager.InstanceID(), after, 128)
+		p, e := s.Store.Read(s.Manager.InstanceID(), after, 4096)
 		if e != nil {
 			_ = write(map[string]any{"type": "error", "error": e.Error()})
 			break
@@ -463,11 +519,22 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 			if send(e) != nil {
 				return
 			}
+		case <-flushC:
+			flushC = nil
+			if flush() != nil {
+				return
+			}
 		case reply := <-replies:
+			if flush() != nil {
+				return
+			}
 			if write(reply) != nil {
 				return
 			}
 		case <-tick.C:
+			if flush() != nil {
+				return
+			}
 			if write(map[string]any{"type": "status", "info": s.Info()}) != nil {
 				return
 			}
@@ -522,3 +589,21 @@ func (s *Server) operate(req request) (core.Result, error) {
 	return s.Manager.Operate(ctx, kind, r)
 }
 func addressInUse(err error) bool { return isAddressInUse(err) }
+
+// Only fingerprinted, embedded font bytes are immutable. History and UI code
+// remain no-store so an upgrade cannot run stale protocol code.
+func fontCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "fonts/JetBrainsMono-662a196d58f1.ttf", "/fonts/JetBrainsMono-662a196d58f1.ttf", "fonts/NotoSansSC-2057fd5e1572.woff2", "/fonts/NotoSansSC-2057fd5e1572.woff2":
+			tag := `"` + path.Base(r.URL.Path) + `"`
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			w.Header().Set("ETag", tag)
+			if r.Header.Get("If-None-Match") == tag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
