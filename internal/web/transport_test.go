@@ -193,3 +193,74 @@ func TestLiveBinaryBatchOrderAndReadonly(t *testing.T) {
 	}
 	t.Logf("80 small output records: JSON %d bytes; binary %d bytes in %d frame(s), before compression", legacyBytes, binaryBytes, frames)
 }
+
+func TestReplayLargeArchiveContinuesWithoutGaps(t *testing.T) {
+	s, m, st := setup(t, Options{Listen: "127.0.0.1:0"})
+	const records = 240
+	for i := 1; i <= records; i++ {
+		st.Emit(core.Event{Kind: "output", Session: "s1", Handle: "task1", Encoding: "utf-8", Data: bytes.Repeat([]byte{byte(i % 251)}, 48<<10)})
+		if i%8 == 0 {
+			waitRecorded(t, st)
+		}
+	}
+	waitRecorded(t, st)
+	after := uint64(0)
+	seen := uint64(0)
+	requests := 0
+	for {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("%sapi/replay?instance=%s&session=s1&handle=task1&after=%d", s.Info().URL, m.InstanceID(), after), nil)
+		req.Header.Set("Accept-Encoding", "identity")
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != 200 {
+			t.Fatal(response.Status, err)
+		}
+		if len(b) > 8<<20 || len(b) < 4 || string(b[:4]) != "KSR1" {
+			t.Fatal("unbounded or invalid snapshot", len(b))
+		}
+		requests++
+		more := false
+		for i := 4; i < len(b); {
+			n := int(binary.BigEndian.Uint32(b[i:]))
+			i += 4
+			frame := b[i : i+n]
+			i += n
+			if frame[0] == 1 {
+				event := decodeOutput(t, frame)
+				seen++
+				if event.Seq != seen || len(event.Data) != 48<<10 || bytes.Count(event.Data, []byte{byte(seen % 251)}) != len(event.Data) {
+					t.Fatal("gap, duplication or changed bytes", event.Seq, seen)
+				}
+			} else {
+				var end struct {
+					Type string `json:"type"`
+					Next uint64 `json:"next"`
+					More bool   `json:"more"`
+				}
+				if err = json.Unmarshal(frame[1:], &end); err != nil {
+					t.Fatal(err)
+				}
+				if end.Type == "replay_end" {
+					if end.Next <= after {
+						t.Fatal("cursor stalled")
+					}
+					after = end.Next
+					more = end.More
+				}
+			}
+		}
+		if !more {
+			break
+		}
+		if requests > 5 {
+			t.Fatal("unbounded continuation")
+		}
+	}
+	if requests < 2 || seen != records || after != records {
+		t.Fatal(requests, seen, after)
+	}
+}

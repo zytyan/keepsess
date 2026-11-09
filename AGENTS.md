@@ -47,3 +47,6 @@
 
 - MCP 发现使用精简投影，保留类型/默认值/互斥与关键安全语义，不修改完整运行时定义/已有参数接受行为；只隐藏各工具不适用的配置。详细帮助从同一完整定义派生，默认值来自 core.DefaultConfig，初始化说明保留核心规则，日常调用不强制 help/skill。
 - sess_help 无参数返回简短目录，topic 为内置主题或工具名，topic+parameter 单字段，query 固定代码全文搜索（中英文别名、确定性排序）；query 与 topic/parameter 互斥，query <=512 字节/最多16词，默认3条、limit1..5，每摘要约220字符。只搜索内置文档，不访问网络/文件/会话/凭据、不改变运行状态，未命中明确返回。参数帮助不能丢失执行边界/逃逸层次信息；目录/搜索不倾倒完整手册。
+
+- 人类 Web 入口由每用户共享 daemon 提供；首个 serve 自动启动、后续进程主动注册，SSH/Telnet 仍由原进程持有。daemon 空闲不退出，重启只恢复观察，绝不重放输入；进程退出转只读归档，UI 标出所有活动实例/PID。设置统一从 ~/.keepsess.toml 读取，内部令牌/运行状态私有保存，禁止发布。
+- 实例首次 connect 成功提示 AI 用 sess_configure(instance_name=...) 命名，不新增命名工具。默认发现 17 个常用工具，tool_profile=full 可展开完整 30 个并通知 tools/list_changed；隐藏仅影响发现，保留旧接口接受行为。

@@ -264,3 +264,15 @@ Go 1.22.1 全量 race 与 SESSMCP_LONG_TEST=1 长测试通过：core 包 112.674
 - local / remote / dynamic / remote_dynamic 实际监听及字节往返、SOCKS5 协商、只读拒绝新建、重连关闭旧监听。
 - Go 1.22.1 全量 race 回归、go vet；CGO_ENABLED=0 编译 linux/amd64、linux/arm64、windows/amd64。
 - 测试使用本机 SSH 协议模拟服务；未实测厂商嵌入式设备。
+
+2026-11-09 共享 Web daemon、配置与传输更新：
+
+- Go 1.22.1 全量短测试、全量 race 和 go vet 通过；并发修正后再次对 daemon/history/settings/web/mcp 运行 race 通过。
+- 两个真实 Agent 子进程在同一个 Web 入口注册；同为 s1 的会话独立路由，只读/解锁操作不串实例。daemon 重启后实例 ID、SSH 连接及任务保留，Agent 退出后名称和历史保留，最后一个 Agent 退出不停止 daemon。
+- 实际可执行文件的自动启动测试通过：两 MCP 进程共享一个监听端口，父进程退出后 daemon 继续运行，status 不泄露令牌，stop 生效。8 个并发启动者只得到一个 daemon；私有 IPC 拒绝无令牌请求。
+- ~/.keepsess.toml 私有模板原子创建（32 个并发读取者）；未知字段/无效类型/负容量拒绝，复用已有旧默认历史目录。配置区分 Agent 级偏好与 daemon 设置。
+- 首次成功 connect 仅提示一次，用 sess_configure(instance_name=...) 命名；失败 connect 不消耗提示，非法或混合实例/会话配置不部分应用。未增加工具。
+- 默认发现 17 个工具 / 24752 字节，完整 30 个工具 / 35751 字节（本次 JSON 编码）；tool_profile 切换发送 tools/list_changed，旧接口继续接受调用。
+- 二进制 WS 实测：80 条小输出由 19760 字节 JSON 合为 427 字节二进制帧（压缩前、测试数据），原始字节/顺序/编码不变。600 条历史输出合为一个输出帧；超过单快照上限的 240 × 48KiB 原始历史有界续取，无缺口或重复。
+- Chromium 实测：1200 条历史只请求一个快照、一次 xterm.write，恢复期间隐藏终端，结束后一次展示；字体刷新传输 0 字节。回归通过只读、输入回执、独立 UTF-8/GBK 解码、并行命令总览、滚动跟随、切换取消和 IP/HTTPS 反代路径。
+- CGO_ENABLED=0 交叉编译 linux/amd64、linux/arm64、windows/amd64；运行验证在 Linux amd64，Windows/ARM64 仅验证编译，不宣称目标系统运行实测。

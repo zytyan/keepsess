@@ -35,8 +35,10 @@ type State struct {
 }
 type Instance struct {
 	ID      string    `json:"id"`
+	Name    string    `json:"name,omitempty"`
 	Started time.Time `json:"started"`
 	Current bool      `json:"current"`
+	PID     int       `json:"pid,omitempty"`
 }
 type Page struct {
 	Events []core.Event `json:"events"`
@@ -55,6 +57,7 @@ type queued struct {
 }
 type Store struct {
 	root, instance string
+	view           bool
 	maxBytes       int64
 	mu             sync.Mutex
 	state          State
@@ -184,6 +187,15 @@ func (s *Store) Close() {
 	s.once.Do(func() {
 		s.mu.Lock()
 		s.closed = true
+		if s.view {
+			close(s.done)
+			for sub := range s.subscribers {
+				close(sub.C)
+				delete(s.subscribers, sub)
+			}
+			s.mu.Unlock()
+			return
+		}
 		s.state.Recording = false
 		close(s.queue)
 		for sub := range s.subscribers {
@@ -298,6 +310,18 @@ func (s *Store) append(e core.Event) error {
 	}
 	if n != len(b) {
 		return io.ErrShortWrite
+	}
+	if e.Kind == "instance" {
+		b, err := os.ReadFile(filepath.Join(dir, "instance.json"))
+		if err != nil {
+			return err
+		}
+		var instance Instance
+		if err = json.Unmarshal(b, &instance); err != nil {
+			return err
+		}
+		instance.Name = e.Name
+		return writeJSON(filepath.Join(dir, "instance.json"), instance)
 	}
 	if e.Kind == "output" || e.Kind == "input" || e.Kind == "receipt" {
 		return nil
@@ -572,7 +596,7 @@ func (s *Store) Rebuild(instance string) error {
 			return err
 		}
 		for _, e := range p.Events {
-			if e.Kind == "output" || e.Kind == "input" || e.Kind == "receipt" {
+			if e.Kind == "output" || e.Kind == "input" || e.Kind == "receipt" || e.Kind == "instance" {
 				continue
 			}
 			if err = project(dir, e); err != nil {

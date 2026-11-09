@@ -2,6 +2,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const root = new URL('./', location.href);
+let serverID='',activeInstances=new Set(),instanceListKey='',instanceRefresh=null;
 let instance = '', current = '', selected = '', handle = '', socket = null;
 let unlocked = false, cursor = 0, generation = 0, replaying = false;
 let overview=null, overviewMode=false;
@@ -21,7 +22,7 @@ $('scrollback').value = scrollback;
 function warn(text) { $('warning').hidden = !text; $('warning').textContent = text || ''; }
 function status(text) { $('status').textContent = text; }
 function note(text) { const p = $('receipts'); p.textContent = (p.textContent + '\n' + text).slice(-24000); }
-async function api(endpoint, query = {}) { const u = new URL('api/' + endpoint, root); for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v); const r = await fetch(u); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+async function api(endpoint, query = {}) { const u = new URL('api/' + endpoint, root); for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v); const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);try{const r = await fetch(u,{signal:controller.signal}); if (!r.ok) throw new Error(await r.text()); return await r.json();}finally{clearTimeout(timer);} }
 function historyState(info) { const h = info.history || info; if (h.error) warn('历史记录不完整：' + h.error + '；缺失事件 ' + (h.lost_events || 0)); }
 function firstSession(){return [...sessions.keys()].sort((a,b)=>Number(a.slice(1))-Number(b.slice(1)))[0];}
 function name(e) { return e.session + (e.name ? ' · ' + e.name : ''); }
@@ -70,6 +71,7 @@ function renderTasks() {
 }
 
 function remember(e) {
+ if(e.kind==='instance')return;
  if((e.kind==='output'||e.kind==='input')&&(e.handle?tasks:sessions).has(e.handle||e.session))return;
  if(instance!==current){const status={...e.status,connected:false};if(status.running||status.state==='starting'){status.state='unknown';status.running=false;}e={...e,disposed:true,status};}
  const map = e.handle ? tasks : sessions; const old = map.get(e.handle || e.session);
@@ -81,8 +83,8 @@ function remember(e) {
 }
 async function loadCatalog() {
  let offset = 0;
- const requested=instance;
- do { const p = await api('catalog',{instance:requested,offset});if(requested!==instance)return;if(p.indexing){status('正在重建归档目录…');await new Promise(resolve=>setTimeout(resolve,250));continue;} for (const r of p.records) remember({...r.event, command:r.command, cwd:r.cwd}); if (!p.more) break; offset=p.next; } while (true);
+ const requested=instance,requestedGeneration=generation;
+ do { const p = await api('catalog',{instance:requested,offset});if(requested!==instance||requestedGeneration!==generation)return;if(p.indexing){status('正在重建归档目录…');await new Promise(resolve=>setTimeout(resolve,250));continue;} for (const r of p.records) remember({...r.event, command:r.command, cwd:r.cwd}); if (!p.more) break; offset=p.next; } while (true);
  renderSidebar(); renderTasks();
 }
 function fit() {
@@ -143,6 +145,7 @@ function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];repla
 function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);owned.write(text,()=>finish(true));});}
 async function apply(e, gen, live=false) {
  if (gen !== generation) return;
+ if(e.kind==='instance'){cursor=Math.max(cursor,e.seq);if(live)await refreshInstances();return;}
  const newOverview=overviewMode&&live&&e.kind==='command'&&e.session===selected&&e.handle&&!tasks.has(e.handle);
  const overviewLatest=newOverview&&(!overview.lastHandle()||overview.lastHandle()===latestTaskId()),overviewFollow=overviewLatest&&overview.atTail();
  const followNew=live&&e.kind==='command'&&e.session===selected&&e.handle&&!tasks.has(e.handle)&&followsLatest()&&!operationPending;
@@ -179,7 +182,7 @@ async function selectSession(id, task, options={}) {
    u.searchParams.set(overviewMode?'handles':'handle',overviewMode?overview.ids.join(','):handle);
    const response=await fetch(u,{signal:replayRequest.signal});if(!response.ok)throw new Error(await response.text());
    const messages=replayMessages(await response.arrayBuffer());if(gen!==generation)return;
-   const p=messages.pop();if(p.instance_id!==current)throw new Error('服务实例已变化，请刷新页面。');
+   const p=messages.pop();if(p.instance_id!==serverID)throw new Error('服务实例已变化，请刷新页面。');
    for(const message of messages){await apply(message.event,gen);if(gen!==generation)return;}
    cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
   } while(gen===generation);
@@ -210,7 +213,7 @@ function connect(gen) {
    else if(msg.type==='error')warn(msg.error);
   }).catch(err=>{if(gen===generation&&socket===ws)warn(err.message);ws.close();}).finally(()=>{if(gen===generation&&socket===ws)buffered-=size;});
  };
- ws.onclose=()=>{if(gen!==generation||socket!==ws)return;unlocked=false;operationPending=false;pendingFollow=null;inputQueue='';updateControls();$('connection').textContent='实时连接已断开 · 等待补齐';status('已恢复只读。未收到回执的输入结果未知，不会自动重发。');pipeline.finally(()=>setTimeout(async()=>{if(gen!==generation||socket!==ws)return;try{const info=await api('info');if(gen!==generation||socket!==ws)return;if(info.instance_id!==current){generation++;cancelRender();socket=null;warn('服务实例已变化。请刷新页面查看新实例；不会恢复解锁状态或重发输入。');status('旧终端只读，原任务结果可能未知。');updateControls();return;}}catch(_){}if(gen===generation&&socket===ws)connect(gen)},1200));};
+ ws.onclose=()=>{if(gen!==generation||socket!==ws)return;unlocked=false;operationPending=false;pendingFollow=null;inputQueue='';updateControls();$('connection').textContent='实时连接已断开 · 等待补齐';status('已恢复只读。未收到回执的输入结果未知，不会自动重发。');pipeline.finally(()=>setTimeout(async()=>{if(gen!==generation||socket!==ws)return;try{const info=await api('info');if(gen!==generation||socket!==ws)return;if(info.instance_id!==serverID){serverID=info.instance_id;await refreshInstances();if(gen!==generation||socket!==ws)return;warn('Web daemon 已重启；已恢复只读，未确认的输入结果未知，不会重发。');await selectSession(selected,handle,{overview:overviewMode});return;}}catch(_){}if(gen===generation&&socket===ws)connect(gen)},1200));};
  ws.onerror=()=>ws.close();
 }
 async function receiveReceipt(msg,gen,ws){
@@ -239,7 +242,24 @@ $('overview-older').onclick=()=>{const list=sessionTasks(),first=list.findIndex(
 $('overview-newer').onclick=()=>{const list=sessionTasks(),last=list.findIndex(t=>t.handle===overview?.lastHandle());if(last<list.length-1)selectSession(selected,'',{overview:true,endHandle:list[Math.min(list.length-1,last+OVERVIEW_PAGE_SIZE)].handle});};
 $('overview-latest').onclick=()=>selectSession(selected,'',{overview:true});
 $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
-$('instances').onchange=async()=>{generation++;cancelRender();if(socket)socket.close();socket=null;instance=$('instances').value;selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}};
+$('instances').onchange=async()=>{generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=$('instances').value;current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(sessions.size)selectSession(firstSession());else{overview?.dispose();overview=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}};
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));terminalResize.observe($('overview'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}overview?.refreshFonts();});
-(async()=>{await waitForTerminalFonts();const info=await api('info');historyState(info);const list=await api('instances');current=list.find(i=>i.current)?.id||'';instance=current;for(const i of list){const option=document.createElement('option');option.value=i.id;option.textContent=(i.current?'当前实例 · ':'归档 · ')+i.id+' · '+new Date(i.started).toLocaleString();$('instances').append(option)}$('instances').value=instance;await loadCatalog();if(sessions.size)selectSession(firstSession());else{$('connection').textContent='等待会话';setInterval(async()=>{if(instance!==current||selected)return;try{await loadCatalog();if(sessions.size)selectSession(firstSession())}catch(e){warn(e.message)}},1500)}})().catch(e=>warn(e.message));
+function refreshInstances(){if(!instanceRefresh)instanceRefresh=refreshInstanceList().finally(()=>{instanceRefresh=null});return instanceRefresh;}
+async function refreshInstanceList(){
+ const list=await api('instances'),wasActive=activeInstances.has(instance);activeInstances=new Set(list.filter(i=>i.current).map(i=>i.id));
+ const picker=$('instances'),saved=instance,key=JSON.stringify(list);
+ if(key!==instanceListKey){instanceListKey=key;picker.replaceChildren();
+ for(const i of list){const option=document.createElement('option');option.value=i.id;option.textContent=(i.name?i.name+' · ':'')+(i.current?'活动'+(i.pid?' PID '+i.pid:'')+' · ':'归档 · ')+i.id+' · '+new Date(i.started).toLocaleString();picker.append(option);}}
+ if(!instance)instance=list.find(i=>i.current)?.id||list[0]?.id||'';
+ current=activeInstances.has(instance)?instance:'';picker.value=instance;
+ $('instance-summary').textContent=`实例 / 历史归档 · ${activeInstances.size} 个活动进程`;
+ if(saved&&wasActive!==activeInstances.has(instance)&&selected){unlocked=false;inputQueue='';await loadCatalog();updateControls();}
+ return list;
+}
+(async()=>{
+ await waitForTerminalFonts();const info=await api('info');serverID=info.instance_id;historyState(info);await refreshInstances();
+ if(instance){await loadCatalog();if(sessions.size)await selectSession(firstSession());}
+ if(!selected)$('connection').textContent='等待会话';
+ setInterval(async()=>{try{await refreshInstances();if(!selected&&instance){await loadCatalog();if(sessions.size)await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
+})().catch(e=>warn(e.message));

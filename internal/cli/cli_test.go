@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/zytyan/keepsess/internal/daemon"
+	"github.com/zytyan/keepsess/internal/settings"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommands(t *testing.T) {
@@ -68,17 +71,42 @@ func TestAuditRedaction(t *testing.T) {
 func TestServeWebDiscoveryAndStdioIsolation(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		extra   []string
+		config  string
 		enabled bool
 		failure bool
 	}{
-		{"default", nil, true, false},
-		{"disabled", []string{"--web=false"}, false, false},
-		{"invalid root keeps MCP alive", []string{"--web-base-path=/{invalid}/"}, false, true},
+		{"default", "", true, false},
+		{"disabled", "[web]\nenabled=false\n", false, false},
+		{"invalid root keeps MCP alive", "[web]\nbase_path=\"/{invalid}/\"\n", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			args := []string{"serve", "--web-listen=127.0.0.1:0", "--history-dir=" + t.TempDir()}
-			args = append(args, tc.extra...)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			text := tc.config
+			if text == "" {
+				text = "[web]\nlisten=\"127.0.0.1:0\"\n"
+			}
+			if e := os.WriteFile(filepath.Join(home, ".keepsess.toml"), []byte(text), 0600); e != nil {
+				t.Fatal(e)
+			}
+			oldLaunch := launchDaemon
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			started := false
+			launchDaemon = func(c settings.Config) error { started = true; go func() { done <- daemon.Run(ctx, c) }(); return nil }
+			t.Cleanup(func() {
+				cancel()
+				if started {
+					select {
+					case <-done:
+					case <-time.After(3 * time.Second):
+						t.Error("daemon did not stop")
+					}
+				}
+				launchDaemon = oldLaunch
+			})
+			args := []string{"serve"}
 			input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"sess_list\",\"arguments\":{}}}\n"
 			var out, errout bytes.Buffer
 			if e := Run(context.Background(), args, strings.NewReader(input), &out, &errout); e != nil {

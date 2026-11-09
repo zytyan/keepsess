@@ -5,7 +5,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var processInstanceID = func() string {
@@ -125,4 +128,20 @@ func (m *Manager) RenameTask(ref, name string) (Result, error) {
 	selected.out.recordLocked("task", nil, "", "", nil)
 	s.lastUse = time.Now()
 	return selected.out.statusLocked(), nil
+}
+
+// Instance names are descriptive labels, not aliases or protocol handles.
+// Different instances may share a label; the random stable ID disambiguates.
+func (m *Manager) InstanceName() string { m.mu.Lock(); defer m.mu.Unlock(); return m.instanceName }
+func (m *Manager) RenameInstance(name string) (Result, error) {
+	if !utf8.ValidString(name) || utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 64 || strings.TrimSpace(name) != name || strings.IndexFunc(name, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return Result{}, errors.New("instance_name must be 1..64 printable Unicode characters without surrounding whitespace")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instanceName = name
+	if m.events != nil {
+		m.events.Emit(Event{Kind: "instance", Name: name, Time: time.Now().UTC()})
+	}
+	return Result{InstanceID: m.instanceID, InstanceName: name}, nil
 }

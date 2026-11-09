@@ -16,8 +16,10 @@ import (
 
 	"github.com/zytyan/keepsess/internal/buildinfo"
 	"github.com/zytyan/keepsess/internal/core"
+	"github.com/zytyan/keepsess/internal/daemon"
 	"github.com/zytyan/keepsess/internal/history"
 	"github.com/zytyan/keepsess/internal/mcp"
+	"github.com/zytyan/keepsess/internal/settings"
 	"github.com/zytyan/keepsess/internal/web"
 )
 
@@ -28,13 +30,16 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
 
 用法:
   keepsess help                         查看用途和子命令
-  keepsess serve [--log PATH]           启动 MCP stdio 和默认只读 Web 终端
+  keepsess serve [--log PATH]           启动 MCP stdio，加入共享 Web daemon
   keepsess mcp-skill                    输出 AI 操作指南
   keepsess install [FILE] [--client X]  安装二进制、MCP 配置和 skill
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
+  keepsess daemon status|stop|run      查询 / 停止 / 前台运行共享 daemon
 
-30 个工具：get_file/put_file、tunnel_open/list/close、help、connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
+默认展示 17 个常用工具；[tools] profile="full" 展示完整 30 个工具（旧接口仍接受调用）。
+sess_configure(tool_profile="full") 可在当前实例临时展开完整集；返回 standard 恢复精简。
+完整接口：get_file/put_file、tunnel_open/list/close、help、connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
 read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。
 sess_exec 用于 SSH mode=exec，默认 login=true 使用 Bash 登录 shell、stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
 sess_exec 仅在恰好保留一个会话时可省略 session；多会话须明确指定，断开的会话也计数。
@@ -67,16 +72,20 @@ sent/written_bytes 仅确认本地写入，不证明设备收到、密码正确�
 SSH 协议 keepalive 默认 30000ms、回复时限 10000ms；RPC 预算先到不发 TERM，保留任务 handle。
 TCP keepalive 默认 15000ms；Linux 支持 TCP 队列阈值，Windows 明确报告不支持。
 MCP 配置: {"command":"/path/to/keepsess","args":["serve"]}
-Web 默认监听 127.0.0.1:8765，端口占用自动重试；initialize._meta.web / sess_list.web 可查实际 URL。
---web=false 关闭 Web 与历史记录；--web-listen HOST:PORT、--web-base-path /prefix/ 配置入口。
-IP/localhost 反代入口无需固定外部地址；保留 Host（含端口），页面/API/WS 使用相对路径。
---web-public-url URL 可选设置外部展示地址；DNS 域名入口须显式声明。
---history-dir PATH 指定历史目录；--history-max-bytes N 设置容量保护（0 不限），历史不自动删除。
+用户配置统一读取 ~/.keepsess.toml，首次启动生成默认配置，Agent 只需 keepsess serve。
+首个进程自动启动当前用户的共享 daemon（默认 127.0.0.1:8765，占用时自动换端口）。
+所有活动进程共用 Web 入口，initialize._meta.web / sess_list.web 可查 URL；进程退出仍保留历史。
+daemon 空闲不退出；SSH/Telnet 仍在原 Agent 进程内，daemon 重启仅恢复观察，不重放输入。
+[web] enabled/listen/base_path/public_url、[history] dir/max_bytes、audit_log 配置替代启动参数。
+IP/localhost 反代入口保留 Host（含端口），页面/API/WS 使用相对路径；DNS 名设置 web.public_url。
+修改 Web/history 配置后用 keepsess daemon stop 重启；活动 Agent 会重新注册。
 Web 本机免登录，每次刷新/重连恢复只读，解锁仍受会话 read_only 保护；滚动历史默认 5000 行，可调整并记住。
 历史包含命令、原始输入和输出（可能包含密码）；连接认证参数/env 字段不写入。关闭会话仍保留 Web 历史。
 --log 写入 0600 JSONL 审计；认证字段脱敏，command/data 仍可能含敏感信息。
 Telnet 为明文；SSH 默认不验证主机密钥，显式 known_hosts/host_key 可启用。连接只在本次服务进程内持久化。
 `
+
+var launchDaemon = daemon.Launch
 
 func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer) error {
 	if len(args) == 0 {
@@ -123,38 +132,66 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		}
 		_, e = fmt.Fprintln(out, p)
 		return e
+	case "daemon":
+		if len(args) != 2 {
+			return errors.New("usage: keepsess daemon run|status|stop")
+		}
+		cfg, err := settings.Load()
+		if err != nil {
+			return err
+		}
+		switch args[1] {
+		case "run":
+			return daemon.Run(ctx, cfg)
+		case "status":
+			r, e := daemon.ReadRuntime(cfg)
+			if e != nil {
+				return e
+			}
+			info, e := daemon.Probe(ctx, r)
+			if e != nil {
+				return e
+			}
+			return json.NewEncoder(out).Encode(info)
+		case "stop":
+			if e := daemon.Stop(ctx, cfg); e != nil {
+				return e
+			}
+			_, e := fmt.Fprintln(out, "daemon stop requested; active Agents may start it again and reconnect without replaying input")
+			return e
+		default:
+			return errors.New("usage: keepsess daemon run|status|stop")
+		}
 	case "serve":
+		cfg, err := settings.Load()
+		if err != nil {
+			return err
+		}
+		// Preserve the explicitly supported audit flag. Agent configurations need
+		// only ["serve"]; all persistent user preferences live in ~/.keepsess.toml.
 		f := flag.NewFlagSet("serve", flag.ContinueOnError)
 		f.SetOutput(errout)
-		path := f.String("log", "", "Audit JSONL path (authentication redacted)")
-		webEnabled := f.Bool("web", true, "Start local human Web terminal (read-only until unlocked)")
-		webListen := f.String("web-listen", "127.0.0.1:8765", "Web listen address; occupied ports are retried")
-		webBase := f.String("web-base-path", "/", "Internal Web root path, e.g. /keepsess/")
-		webPublic := f.String("web-public-url", "", "Optional external http(s) URL; required for DNS-name access")
-		historyDir := f.String("history-dir", "", "Persistent history directory (default user config/keepsess/history)")
-		historyMax := f.Int64("history-max-bytes", 0, "Archive capacity; 0 means retain without automatic deletion")
+		auditPath := f.String("log", cfg.AuditLog, "Legacy audit override; prefer audit_log in ~/.keepsess.toml")
 		if e := f.Parse(args[1:]); e != nil {
-			return e
+			return fmt.Errorf("%w; configure ~/.keepsess.toml instead of Web/history arguments", e)
 		}
 		if f.NArg() != 0 {
-			return errors.New("unexpected arguments")
+			return errors.New("unexpected arguments; configure ~/.keepsess.toml")
 		}
-		s := &mcp.Server{Manager: core.NewManager()}
-		if *historyMax < 0 {
-			return errors.New("history-max-bytes must be nonnegative")
-		}
-		if *webEnabled {
-			info := web.Info{}
-			if *historyDir == "" {
-				dir, e := os.UserConfigDir()
-				if e != nil {
-					info.Error = e.Error()
-				} else {
-					*historyDir = filepath.Join(dir, "keepsess", "history")
+		s := &mcp.Server{Manager: core.NewManager(), ToolProfile: cfg.Tools.Profile}
+		defer s.Manager.CloseAll()
+		if cfg.Web.Enabled {
+			info := web.Info{InstanceID: s.Manager.InstanceID()}
+			runtime, e := daemon.Ensure(ctx, cfg, launchDaemon)
+			if e != nil {
+				info.Error = e.Error()
+			} else {
+				if runtime.ConfigHash != cfg.Fingerprint() {
+					fmt.Fprintln(errout, "keepsess: daemon uses previous Web/history settings; run keepsess daemon stop to reload ~/.keepsess.toml")
 				}
-			}
-			if info.Error == "" {
-				store, e := history.Open(*historyDir, s.Manager.InstanceID(), *historyMax)
+				cfg.History.Dir = runtime.HistoryDir
+				cfg.History.MaxBytes = runtime.HistoryMaxBytes
+				store, e := history.Open(cfg.History.Dir, s.Manager.InstanceID(), cfg.History.MaxBytes)
 				if e != nil {
 					info.Error = e.Error()
 				} else {
@@ -165,26 +202,19 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 						}
 					}()
 					s.Manager.SetEventSink(store)
-					ws, e := web.Start(ctx, s.Manager, store, web.Options{Listen: *webListen, BasePath: *webBase, PublicURL: *webPublic})
-					if e != nil {
-						info.Error = e.Error()
-						s.WebInfo = func() any { i := info; i.History = store.Status(); return i }
-					} else {
-						defer ws.Close()
-						s.WebInfo = func() any { return ws.Info() }
-						fmt.Fprintln(errout, "keepsess Web:", ws.Info().URL, "(local access has no login; terminal input is archived)")
-					}
+					client := daemon.Connect(ctx, cfg, s.Manager, store, runtime, launchDaemon)
+					defer client.Close()
+					s.WebInfo = func() any { return client.Info() }
+					fmt.Fprintln(errout, "keepsess Web:", runtime.Info.URL, "(shared daemon; input archived; default read-only)")
 				}
 			}
-			if info.Error != "" {
-				if s.WebInfo == nil {
-					s.WebInfo = func() any { return info }
-				}
+			if s.WebInfo == nil {
+				s.WebInfo = func() any { return info }
 				fmt.Fprintln(errout, "keepsess Web unavailable:", info.Error)
 			}
 		}
-		if *path != "" {
-			a, e := OpenAudit(*path)
+		if *auditPath != "" {
+			a, e := OpenAudit(*auditPath)
 			if e != nil {
 				return e
 			}

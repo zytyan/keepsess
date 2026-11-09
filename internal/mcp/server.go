@@ -22,9 +22,12 @@ const WriteLimit = 3 * time.Second
 
 type Audit interface{ Record(any) error }
 type Server struct {
-	Manager *core.Manager
-	Audit   Audit
-	WebInfo func() any
+	Manager     *core.Manager
+	Audit       Audit
+	WebInfo     func() any
+	ToolProfile string
+	profileMu   sync.Mutex
+	toolChanges chan struct{}
 }
 type message struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -101,7 +104,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 			return toolResult(nil, fmt.Errorf("missing required argument %q", k))
 		}
 	}
-	for _, key := range []string{"name", "cwd", "login", "env"} {
+	for _, key := range []string{"name", "instance_name", "tool_profile", "cwd", "login", "env"} {
 		if raw, present := keys[key]; present {
 			if string(raw) == "null" {
 				return toolResult(nil, fmt.Errorf("%s cannot be null", key))
@@ -213,14 +216,40 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		return toolResult(v, e)
 	case "sess_configure":
 		var r struct {
-			Session string           `json:"session"`
-			Config  core.ConfigPatch `json:"config"`
+			Session      string           `json:"session"`
+			InstanceName *string          `json:"instance_name"`
+			ToolProfile  *string          `json:"tool_profile"`
+			Config       core.ConfigPatch `json:"config"`
 		}
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
+		if r.InstanceName != nil || r.ToolProfile != nil {
+			if _, hasSession := keys["session"]; hasSession || len(r.Config) != 0 {
+				return toolResult(nil, errors.New("instance-level instance_name/tool_profile cannot be mixed with session settings"))
+			}
+			if r.ToolProfile != nil && !ValidToolProfile(*r.ToolProfile) {
+				return toolResult(nil, errors.New("tool_profile must be standard or full"))
+			}
+			if r.InstanceName != nil {
+				if _, e := s.Manager.RenameInstance(*r.InstanceName); e != nil {
+					return toolResult(nil, e)
+				}
+			}
+			if r.ToolProfile != nil {
+				_ = s.setToolProfile(*r.ToolProfile)
+			}
+			return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "instance_name": s.Manager.InstanceName(), "tool_profile": s.toolProfile(), "tool_count": len(s.tools()), "comment": "Instance label/profile updated; no remote input. Tool profile changes notify the client to refresh tools/list."}, nil)
+		}
+		if r.Session == "" {
+			return toolResult(nil, errors.New("provide instance_name/tool_profile without session, or session with session settings"))
+		}
 		if r.Config == nil {
 			return toolResult(nil, errors.New("config must be an object"))
+		}
+		if len(r.Config) == 0 {
+			v, e := s.Manager.GetConfig(r.Session)
+			return toolResult(v, e)
 		}
 		v, e := s.Manager.Configure(r.Session, r.Config)
 		return toolResult(v, e)
@@ -251,7 +280,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		v, e := s.Manager.TaskList(r.Session)
 		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "tasks": v}, e)
 	case "sess_list":
-		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "sessions": s.Manager.List(), "web": s.webInfo()}, nil)
+		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "instance_name": s.Manager.InstanceName(), "sessions": s.Manager.List(), "web": s.webInfo()}, nil)
 	case "sess_close_all":
 		s.Manager.CloseAll()
 		return toolResult(map[string]any{"reason": "closed", "connected": false}, nil)
@@ -356,7 +385,13 @@ func buildDefinitions() map[string]map[string]any {
 	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
 	p = session()
 	p["config"] = configSchema(false)
-	add("sess_configure", "Atomically patch top-level session settings; omitted fields unchanged. No nested config needed. Current readers/writers retain snapshots. No authentication data in returned config.", p, "session", "config")
+	p["tool_profile"] = map[string]any{"type": "string", "enum": []string{"standard", "full"}, "description": "Instance-level discovery profile; omit session/settings. standard lists 17 daily tools; full lists all 30 (tunnels, escaped I/O, raw history and aliases). Emits tools/list_changed; existing calls stay compatible. ~/.keepsess.toml [tools].profile sets the startup default."}
+	p["instance_name"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 64, "description": "Instance label: 1..64 printable Unicode characters, no surrounding whitespace. Supply alone without session settings; no remote I/O. Shown in the shared Web interface and archives; instance_id stays unchanged."}
+	add("sess_configure", "Without session: set instance_name (display label) and/or tool_profile (standard/full discovery). With session alone: inspect effective config. With session and patches: atomically update defaults; omitted fields unchanged. Cannot mix instance and session changes. Current readers/writers retain snapshots; no authentication data returned.", p)
+	defs["sess_configure"]["inputSchema"].(map[string]any)["oneOf"] = []any{
+		map[string]any{"anyOf": []any{map[string]any{"required": []string{"instance_name"}}, map[string]any{"required": []string{"tool_profile"}}}, "not": map[string]any{"required": []string{"session"}}},
+		map[string]any{"required": []string{"session"}, "not": map[string]any{"anyOf": []any{map[string]any{"required": []string{"instance_name"}}, map[string]any{"required": []string{"tool_profile"}}}}},
+	}
 	add("sess_get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
 	add("sess_list", "List process-local sessions and transport/exec state.", map[string]any{})
 	add("sess_close", "Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
@@ -473,6 +508,11 @@ func Tools() []any {
 func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	changes := make(chan struct{}, 1)
+	s.profileMu.Lock()
+	s.toolChanges = changes
+	s.profileMu.Unlock()
+	defer func() { s.profileMu.Lock(); s.toolChanges = nil; s.profileMu.Unlock() }()
 	defer s.Manager.CloseAll()
 	type line struct {
 		b   []byte
@@ -582,6 +622,14 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 			return ctx.Err()
 		case e := <-writerErr:
 			return e
+		case <-changes:
+			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+			b = append(b, '\n')
+			select {
+			case queue <- output{b: b}:
+			default:
+				cancel()
+			}
 		case <-eofDone:
 			ack := make(chan struct{})
 			timer := time.NewTimer(WriteLimit + time.Second)
@@ -665,11 +713,11 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID(), "web": s.webInfo()}, "instructions": residentInstructions}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{"listChanged": true}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID(), "web": s.webInfo()}, "instructions": residentInstructions}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":
-				send(m.ID, map[string]any{"tools": Tools()}, 0, "")
+				send(m.ID, map[string]any{"tools": s.tools()}, 0, "")
 			case "tools/call":
 				mu.Lock()
 				_, dup := active[string(m.ID)]

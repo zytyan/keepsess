@@ -92,6 +92,7 @@ type PeerIdentity struct {
 type Result struct {
 	Name               string        `json:"name,omitempty"`
 	InstanceID         string        `json:"instance_id,omitempty"`
+	InstanceName       string        `json:"instance_name,omitempty"`
 	StartedAt          *time.Time    `json:"started_at,omitempty"`
 	TaskElapsedMS      int64         `json:"task_elapsed_ms,omitempty"`
 	WaitElapsedMS      *int64        `json:"wait_elapsed_ms,omitempty"`
@@ -170,16 +171,18 @@ type Session struct {
 type Manager struct {
 	events EventSink // Installed before serving; callbacks must never block.
 
-	instanceID   string
-	sessionNames map[string]string
-	mu           sync.Mutex
-	sessions     map[string]*Session
-	nextID       uint64
-	nextTask     uint64
-	opening      int
-	generation   uint64
-	pending      map[string]context.CancelFunc
-	retired      map[string]retiredSession
+	instanceID             string
+	instanceName           string
+	instanceNamingPrompted bool
+	sessionNames           map[string]string
+	mu                     sync.Mutex
+	sessions               map[string]*Session
+	nextID                 uint64
+	nextTask               uint64
+	opening                int
+	generation             uint64
+	pending                map[string]context.CancelFunc
+	retired                map[string]retiredSession
 }
 
 func NewManager() *Manager {
@@ -319,6 +322,9 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 		return Result{}, errors.New("connect cancelled by sess_close_all")
 	}
 	m.sessions[id] = s
+	promptName := !m.instanceNamingPrompted && m.instanceName == ""
+	m.instanceNamingPrompted = true
+	instanceName := m.instanceName
 	m.mu.Unlock()
 	s.record("session", nil, "", "", nil)
 	go m.watch(s)
@@ -326,7 +332,12 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	s.mu.Lock()
 	v.Peer = s.peer
 	v.InstanceID = m.instanceID
+	v.InstanceName = instanceName
 	s.mu.Unlock()
+	if promptName {
+		v.Comment = "首次连接成功。请根据当前工作内容，调用 sess_configure({\"instance_name\":\"简短的任务名称\"}) 给本实例命名；instance_id 保持不变，不要重连或重发命令。"
+		v.NextAction = "sess_configure"
+	}
 	return v, nil
 }
 func (s *Session) signal() {

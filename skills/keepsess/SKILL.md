@@ -34,23 +34,44 @@ its scrollback budget across previews. Decoder/ANSI state stays task-local; PTY 
 link to their individual terminals. Reading older content holds position; at the tail,
 new output/tasks follow automatically. Overview observation never sends terminal input.
 
-History defaults to the OS user config directory under `keepsess/history`, with
-private instance directories/files. Commands, raw terminal input (including passwords)
-and output are retained; structured connection credentials and env fields are excluded.
-Do not publish history directories. `--history-dir` changes the location and
-`--history-max-bytes` enables a capacity guard; default 0 retains without automatic
-cleanup. Recording failures/gaps are reported without blocking remote connections.
-For reverse proxies use `--web-base-path /keepsess/` if the prefix is forwarded;
-if stripped, retain internal `/`. Browser assets/API/WS resolve relative to the
-current page URL, whose entry path should end in `/`. IP/localhost access needs
-no fixed public URL and may use a different external port. Preserve the browser
-Host including its port; HTTPS/WSS can terminate at the proxy with HTTP upstream.
-DNS names still require an explicit `--web-public-url https://host/keepsess/`;
-it can also declare the external Origin when a proxy rewrites Host. Forwarded
-headers are not used to bypass Host/Origin checks. Without a public URL, MCP
-advertises the actual local listen address, not an inferred external proxy URL.
-Use `--web-listen` for explicit nonlocal binding; external authentication belongs
-to the proxy. No MCP tool or Web observation may replay input after a lost receipt.
+User preferences live in `~/.keepsess.toml`; Agent launch arguments need only
+`serve`. The first process starts a shared per-user daemon, and all other processes
+join its single Web listener. SSH/Telnet connections stay in the original Agent
+process. Daemon restart reconnects observation only, never replays terminal input.
+Web lists all registered live instances/PIDs and archives; input is read-only on
+refresh/reconnect/switch. The daemon stays alive after Agents exit.
+After the first successful connect, give the current Agent instance a work label:
+`sess_configure({"instance_name":"short task label"})`, without session/settings.
+Labels support 1..64 printable Unicode characters and do not change instance_id.
+
+Default tools/list exposes 17 daily tools. Use
+`sess_configure({"tool_profile":"full"})` to expose all 30 when tunnels, escaped
+I/O, raw history, alias or retention tools are needed; standard restores the daily
+set. The server sends tools/list_changed. Existing tool calls remain compatible,
+and sess_help still covers the complete API. Inspect effective session settings
+using `sess_configure({"session":"s1"})` with no patch.
+`[tools] profile="standard"|"full"` sets the startup default for each Agent.
+
+History defaults to `~/.keepsess/history` (an existing legacy default directory is
+reused), with private instance directories/files. Commands, raw terminal input
+(including passwords) and output are retained; structured connection credentials
+and env fields are excluded. Never publish history, `.keepsess.toml`, or the daemon
+runtime token. `[history] dir` changes location; `max_bytes` enables a capacity
+guard (0 means no automatic cleanup). Recording failures/gaps do not block remote
+connections. `[web] enabled=false` disables registration/history for this Agent.
+Web/history changes need `keepsess daemon stop`; live Agents may restart it and
+register again. Changing history.dir requires restarting existing Agents too.
+`keepsess daemon status` reports the URL without exposing the IPC token.
+
+For reverse proxies configure `[web] base_path="/keepsess/"` if the prefix is
+forwarded; if stripped, retain internal `/`. Assets/API/WS resolve relative to the
+browser URL, whose entry path should end in `/`. IP/localhost access needs no fixed
+public URL. Preserve Host including its port; HTTPS/WSS can terminate at the proxy.
+DNS names require `[web] public_url="https://host/keepsess/"`; the same setting can
+declare an external Origin when a proxy rewrites Host. Forwarded headers do not
+bypass Host/Origin checks. `[web] listen` explicitly sets nonlocal binding;
+external authentication belongs to the proxy. No observation may replay input
+after a lost receipt.
 
 ## Install only when requested
 
@@ -68,7 +89,7 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-All 30 tools are discovered through MCP tools/list, not individually registered.
+The standard profile discovers 17 tools; the full profile discovers all 30 through MCP tools/list, not individual installation.
 
 ## Progressive built-in help
 

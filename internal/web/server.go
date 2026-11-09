@@ -29,7 +29,11 @@ import (
 //go:embed assets
 var assets embed.FS
 
-type Options struct{ Listen, BasePath, PublicURL string }
+type Options struct {
+	Listen, BasePath, PublicURL string
+	Registry                    Registry
+	Internal                    http.Handler
+}
 type Info struct {
 	InstanceID string        `json:"instance_id"`
 	Enabled    bool          `json:"enabled"`
@@ -40,7 +44,8 @@ type Info struct {
 	History    history.State `json:"history"`
 }
 type Server struct {
-	Manager   *core.Manager
+	registry  Registry
+	Manager   Manager
 	Store     *history.Store
 	info      Info
 	public    *url.URL
@@ -62,7 +67,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 		o.BasePath = "/"
 	}
 	if !strings.HasPrefix(o.BasePath, "/") || strings.HasPrefix(o.BasePath, "//") || strings.IndexFunc(o.BasePath, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 || strings.ContainsAny(o.BasePath, "?#\\{}%") || path.Clean(o.BasePath) != strings.TrimSuffix(o.BasePath, "/") && o.BasePath != "/" {
-		return nil, errors.New("web-base-path must be a clean absolute URL path")
+		return nil, errors.New("web.base_path must be a clean absolute URL path")
 	}
 	o.BasePath = strings.TrimSuffix(o.BasePath, "/") + "/"
 	var public *url.URL
@@ -70,7 +75,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 	if o.PublicURL != "" {
 		public, err = url.Parse(o.PublicURL)
 		if err != nil || public.Host == "" || (public.Scheme != "http" && public.Scheme != "https") || public.User != nil || public.RawQuery != "" || public.Fragment != "" {
-			return nil, errors.New("web-public-url must be an absolute http(s) URL without credentials/query/fragment")
+			return nil, errors.New("web.public_url must be an absolute http(s) URL without credentials/query/fragment")
 		}
 	}
 	host, port, err := net.SplitHostPort(o.Listen)
@@ -102,7 +107,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	s := &Server{Manager: m, Store: store, public: public, listener: ln, ctx: ctx, cancel: cancel, clients: make(map[*websocket.Conn]bool), replays: make(chan struct{}, 4)}
+	s := &Server{registry: o.Registry, Manager: m, Store: store, public: public, listener: ln, ctx: ctx, cancel: cancel, clients: make(map[*websocket.Conn]bool), replays: make(chan struct{}, 4)}
 	accessHost, accessPort, _ := net.SplitHostPort(ln.Addr().String())
 	if accessHost == "" || accessHost == "0.0.0.0" || accessHost == "::" {
 		accessHost = "127.0.0.1"
@@ -126,7 +131,19 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 			http.Redirect(w, r, o.BasePath, http.StatusTemporaryRedirect)
 		})
 	}
-	s.http = &http.Server{Handler: s.guard(mux), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
+	handler := s.guard(mux)
+	if o.Internal != nil {
+		publicHandler := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, o.BasePath+"internal/") {
+				w.Header().Set("Cache-Control", "no-store")
+				o.Internal.ServeHTTP(w, r)
+				return
+			}
+			publicHandler.ServeHTTP(w, r)
+		})
+	}
+	s.http = &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
 	s.wg.Add(1)
 	go func() { defer s.wg.Done(); _ = s.http.Serve(ln) }()
 	return s, nil
@@ -149,7 +166,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		if !s.hostOK(r.Host) {
-			http.Error(w, "unrecognized Host; use an IP/localhost address or configure --web-public-url for a DNS name", 403)
+			http.Error(w, "unrecognized Host; use an IP/localhost address or configure web.public_url in ~/.keepsess.toml for a DNS name", 403)
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !s.originOK(r, origin) {
@@ -245,6 +262,9 @@ func respond(w http.ResponseWriter, v any) {
 func fail(w http.ResponseWriter, e error) { http.Error(w, e.Error(), http.StatusBadRequest) }
 func (s *Server) instances(w http.ResponseWriter, r *http.Request) {
 	v, e := s.Store.Instances()
+	if s.registry != nil {
+		v, e = s.registry.Instances()
+	}
 	if e != nil {
 		fail(w, e)
 		return
@@ -252,12 +272,17 @@ func (s *Server) instances(w http.ResponseWriter, r *http.Request) {
 	respond(w, v)
 }
 func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
+	backend, lookupErr := s.backend(r)
+	if lookupErr != nil {
+		fail(w, lookupErr)
+		return
+	}
 	offset, e := strconv.Atoi(defaultString(r.URL.Query().Get("offset"), "0"))
 	if e != nil || offset < 0 {
 		fail(w, errors.New("invalid offset"))
 		return
 	}
-	v, more, e := s.Store.Catalog(r.URL.Query().Get("instance"), offset, 100)
+	v, more, e := backend.Store.Catalog(r.URL.Query().Get("instance"), offset, 100)
 	if errors.Is(e, history.ErrIndexing) {
 		respond(w, map[string]any{"records": []any{}, "indexing": true, "more": false, "next": offset})
 		return
@@ -269,12 +294,17 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 	respond(w, map[string]any{"records": v, "more": more, "next": offset + len(v)})
 }
 func (s *Server) read(w http.ResponseWriter, r *http.Request) {
+	backend, lookupErr := s.backend(r)
+	if lookupErr != nil {
+		fail(w, lookupErr)
+		return
+	}
 	after, e := strconv.ParseUint(defaultString(r.URL.Query().Get("after"), "0"), 10, 64)
 	if e != nil {
 		fail(w, e)
 		return
 	}
-	p, e := s.Store.Read(r.URL.Query().Get("instance"), after, 128)
+	p, e := backend.Store.Read(r.URL.Query().Get("instance"), after, 128)
 	if e != nil {
 		fail(w, e)
 		return
@@ -315,7 +345,17 @@ type request struct {
 }
 
 func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
-	if instance := r.URL.Query().Get("instance"); instance != "" && instance != s.Manager.InstanceID() {
+	backend, err := s.backend(r)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	manager, store := backend.Manager, backend.Store
+	if manager == nil {
+		http.Error(w, "instance offline; history remains read-only", 409)
+		return
+	}
+	if instance := r.URL.Query().Get("instance"); instance != "" && instance != manager.InstanceID() {
 		http.Error(w, "instance changed; refresh page; input was not sent", http.StatusConflict)
 		return
 	}
@@ -329,7 +369,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	sub, pending, written, err := s.Store.Subscribe()
+	sub, pending, written, err := store.Subscribe()
 	if err != nil {
 		http.Error(w, err.Error(), 503)
 		return
@@ -363,7 +403,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	c.SetPongHandler(func(string) error { return c.SetReadDeadline(time.Now().Add(45 * time.Second)) })
 	replies := make(chan any, 16)
 	var unlocked atomic.Bool
-	socketCtx, cancel := context.WithCancel(s.ctx)
+	socketCtx, cancel := context.WithCancel(backend.Context)
 	defer cancel()
 	s.wg.Add(1)
 	go func() {
@@ -401,7 +441,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			result, e := s.operate(req)
+			result, e := operateManager(backend.Context, manager, req)
 			reply := map[string]any{"type": "receipt", "id": req.ID, "result": result}
 			if e != nil {
 				reply["error"] = e.Error()
@@ -479,7 +519,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	// Subscribe before replay. Pending records cover the append queue; duplicates
 	// visible through both disk and pending/live are removed by sequence number.
 	for after < written {
-		p, e := s.Store.Read(s.Manager.InstanceID(), after, 4096)
+		p, e := store.Read(manager.InstanceID(), after, 4096)
 		if e != nil {
 			_ = write(map[string]any{"type": "error", "error": e.Error()})
 			break
@@ -545,11 +585,14 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) operate(req request) (core.Result, error) {
+	return operateManager(s.ctx, s.Manager, req)
+}
+func operateManager(parent context.Context, manager Manager, req request) (core.Result, error) {
 	if len(req.ID) > 128 {
 		return core.Result{}, errors.New("invalid request ID")
 	}
 	if req.Handle != "" {
-		tasks, err := s.Manager.TaskList(req.Session)
+		tasks, err := manager.TaskList(req.Session)
 		if err != nil {
 			return core.Result{}, err
 		}
@@ -584,9 +627,9 @@ func (s *Server) operate(req request) (core.Result, error) {
 		return core.Result{}, errors.New("unsupported Web operation; nothing sent")
 	}
 	// Socket loss stops observation, not a command or a write already submitted.
-	ctx, cancel := context.WithTimeout(s.ctx, core.CallLimit)
+	ctx, cancel := context.WithTimeout(parent, core.CallLimit)
 	defer cancel()
-	return s.Manager.Operate(ctx, kind, r)
+	return manager.Operate(ctx, kind, r)
 }
 func addressInUse(err error) bool { return isAddressInUse(err) }
 

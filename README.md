@@ -21,7 +21,7 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 当前提供下列 30 个工具（含 sess_help、sess_rename、sess_task_rename）。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 保留完整 30 个工具（含 sess_help、sess_rename、sess_task_rename），默认 `tools/list` 展示 17 个常用工具。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 人类 Web 终端与持久历史
 
@@ -44,33 +44,64 @@ WS 实时更新和断线历史补齐不消耗 MCP 输出游标，不重放任何
 总览尾部跟随新输出与新任务，阅读较早内容时保留位置；“更早 / 较新 / 最新”切换历史页。PTY 任务提供单任务查看入口。
 前端滚动历史默认 **5000 行**，可在页面调整为 100..200000 行并保存在浏览器中；磁盘历史独立保留。
 
-历史默认写入系统用户配置目录的 `keepsess/history/<instance_id>/`，目录/文件在支持的平台使用 0700/0600。
-会话关闭、任务淘汰不删除历史；旧进程通过“历史归档”查看，不恢复连接或远端任务。
-日志保存 exec 命令/cwd、原始终端输入和输出，**终端中输入的密码也会保存**；不写入连接认证参数、私钥或结构化 env 字段。
-历史与可选 `--log` AI 输入审计相互独立。历史不自动删除，需手动清理不再使用的实例目录；不要发布历史目录。
-异步写盘约每秒同步一次，异常退出可能丢失尚未同步的尾部记录；归档目录索引从完整日志重建。
-记录队列、浏览器队列和内存滚动历史均有界；记录故障、缺口和容量耗尽明确提示，连接仍可继续工作。
+每个用户只运行一个共享 Web daemon；首个 `keepsess serve` 自动启动，后续进程主动连接同一入口，不各自监听端口。
+daemon 空闲时继续运行，页面列出本用户所有活动实例及 PID，也保留退出实例的归档。
+SSH/Telnet 和任务仍在各自 Agent 进程里；daemon 重启后自动注册和补齐观察，不恢复已退出进程的连接，也不重发命令/输入。
+本机通信使用随机令牌认证的 WebSocket，令牌只保存在 `~/.keepsess/daemon.json`（0600）；浏览器不持有该令牌。
 
-```sh
-keepsess serve --web=false                    # 禁用 Web 和持久历史
-keepsess serve --web-listen 127.0.0.1:0        # 直接由系统分配端口
-keepsess serve --history-dir /private/history # 自定义历史位置
-keepsess serve --history-max-bytes 1073741824 # 容量保护，0 为默认不限
+配置统一从 **`~/.keepsess.toml`** 读取，首次启动生成默认文件（0600）。Agent 命令固定为 `keepsess serve`；升级后重启 MCP 进程即可加入共享入口并启用精简工具发现：
 
-# 通过 IP 反代，保留 /keepsess/ 前缀：无需固定外部 IP/端口
-keepsess serve --web-base-path /keepsess/
-# 通过 IP 反代，剥离前缀，内部根保持 /：
-keepsess serve
-# 使用 DNS 域名时显式声明入口（也用于 MCP 展示外部 URL）：
-keepsess serve --web-base-path /keepsess/ --web-public-url https://terminal.example/keepsess/
+```toml
+# 可选：AI 输入审计；历史包含终端原始输入，密码也可能被保留。
+# audit_log = "~/keepsess-audit.jsonl"
+
+[tools]
+profile = "standard" # 默认 17 个常用工具；full 展示全部 30 个。
+
+[web]
+enabled = true
+listen = "127.0.0.1:8765" # 端口占用时自动重试，0 表示系统分配。
+base_path = "/"         # 保留反代前缀时设为 /keepsess/；剥离前缀时保持 /。
+public_url = ""         # IP/localhost 无需填写；DNS 入口填 https://host/keepsess/。
+
+[history]
+dir = ""               # 默认 ~/.keepsess/history；检测到旧默认目录则继续使用。
+max_bytes = 0          # 容量保护；0 不限，不自动删除。
 ```
 
+`web.enabled=false` 禁用本进程的 Web 注册与持久历史；已运行的共享 daemon 继续供其他进程使用。
+Web/history 设置由 daemon 启动时读取，修改后执行 `keepsess daemon stop`；活动 Agent 会重新启动并注册，也可由下一次 `serve` 启动。
+改变 `history.dir` 后，已有 Agent 仍持有旧目录，需重启这些 Agent 才能迁移；不会移动或删除原有文件。
+`tools.profile` 和 `audit_log` 在每个 Agent 启动时读取。旧 Web/history 命令行参数已移除；`--log` 仍作为审计兼容覆盖。
+
+```sh
+keepsess serve          # 启动 MCP，自动加入共享入口
+keepsess daemon status  # 查询实际 URL/状态，不输出内部令牌
+keepsess daemon stop    # 停止当前 daemon；活动 Agent 可自动拉起并重连
+keepsess daemon run     # 前台运行，用于诊断；日志默认 ~/.keepsess/daemon.log
+```
+
+实例首次连接成功会提示 AI 调用 `sess_configure({"instance_name":"当前任务名称"})`，不用传 `session`。
+实例名允许 1..64 个可见 Unicode 字符，显示在活动/归档列表；不改变稳定 `instance_id`，不同实例可重名。
+默认精简集保留连接、执行、任务等待/信号/EOF、文字发送/读取、文件传输和关闭。
+隧道、转义发送、别名调整、单独状态/释放、历史 tail/history、close_all 位于完整集。
+Agent 可用 `sess_configure({"tool_profile":"full"})` 临时展开，`standard` 恢复精简；服务发送 `notifications/tools/list_changed`，客户端需重新获取工具。
+旧接口仍接受调用，`sess_help` 仍能查询完整说明；配置查询直接使用 `sess_configure({"session":"s1"})`，无需单独的 get_config 入口。
+
+历史写入 `<history.dir>/<instance_id>/`，目录/文件在支持的平台使用 0700/0600；会话关闭、任务淘汰不删除历史。
+日志保存命令/cwd、原始终端输入和输出，**终端中输入的密码也会保存**；不写入连接认证参数、私钥或结构化 env 字段。
+历史与 AI 审计相互独立。历史不自动删除，需手动清理不再使用的实例目录；不要发布历史、内部令牌或本地配置。
+异步写盘约每秒同步一次，异常退出可能丢失尚未同步的尾部记录；归档目录索引从完整日志重建。
+实时输出使用二进制 WS 帧，连续小输出最多合并 20ms / 64KiB，并协商压缩；低频状态与回执保留 JSON。
+历史使用压缩二进制快照，按所选任务过滤输出，批量写入 xterm 后一次展示；大归档会内部续取有界快照，不逐条动画回放。
+字体文件带内容指纹并使用长缓存，程序与状态接口保持更新。记录队列、浏览器队列和内存滚动历史均有界，慢消费者断连后从历史补齐，不重发输入。
+
 页面资源、API 和 WS 均使用浏览器当前地址的相对路径，访问入口应以 `/` 结尾。
-IP（IPv4/IPv6）或 localhost 入口支持不同的外部端口，不必配置 `--web-public-url`；HTTPS 在反代终止、后端走 HTTP 也支持。
+IP（IPv4/IPv6）或 localhost 入口支持不同的外部端口，不必配置 `web.public_url`；HTTPS 在反代终止、后端走 HTTP 也支持。
 反代需转发 WebSocket Upgrade，并原样保留浏览器的 **Host（包括端口）**；Nginx 可用 `proxy_set_header Host $http_host;`，避免 `$host` 丢失非默认端口。
 WS Origin 与浏览器可见的主机/端口匹配，HTTPS 页面自动使用 WSS；不会盲信 `Forwarded` / `X-Forwarded-*` 改写访问地址。
-DNS 域名仍需通过 `--web-public-url` 显式声明；代理改写 Host 时也可用该参数声明外部 Origin。此外该参数用于让 MCP 展示外部入口；未配置时 MCP 返回实际本机监听 URL。
-本机入口免登录；对外监听通过 `--web-listen` 显式设置，对外认证由反代负责。
+DNS 域名仍需通过 `web.public_url` 显式声明；代理改写 Host 时也可用该参数声明外部 Origin。此外该参数用于让 MCP 展示外部入口；未配置时 MCP 返回实际本机监听 URL。
+本机入口免登录；对外监听通过 `web.listen` 显式设置，对外认证由反代负责。
 服务校验 Host/Origin，Web 只读开关用于防误输入，不代替身份认证。
 容量保护按启动时现有文件加本实例新增日志计算，多进程共用目录时不作为严格的全目录磁盘配额。
 Web 启动失败不阻止 MCP 启动，`web.error` 会报告原因。
@@ -78,13 +109,13 @@ Web 启动失败不阻止 MCP 启动，`web.error` 会报告原因。
 可选浏览器验收（需本地 Node.js、Playwright 和 Chromium，不影响正常 Go 构建）：
 
 ```sh
-KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser(Acceptance|Following|Overview)' -v
+KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser' -v
 # 可用 KEEPSESS_NODE 指定 node 路径，PLAYWRIGHT_MODULE 指定已安装的 playwright 模块路径。
 ```
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；30 个工具由客户端连接后自动发现，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；默认 17 个常用工具由客户端连接后自动发现，完整集为 30 个，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json

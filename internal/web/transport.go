@@ -80,6 +80,11 @@ func (b *outputBatch) add(e core.Event) error {
 // replay returns a bounded snapshot, rather than an event-at-a-time animation.
 // Larger archives continue at an exact cursor; clients reveal only after restore.
 func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
+	backend, lookupErr := s.backend(r)
+	if lookupErr != nil {
+		fail(w, lookupErr)
+		return
+	}
 	select {
 	case s.replays <- struct{}{}:
 		defer func() { <-s.replays }()
@@ -128,7 +133,7 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Err() != nil {
 			return
 		}
-		page, e := s.Store.Read(q.Get("instance"), after, 4096)
+		page, e := backend.Store.Read(q.Get("instance"), after, 4096)
 		if e != nil {
 			fail(w, e)
 			return
@@ -203,4 +208,18 @@ func acceptsGzip(header string) bool {
 		return true
 	}
 	return false
+}
+
+// EncodeOutput and DecodeOutput also serve the authenticated local relay.
+func EncodeOutput(e core.Event) ([]byte, error) { return outputFrame(e) }
+func DecodeOutput(b []byte) (core.Event, error) {
+	if len(b) < 20 || b[0] != 1 || b[17] > 2 || len(b) > outputBatchBytes+530 {
+		return core.Event{}, errors.New("invalid output frame")
+	}
+	n := 20 + int(b[18])
+	end := n + int(b[19])
+	if end > len(b) {
+		return core.Event{}, errors.New("incomplete output frame")
+	}
+	return core.Event{Kind: "output", Seq: binary.BigEndian.Uint64(b[1:9]), Epoch: binary.BigEndian.Uint64(b[9:17]), Encoding: []string{"utf-8", "gbk", "shift-jis"}[b[17]], Session: string(b[20:n]), Handle: string(b[n:end]), Data: append([]byte(nil), b[end:]...)}, nil
 }
