@@ -33,6 +33,7 @@ type Options struct {
 	Listen, BasePath, PublicURL string
 	Registry                    Registry
 	Internal                    http.Handler
+	SettingsHome                string
 }
 type Info struct {
 	InstanceID string        `json:"instance_id"`
@@ -44,19 +45,20 @@ type Info struct {
 	History    history.State `json:"history"`
 }
 type Server struct {
-	registry  Registry
-	Manager   Manager
-	Store     *history.Store
-	info      Info
-	public    *url.URL
-	listener  net.Listener
-	http      *http.Server
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	clientsMu sync.Mutex
-	clients   map[*websocket.Conn]bool
-	replays   chan struct{}
+	settingsHome string
+	registry     Registry
+	Manager      Manager
+	Store        *history.Store
+	info         Info
+	public       *url.URL
+	listener     net.Listener
+	http         *http.Server
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	clientsMu    sync.Mutex
+	clients      map[*websocket.Conn]bool
+	replays      chan struct{}
 }
 
 func Start(parent context.Context, m *core.Manager, store *history.Store, o Options) (*Server, error) {
@@ -107,7 +109,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	s := &Server{registry: o.Registry, Manager: m, Store: store, public: public, listener: ln, ctx: ctx, cancel: cancel, clients: make(map[*websocket.Conn]bool), replays: make(chan struct{}, 4)}
+	s := &Server{settingsHome: o.SettingsHome, registry: o.Registry, Manager: m, Store: store, public: public, listener: ln, ctx: ctx, cancel: cancel, clients: make(map[*websocket.Conn]bool), replays: make(chan struct{}, 4)}
 	accessHost, accessPort, _ := net.SplitHostPort(ln.Addr().String())
 	if accessHost == "" || accessHost == "0.0.0.0" || accessHost == "::" {
 		accessHost = "127.0.0.1"
@@ -119,6 +121,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(assets, "assets")
 	files := http.FileServer(http.FS(sub))
+	mux.HandleFunc(o.BasePath+"api/appearance", s.appearance)
 	mux.HandleFunc(o.BasePath+"api/instances", s.instances)
 	mux.HandleFunc(o.BasePath+"api/catalog", s.catalog)
 	mux.HandleFunc(o.BasePath+"api/history", s.read)
@@ -161,12 +164,17 @@ func (s *Server) Close() {
 }
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
+		appearanceWrite := r.Method == "POST" && r.URL.Path == s.info.BasePath+"api/appearance"
+		if r.Method != "GET" && !appearanceWrite {
 			http.Error(w, "GET required", 405)
 			return
 		}
 		if !s.hostOK(r.Host) {
 			http.Error(w, "unrecognized Host; use an IP/localhost address or configure web.public_url in ~/.keepsess.toml for a DNS name", 403)
+			return
+		}
+		if appearanceWrite && (r.Header.Get("Origin") == "" || r.Header.Get("Content-Type") != "application/json") {
+			http.Error(w, "same-origin JSON required", 403)
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !s.originOK(r, origin) {
@@ -176,7 +184,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'")
 		next.ServeHTTP(w, r)
 	})
 }

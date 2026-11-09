@@ -66,7 +66,7 @@ func Run(ctx context.Context, c settings.Config) error {
 	h := &host{ctx: ctx, cancel: cancel, cfg: c, token: hex.EncodeToString(tokenBytes), root: root, peers: make(map[string]*peer)}
 	m := core.NewManager()
 	defer m.CloseAll()
-	h.web, err = web.Start(ctx, m, root, web.Options{Listen: c.Web.Listen, BasePath: c.Web.BasePath, PublicURL: c.Web.PublicURL, Registry: h, Internal: http.HandlerFunc(h.internal)})
+	h.web, err = web.Start(ctx, m, root, web.Options{SettingsHome: c.Home, Listen: c.Web.Listen, BasePath: c.Web.BasePath, PublicURL: c.Web.PublicURL, Registry: h, Internal: http.HandlerFunc(h.internal)})
 	if err != nil {
 		return err
 	}

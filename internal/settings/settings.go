@@ -19,10 +19,11 @@ type Config struct {
 		Profile string `toml:"profile"`
 	} `toml:"tools"`
 	Web struct {
-		Enabled   bool   `toml:"enabled"`
-		Listen    string `toml:"listen"`
-		BasePath  string `toml:"base_path"`
-		PublicURL string `toml:"public_url"`
+		Enabled    bool       `toml:"enabled"`
+		Listen     string     `toml:"listen"`
+		BasePath   string     `toml:"base_path"`
+		PublicURL  string     `toml:"public_url"`
+		Appearance Appearance `toml:"appearance"`
 	} `toml:"web"`
 	History struct {
 		Dir      string `toml:"dir"`
@@ -32,7 +33,8 @@ type Config struct {
 }
 
 const Template = `# keepsess user configuration. Agent command: keepsess serve
-# Changes to Web/history settings take effect after: keepsess daemon stop
+# web.appearance can be edited live from the Web display/highlight settings.
+# Other Web/history settings take effect after: keepsess daemon stop
 # The next serve starts the daemon again. Existing SSH/Telnet connections stay
 # in their Agent processes and are never replayed.
 # audit_log = "" # Optional JSONL audit; terminal commands may contain secrets.
@@ -64,6 +66,7 @@ func LoadHome(home string) (Config, error) {
 	var c Config
 	c.Home = home
 	c.Tools.Profile = "standard"
+	c.Web.Appearance = DefaultAppearance()
 	c.Web.Enabled = true
 	c.Web.Listen = "127.0.0.1:8765"
 	c.Web.BasePath = "/"
@@ -102,6 +105,9 @@ func LoadHome(home string) (Config, error) {
 		return c, fmt.Errorf("%s: %w", p, err)
 	}
 	c.Home = home
+	if err := c.Web.Appearance.Validate(); err != nil {
+		return c, err
+	}
 	if c.Tools.Profile != "standard" && c.Tools.Profile != "full" {
 		return c, fmt.Errorf("tools.profile must be standard or full")
 	}
@@ -139,6 +145,7 @@ func expand(home, s string) string {
 }
 func (c Config) RuntimeDir() string { return filepath.Join(c.Home, ".keepsess") }
 func (c Config) Fingerprint() string {
+	c.Web.Appearance = Appearance{}
 	b, _ := toml.Marshal(struct {
 		Web     any `toml:"web"`
 		History any `toml:"history"`

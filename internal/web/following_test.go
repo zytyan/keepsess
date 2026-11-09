@@ -18,14 +18,16 @@ import (
 	"time"
 
 	"github.com/zytyan/keepsess/internal/core"
+	"github.com/zytyan/keepsess/internal/settings"
 	"github.com/zytyan/keepsess/internal/testutil"
 	"golang.org/x/crypto/ssh"
 )
 
 // Real SSH output and commands drive the browser; the control endpoint belongs
 // only to this optional test fixture, never to the production Web server.
-func TestBrowserFollowing(t *testing.T) { runBrowserFixture(t, "following.cjs", "first") }
-func TestBrowserOverview(t *testing.T)  { runBrowserFixture(t, "overview.cjs", "short-first") }
+func TestBrowserAppearance(t *testing.T) { runBrowserFixture(t, "appearance.cjs", "short-first") }
+func TestBrowserFollowing(t *testing.T)  { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserOverview(t *testing.T)   { runBrowserFixture(t, "overview.cjs", "short-first") }
 func runBrowserFixture(t *testing.T, script, initial string) {
 	if os.Getenv("KEEPSESS_BROWSER_TEST") != "1" {
 		t.Skip("set KEEPSESS_BROWSER_TEST=1 with Node and Playwright installed")
@@ -77,7 +79,11 @@ func runBrowserFixture(t *testing.T, script, initial string) {
 			}
 		}
 	})
-	s, m, st := setup(t, Options{Listen: "127.0.0.1:0"})
+	home := t.TempDir()
+	if _, err := settings.LoadHome(home); err != nil {
+		t.Fatal(err)
+	}
+	s, m, st := setup(t, Options{Listen: "127.0.0.1:0", SettingsHome: home})
 	host, p, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(p)
 	session, err := m.Connect(context.Background(), core.Options{Host: host, Port: port, Protocol: "ssh", Mode: "exec", Username: "demo", Password: "simulator", Name: "parallel-demo"})

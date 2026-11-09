@@ -71,7 +71,7 @@ with Keepsess() as ks:
 
 `serve` 默认加入每用户共享 Web daemon，入口通常为 `http://127.0.0.1:8765/`；实际地址可用 `keepsess daemon status` 查询。页面列出活动实例、会话和任务，默认只读；观察不消耗 MCP/Python 的读取游标。进程退出后保留归档，连接不会恢复。
 
-设置统一读取 `~/.keepsess.toml`，首次启动自动生成。`[web] enabled=false` 禁用本进程的 Web/历史；修改 Web/history 配置后执行 `keepsess daemon stop`，修改历史目录还需重启原进程。
+设置统一读取 `~/.keepsess.toml`，首次启动自动生成。`[web] enabled=false` 禁用本进程的 Web/历史；网页“显示与高亮”提供默认关键词高亮、自定义规则和预览，保存到同一配置文件，无需重启。修改其他 Web/history 配置后执行 `keepsess daemon stop`，修改历史目录还需重启原进程。
 
 SSH 默认跳过主机密钥验证；显式设置 `host_key` 或 `known_hosts` 启用。Telnet 为明文。历史可能包含终端输入的密码，不要提交凭据、审计日志、历史、本地配置或内部令牌。Web 对外提供服务时应配置认证代理。
 

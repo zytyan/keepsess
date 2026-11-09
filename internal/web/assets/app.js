@@ -17,7 +17,7 @@ let replayChunks=[],replaySize=0;
 const REPLAY_WRITE_SIZE=512*1024;
 function cancelRender(){for(const finish of [...renderWaiters])finish();}
 let scrollback = 5000;
-try { const n = Number(localStorage.getItem('keepsess.scrollback')); if (n >= 100 && n <= 200000) scrollback = Math.floor(n); } catch (_) {}
+try { const n = Number(localStorage.getItem('keepsess.scrollback')); if (Number.isFinite(n) && n >= 100) scrollback = Math.min(50000, Math.floor(n)); } catch (_) {}
 $('scrollback').value = scrollback;
 function warn(text) { $('warning').hidden = !text; $('warning').textContent = text || ''; }
 function status(text) { $('status').textContent = text; }
@@ -113,8 +113,8 @@ function createOverview(records){
 function createTerminal() {
  terminalEvents.abort();terminalEvents=new AbortController();
  if (terminal) terminal.dispose(); $('terminal').replaceChildren(); decoder=null;decoderEncoding='';decoderEpoch=0;
- terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,theme:{background:'#0a1019',foreground:'#d7e2ed',cursor:'#79dac5',selectionBackground:'#294653'},allowProposedApi:false});
- terminal.open($('terminal')); fit();
+ terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
+ terminal.open($('terminal')); attachTerminalAppearance(terminal); fit();
  const owned=terminal;owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
  for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
  const queueInput = data => {
@@ -236,7 +236,7 @@ function flushInput(){if(!inputQueue||operationPending||!unlocked)return;const d
 $('unlock').onclick=()=>{if(socket?.readyState===1){const enable=!unlocked;if(!enable){unlocked=false;inputQueue='';updateControls();}socket.send(JSON.stringify({type:'unlock',enabled:enable}));}};
 $('exec').onsubmit=event=>{event.preventDefault();if(!$('command').value)return;send({type:'exec',command:$('command').value,cwd:$('cwd').value,interactive:$('interactive').checked,pty:$('pty').checked});};
 $('pty').onchange=()=>{if($('pty').checked)$('interactive').checked=true};$('interactive').onchange=()=>{if(!$('interactive').checked)$('pty').checked=false};
-$('apply').onclick=()=>{const n=Number($('scrollback').value);if(!Number.isInteger(n)||n<100||n>200000){status('滚动历史须为 100..200000 行。');return}scrollback=n;try{localStorage.setItem('keepsess.scrollback',String(n))}catch(_){}if(terminal)terminal.options.scrollback=n;if(overviewMode)overview.resize();status(`前端滚动历史已设为 ${n} 行；磁盘历史不受影响。`);};
+$('apply').onclick=()=>{const n=Number($('scrollback').value);if(!Number.isInteger(n)||n<100||n>50000){status('滚动历史须为 100..50000 行。');return}scrollback=n;try{localStorage.setItem('keepsess.scrollback',String(n))}catch(_){}if(terminal)terminal.options.scrollback=n;if(overviewMode)overview.resize();status(`前端滚动历史已设为 ${n} 行；磁盘历史不受影响。`);};
 $('overview-toggle').onclick=()=>{if(!overviewMode)selectSession(selected,'',{overview:true});};
 $('overview-older').onclick=()=>{const list=sessionTasks(),first=list.findIndex(t=>t.handle===overview?.ids[0]);if(first>0)selectSession(selected,'',{overview:true,endHandle:list[first-1].handle});};
 $('overview-newer').onclick=()=>{const list=sessionTasks(),last=list.findIndex(t=>t.handle===overview?.lastHandle());if(last<list.length-1)selectSession(selected,'',{overview:true,endHandle:list[Math.min(list.length-1,last+OVERVIEW_PAGE_SIZE)].handle});};
@@ -258,7 +258,7 @@ async function refreshInstanceList(){
  return list;
 }
 (async()=>{
- await waitForTerminalFonts();const info=await api('info');serverID=info.instance_id;historyState(info);await refreshInstances();
+ await waitForTerminalFonts();await initAppearance();const info=await api('info');serverID=info.instance_id;historyState(info);await refreshInstances();
  if(instance){await loadCatalog();if(sessions.size)await selectSession(firstSession());}
  if(!selected)$('connection').textContent='等待会话';
  setInterval(async()=>{try{await refreshInstances();if(!selected&&instance){await loadCatalog();if(sessions.size)await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
