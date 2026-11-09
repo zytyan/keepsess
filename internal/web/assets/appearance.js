@@ -42,13 +42,17 @@ class HighlightEngine {
 const highlightEngine=new HighlightEngine();
 class TerminalHighlight {
  constructor(term){
-  this.term=term;this.decorations=[];this.markers=[];this.closed=false;this.version=0;this.timer=null;this.busy=false;this.failed=false;this.dirty=false;this.visible=false;
+  this.term=term;this.decorations=[];this.markers=[];this.closed=false;this.version=0;this.timer=null;this.busy=false;this.failed=false;this.dirty=false;this.visible=false;this.scrollUntil=0;
   terminalHighlights.add(this);
-  this.viewportKey=this.viewKey();
-  this.listeners=[term.onWriteParsed(()=>this.invalidate()),term.onScroll(()=>this.invalidate()),term.onResize(()=>this.invalidate()),
+  this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();
+  // Wheel bursts must not rebuild DOM decorations on every frame.
+  // Clear once at burst start; rebuild only after input and viewport settle.
+  this.wheel=()=>{this.scrollUntil=performance.now()+140;this.version++;if(this.decorations.length)this.clear();this.schedule();};
+  term.element.addEventListener('wheel',this.wheel,{capture:true,passive:true});
+  this.listeners=[term.onWriteParsed(()=>this.invalidate()),term.onScroll(()=>this.viewportChanged()),term.onResize(()=>this.invalidate()),
    // Native viewport scrolling suppresses onScroll in this xterm version.
    // Decorations also trigger rendering: only invalidate when the view changed.
-   term.onRender(()=>{if(this.viewportKey!==this.viewKey())this.invalidate();})];
+   term.onRender(()=>this.viewportChanged())];
   this.visibility=new IntersectionObserver(entries=>{
    const visible=entries[0].isIntersecting;
    if(visible===this.visible)return;
@@ -58,14 +62,20 @@ class TerminalHighlight {
   this.configure();term.register({dispose:()=>this.dispose()});
  }
  viewKey(){const b=this.term.buffer.active;return `${b.type}/${b.viewportY}/${b.baseY}/${this.term.cols}/${this.term.rows}`;}
- invalidate(){this.viewportKey=this.viewKey();this.version++;this.clear();this.schedule();}
- configure(){this.viewportKey=this.viewKey();this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.schedule();}
+ contentViewKey(){const b=this.term.buffer.active;return `${b.type}/${b.baseY}/${this.term.cols}/${this.term.rows}`;}
+ viewportChanged(){
+  const key=this.viewKey();if(key===this.viewportKey)return;
+  if(this.contentKey!==this.contentViewKey()){this.invalidate();return;}
+  this.viewportKey=key;this.version++;this.scrollUntil=performance.now()+140;if(this.decorations.length)this.clear();this.schedule();
+ }
+ invalidate(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.version++;this.clear();this.schedule();}
+ configure(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.schedule();}
  clear(){for(const d of this.decorations)d.dispose();for(const m of this.markers)m.dispose();this.decorations=[];this.markers=[];}
- schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||!appearance.enabled)return;this.timer=setTimeout(()=>{this.timer=null;this.scan();},80);}
+ schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||!appearance.enabled)return;this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
  scan(){
   if(this.closed||!this.visible||this.failed||!appearance.enabled)return;this.dirty=false;
   const term=this.term,b=term.buffer.active;
-  this.clear();if(b.type!=='normal')return;
+  if(b.type!=='normal'){this.clear();return;}
   const groups=[];let scanned=0;
   for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows,b.viewportY+200)&&scanned<32768;y++){
    const line=b.getLine(y);if(!line)continue;
@@ -79,14 +89,18 @@ class TerminalHighlight {
     g.cells.push({y,x,width:c.getWidth(),start,end:g.text.length,ansi:!c.isFgDefault()||!c.isBgDefault()});
    }
   }
-  if(!groups.length)return;
+  if(!groups.length){this.clear();return;}
   const version=this.version,view=this.viewKey(),rules=appearance.rules;this.busy=true;
   highlightEngine.request(this,{lines:groups.map(g=>g.text),rules}).then(data=>{
    if(this.closed||data.cancelled)return;
-   if(data.error){this.failed=true;highlightNotice('高亮规则无效：'+data.error);return;}
+   if(data.error){this.failed=true;this.clear();highlightNotice('高亮规则无效：'+data.error);return;}
    if(version!==this.version||view!==this.viewKey()){this.dirty=true;return;}
+   // Swap once, after matching; do not render an empty intermediate view.
+   this.clear();const rowMarkers=new Map();
    for(const hit of data.matches){
-    const rule=rules[hit.rule],cells=groups[hit.line].cells.filter(c=>c.start<hit.end&&c.end>hit.start);
+    const rule=rules[hit.rule],all=groups[hit.line].cells,cells=[];
+    let lo=0,hi=all.length;while(lo<hi){const mid=(lo+hi)>>>1;if(all[mid].end<=hit.start)lo=mid+1;else hi=mid;}
+    for(let index=lo;index<all.length&&all[index].start<hit.end;index++)cells.push(all[index]);
     let span=null;const spans=[];
     for(const c of cells){
      if(c.ansi&&!rule.override_ansi){span=null;continue;}
@@ -95,8 +109,8 @@ class TerminalHighlight {
     }
     for(const s of spans){
      if(this.decorations.length>=1024)break;
-     const marker=term.registerMarker(s.y-(b.baseY+b.cursorY));if(!marker)continue;
-     this.markers.push(marker);
+     let marker=rowMarkers.get(s.y);
+     if(!marker){marker=term.registerMarker(s.y-(b.baseY+b.cursorY));if(!marker)continue;rowMarkers.set(s.y,marker);this.markers.push(marker);}
      const d=term.registerDecoration({marker,x:s.x,width:s.width,foregroundColor:rule.foreground||undefined,backgroundColor:rule.background||undefined,layer:'bottom'});
      if(d)this.decorations.push(d);
     }
@@ -104,7 +118,7 @@ class TerminalHighlight {
    if(data.limited)highlightNotice('高亮已达到每视图 1024 个匹配上限；原文保留。');
   }).catch(error=>{if(this.closed)return;this.failed=true;this.clear();highlightNotice(error.message);}).finally(()=>{this.busy=false;if(this.dirty)this.schedule();});
  }
- dispose(){if(this.closed)return;this.closed=true;this.visibility.disconnect();clearTimeout(this.timer);highlightEngine.cancel(this);this.clear();for(const l of this.listeners)l.dispose();terminalHighlights.delete(this);}
+ dispose(){if(this.closed)return;this.closed=true;this.term.element?.removeEventListener('wheel',this.wheel,{capture:true});this.visibility.disconnect();clearTimeout(this.timer);highlightEngine.cancel(this);this.clear();for(const l of this.listeners)l.dispose();terminalHighlights.delete(this);}
 }
 function attachTerminalAppearance(term){return new TerminalHighlight(term);}
 function cloneAppearance(a){return JSON.parse(JSON.stringify(a));}

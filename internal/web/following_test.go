@@ -25,6 +25,7 @@ import (
 
 // Real SSH output and commands drive the browser; the control endpoint belongs
 // only to this optional test fixture, never to the production Web server.
+func TestBrowserWheel(t *testing.T)      { runBrowserFixture(t, "wheel.cjs", "short-first") }
 func TestBrowserAppearance(t *testing.T) { runBrowserFixture(t, "appearance.cjs", "short-first") }
 func TestBrowserFollowing(t *testing.T)  { runBrowserFixture(t, "following.cjs", "first") }
 func TestBrowserOverview(t *testing.T)   { runBrowserFixture(t, "overview.cjs", "short-first") }
