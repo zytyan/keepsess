@@ -20,6 +20,9 @@ func TestDefaultsPrivateTemplateAndPartialConfig(t *testing.T) {
 	if err != nil || st.Mode().Perm() != 0600 {
 		t.Fatal(st, err)
 	}
+	if strings.Contains(Template, "[tools]") {
+		t.Fatal("obsolete discovery profile in new config template")
+	}
 	p := filepath.Join(home, ".keepsess.toml")
 	text := "audit_log='~/audit.jsonl'\n[web]\nbase_path='/console/'\n[history]\ndir='~/terminal-data'\nmax_bytes=12345\n"
 	if err = os.WriteFile(p, []byte(text), 0600); err != nil {
@@ -44,7 +47,7 @@ func TestDefaultsPrivateTemplateAndPartialConfig(t *testing.T) {
 	}
 }
 
-func TestReuseLegacyHistoryAndToolProfile(t *testing.T) {
+func TestReuseLegacyHistoryAndIgnoreObsoleteToolProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -82,8 +85,8 @@ func TestReuseLegacyHistoryAndToolProfile(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(home, ".keepsess.toml"), []byte("[tools]\nprofile='typo'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = LoadHome(home); err == nil {
-		t.Fatal("invalid profile accepted")
+	if _, err = LoadHome(home); err != nil {
+		t.Fatal("obsolete profile must be ignored", err)
 	}
 }
 

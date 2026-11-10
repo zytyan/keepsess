@@ -61,7 +61,7 @@ with Keepsess() as ks:
 ## 核心使用规则
 
 - 普通服务器用 SSH `mode="exec"`，以 SSH 退出状态判断完成；网络设备、持久 shell 和 Telnet 用 `mode="stream"` 配合 send/read。
-- 所有配置参数放在顶层；connect/configure 修改会话默认值，操作参数只影响本次。默认发现 18 个常用工具，`sess_configure(tool_profile="full")` 展开全部 30 个。
+- 所有配置参数放在顶层；connect/configure 修改会话默认值，操作参数只影响本次。全部 30 个工具统一可发现，提供完整参数说明，无需切换发现分组。
 - `sess_help()` 列目录，`sess_help(topic="sess_exec")` 查看工具，`query` 搜索内置帮助。
 - Python 优先 `sess_send_text` / `sess_sendline_text`：普通字符串已解释 `"\r"`、`"\x03"`。仅在需要显式解码可见转义文本时使用 `*_escaped`；`line_end` 配置仍使用可见转义，例如 `r"\r"`。
 - 默认增量输出，每页 64KiB；长任务返回 handle 后继续 wait/read，不重复提交。单 RPC 上限 115 秒；exec 默认等待 120 秒，配置等待超时默认尝试 TERM，RPC 预算到期不发 TERM。

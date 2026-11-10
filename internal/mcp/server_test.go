@@ -130,7 +130,7 @@ func TestStdioConcurrencyCancellationAndDevice(t *testing.T) {
 	}
 	c.send(t, "list", "tools/list", map[string]any{})
 	v = c.receive(t, "list", time.Second)
-	if len(v["result"].(map[string]any)["tools"].([]any)) != len(standardTools) {
+	if len(v["result"].(map[string]any)["tools"].([]any)) != len(Tools()) {
 		t.Fatal("tool discovery")
 	}
 	c.tool(t, "connect", "sess_connect", connectArgs(addr))

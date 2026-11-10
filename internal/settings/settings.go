@@ -15,7 +15,9 @@ import (
 
 type Config struct {
 	AuditLog string `toml:"audit_log"`
-	Tools    struct {
+	// Tools accepts the obsolete profile setting so existing config files load.
+	// It has no effect: all tools are always discoverable.
+	Tools struct {
 		Profile string `toml:"profile"`
 	} `toml:"tools"`
 	Web struct {
@@ -38,9 +40,6 @@ const Template = `# keepsess user configuration. Agent command: keepsess serve
 # The next serve starts the daemon again. Existing SSH/Telnet connections stay
 # in their Agent processes and are never replayed.
 # audit_log = "" # Optional JSONL audit; terminal commands may contain secrets.
-
-[tools]
-profile = "standard" # 18 daily tools; "full" exposes all 30.
 
 [web]
 enabled = true
@@ -65,7 +64,6 @@ func Load() (Config, error) {
 func LoadHome(home string) (Config, error) {
 	var c Config
 	c.Home = home
-	c.Tools.Profile = "standard"
 	c.Web.Appearance = DefaultAppearance()
 	c.Web.Enabled = true
 	c.Web.Listen = "127.0.0.1:8765"
@@ -107,9 +105,6 @@ func LoadHome(home string) (Config, error) {
 	c.Home = home
 	if err := c.Web.Appearance.Validate(); err != nil {
 		return c, err
-	}
-	if c.Tools.Profile != "standard" && c.Tools.Profile != "full" {
-		return c, fmt.Errorf("tools.profile must be standard or full")
 	}
 	c.History.Dir = expand(home, c.History.Dir)
 	if c.History.Dir == "" {

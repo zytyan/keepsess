@@ -23,7 +23,7 @@ func TestHelpDirectoryAndAllParameterDetails(t *testing.T) {
 		def := tool.(map[string]any)
 		name := def["name"].(string)
 		if def["description"] == "" {
-			t.Fatal("missing compact tool purpose", name)
+			t.Fatal("missing tool purpose", name)
 		}
 		full, err := builtinHelp(helpRequest{Topic: name})
 		if err != nil {

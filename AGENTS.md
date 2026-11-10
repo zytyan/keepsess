@@ -45,10 +45,10 @@
 - 每次 task_wait 新预算；返回 wait_elapsed_ms、started_at、task_elapsed_ms（完成后冻结）及 timeout_source=rpc_budget/exec_wait/caller_deadline，普通 read 为 read_total；只有配置的 exec_wait 超时可 TERM，RPC/调用截止不发信号。跳板失败结构化报告 1-based hop_index/host/port/from_host/stage/target，来源仅配置逻辑主机，不推断出口 IP。
 - 输出 strip_ansi/include_pattern/exclude_pattern 默认关闭，只作用投影，保留 raw history/偏移，过滤行推进游标；end_pattern 仍匹配解码原文，exec 仍忽略。投影每页原始扫描 64KiB、行 16KiB 有界片段，完整字符/渲染转义不分割；未完成 ANSI 保留，极长控制序列 view_incomplete 提示 raw 检查。过滤保留行/片段整体返回，过小页面报告 minimum_output_bytes；filtered_bytes/lines、stripped_bytes 与 dropped_bytes 区分，空输出说明过滤/不完整等原因，任何扫描/等待不可无界。
 
-- MCP 发现使用精简投影，保留类型/默认值/互斥与关键安全语义，不修改完整运行时定义/已有参数接受行为；只隐藏各工具不适用的配置。详细帮助从同一完整定义派生，默认值来自 core.DefaultConfig，初始化说明保留核心规则，日常调用不强制 help/skill。
+- MCP 发现直接保留完整工具与所有适用参数说明（含嵌套字段），覆盖语义/默认值/范围/互斥/执行与转义边界，获得工具定义即可调用，不依赖先查 help。只隐藏各工具不适用的配置，不修改运行时参数接受行为；发现和详细帮助从同一完整定义派生，默认值来自 core.DefaultConfig，初始化说明保留核心规则。
 - sess_help 无参数返回简短目录，topic 为内置主题或工具名，topic+parameter 单字段，query 固定代码全文搜索（中英文别名、确定性排序）；query 与 topic/parameter 互斥，query <=512 字节/最多16词，默认3条、limit1..5，每摘要约220字符。只搜索内置文档，不访问网络/文件/会话/凭据、不改变运行状态，未命中明确返回。参数帮助不能丢失执行边界/逃逸层次信息；目录/搜索不倾倒完整手册。
 
 - 人类 Web 入口由每用户共享 daemon 提供；首个 serve 自动启动、后续进程主动注册，SSH/Telnet 仍由原进程持有。daemon 空闲不退出，重启只恢复观察，绝不重放输入；进程退出转只读归档，UI 标出所有活动实例/PID。设置统一从 ~/.keepsess.toml 读取，内部令牌/运行状态私有保存，禁止发布。
-- 实例首次 connect 成功提示 AI 用 sess_configure(instance_name=...) 命名，不新增命名工具。默认发现 18 个常用工具，tool_profile=full 可展开完整 30 个并通知 tools/list_changed；隐藏仅影响发现，保留旧接口接受行为。
+- 实例首次 connect 成功提示 AI 用 sess_configure(instance_name=...) 命名，不新增命名工具。全部 30 个工具统一可发现，不分 standard/full，不提供 tool_profile 开关；旧配置 [tools].profile 兼容读取但忽略。
 
-- 默认发现保留 sess_send_escaped，精确解码一层且不追加行尾；sess_sendline_escaped 仅在完整集中展示，保留旧接口语义。
+- sess_send_escaped 和 sess_sendline_escaped 均可发现；前者精确解码一层且不追加行尾，后者解码后追加一次配置的行尾。

@@ -44,15 +44,12 @@ After the first successful connect, give the current Agent instance a work label
 `sess_configure({"instance_name":"short task label"})`, without session/settings.
 Labels support 1..64 printable Unicode characters and do not change instance_id.
 
-Default tools/list exposes 18 daily tools, including sess_send_escaped for exact
-byte control with no appended line ending; include CR/LF explicitly when needed.
-sess_sendline_escaped remains in the full profile for compatibility. Use
-`sess_configure({"tool_profile":"full"})` to expose all 30 when tunnels, escaped
-sendline, raw history, alias or retention tools are needed; standard restores the daily
-set. The server sends tools/list_changed. Existing tool calls remain compatible,
-and sess_help still covers the complete API. Inspect effective session settings
-using `sess_configure({"session":"s1"})` with no patch.
-`[tools] profile="standard"|"full"` sets the startup default for each Agent.
+All 30 tools are always discoverable through tools/list, with complete parameter
+documentation; no discovery profile or expansion call is needed. sess_send_escaped
+decodes once and appends no line ending; include CR/LF explicitly when needed.
+sess_sendline_escaped decodes once and appends one configured line ending.
+Inspect effective session settings using sess_configure({"session":"s1"})
+with no patch, or sess_get_config. Legacy [tools] profile settings are ignored.
 
 History defaults to `~/.keepsess/history` (an existing legacy default directory is
 reused), with private instance directories/files. Commands, raw terminal input
@@ -91,11 +88,11 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-The standard profile discovers 18 tools; the full profile discovers all 30 through MCP tools/list, not individual installation.
+All 30 tools are discovered through MCP tools/list, not individual installation.
 
 ## Progressive built-in help
 
-Tools/list uses concise descriptions and advertises only applicable settings, retaining types, defaults, target exclusivity and essential safety rules. Routine calls do not require loading this full skill or invoking help. For uncertain details use sess_help(): no arguments returns a compact directory; topic="sess_exec" returns one tool's full schema; topic="sess_exec", parameter="env" returns one parameter. Semantic topics: connections, tasks, timeouts, ssh_jumps, naming, exec_environment, interactive, read_only, output, configuration. Configuration fields can be queried with topic="configuration", parameter="line_end".
+Tools/list includes complete tool and applicable parameter descriptions, including nested fields, defaults, ranges, target exclusivity, escaping and execution boundaries. Routine calls do not require loading this full skill or invoking help. For uncertain details use sess_help(): no arguments returns a compact directory; topic="sess_exec" returns one tool's full schema; topic="sess_exec", parameter="env" returns one parameter. Semantic topics: connections, tasks, timeouts, ssh_jumps, naming, exec_environment, interactive, read_only, output, configuration. Configuration fields can be queried with topic="configuration", parameter="line_end".
 
 Use query="RPC 超时" or query="跳板 telnet" for built-in keyword/full-text search (English/Chinese aliases). Default 3 results, limit 1..5, snippets about220 characters; expand the returned topic/parameter rather than requesting all help. Query max512 bytes/16 terms; query is exclusive with topic/parameter, and parameter requires topic. No match returns matched=false. Help reads static built-in documentation only, never endpoint output, credentials, files or network; it changes no session state. Full help and defaults come from the runtime definitions. Older ignored per-operation config overrides remain accepted, but are omitted from discovery/help; meaningful options stay available at the top level. Numeric settings still accept bounded arithmetic strings.
 

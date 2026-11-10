@@ -31,7 +31,7 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 保留完整 30 个工具（含 sess_help、sess_rename、sess_task_rename），默认 `tools/list` 展示 18 个常用工具。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+0.3 API 保留完整 30 个工具（含 sess_help、sess_rename、sess_task_rename），`tools/list` 统一展示全部 30 个工具及完整参数说明。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
 
 ## 人类 Web 终端与持久历史
 
@@ -69,14 +69,11 @@ daemon 空闲时继续运行，页面列出本用户所有活动实例及 PID，
 SSH/Telnet 和任务仍在各自 Agent 进程里；daemon 重启后自动注册和补齐观察，不恢复已退出进程的连接，也不重发命令/输入。
 本机通信使用随机令牌认证的 WebSocket，令牌只保存在 `~/.keepsess/daemon.json`（0600）；浏览器不持有该令牌。
 
-配置统一从 **`~/.keepsess.toml`** 读取，首次启动生成默认文件（0600）。Agent 命令固定为 `keepsess serve`；升级后重启 MCP 进程即可加入共享入口并启用精简工具发现：
+配置统一从 **`~/.keepsess.toml`** 读取，首次启动生成默认文件（0600）。Agent 命令固定为 `keepsess serve`；升级后重启 MCP 进程即可加入共享入口并发现全部 30 个工具：
 
 ```toml
 # 可选：AI 输入审计；历史包含终端原始输入，密码也可能被保留。
 # audit_log = "~/keepsess-audit.jsonl"
-
-[tools]
-profile = "standard" # 默认 18 个常用工具；full 展示全部 30 个。
 
 [web]
 enabled = true
@@ -92,7 +89,7 @@ max_bytes = 0          # 容量保护；0 不限，不自动删除。
 `web.enabled=false` 禁用本进程的 Web 注册与持久历史；已运行的共享 daemon 继续供其他进程使用。
 除可即时生效的 `web.appearance` 外，Web/history 设置由 daemon 启动时读取，修改后执行 `keepsess daemon stop`；活动 Agent 会重新启动并注册，也可由下一次 `serve` 启动。
 改变 `history.dir` 后，已有 Agent 仍持有旧目录，需重启这些 Agent 才能迁移；不会移动或删除原有文件。
-`tools.profile` 和 `audit_log` 在每个 Agent 启动时读取。旧 Web/history 命令行参数已移除；`--log` 仍作为审计兼容覆盖。
+`audit_log` 在每个 Agent 启动时读取。旧配置中的 `[tools] profile` 仅兼容读取并忽略，无需手动修改即可升级。旧 Web/history 命令行参数已移除；`--log` 仍作为审计兼容覆盖。
 
 ```sh
 keepsess serve          # 启动 MCP，自动加入共享入口
@@ -103,11 +100,9 @@ keepsess daemon run     # 前台运行，用于诊断；日志默认 ~/.keepsess
 
 实例首次连接成功会提示 AI 调用 `sess_configure({"instance_name":"当前任务名称"})`，不用传 `session`。
 实例名允许 1..64 个可见 Unicode 字符，显示在活动/归档列表；不改变稳定 `instance_id`，不同实例可重名。
-默认精简集保留连接、执行、任务等待/信号/EOF、文字发送/读取、精确转义发送、文件传输和关闭。
-隧道、转义 sendline、别名调整、单独状态/释放、历史 tail/history、close_all 位于完整集。
-`sess_send_escaped` 默认展示，只解码一层转义，不追加行尾；需要 CR/LF 时在 data 中明确指定。`sess_sendline_escaped` 继续仅在完整集中展示。
-Agent 可用 `sess_configure({"tool_profile":"full"})` 临时展开，`standard` 恢复精简；服务发送 `notifications/tools/list_changed`，客户端需重新获取工具。
-旧接口仍接受调用，`sess_help` 仍能查询完整说明；配置查询直接使用 `sess_configure({"session":"s1"})`，无需单独的 get_config 入口。
+全部 30 个工具统一通过 tools/list 可发现，每个工具携带完整参数说明，无需切换发现分组。
+`sess_send_escaped` 只解码一层转义，不追加行尾；需要 CR/LF 时在 data 中明确指定。`sess_sendline_escaped` 解码后追加一次配置的行尾。
+`sess_help` 提供可选的流程参考；配置查询可用 `sess_configure({"session":"s1"})` 或 `sess_get_config`。
 
 历史写入 `<history.dir>/<instance_id>/`，目录/文件在支持的平台使用 0700/0600；会话关闭、任务淘汰不删除历史。
 日志保存命令/cwd、原始终端输入和输出，**终端中输入的密码也会保存**；不写入连接认证参数、私钥或结构化 env 字段。
@@ -136,7 +131,7 @@ KEEPSESS_BROWSER_TEST=1 go test ./internal/web -run 'TestBrowser' -v
 
 ## 一键安装到客户端
 
-MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；默认 18 个常用工具由客户端连接后自动发现，完整集为 30 个，不需要逐个安装。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
+MCP 标准规定 JSON-RPC、stdio、tools/list/tools/call 和 JSON Schema 工具描述；全部 30 个工具由客户端连接后按需发现，不需要逐个安装或切换发现分组。但 MCP 配置文件和 skill 发现目录由客户端决定，因此安装器按客户端适配。
 
 ```sh
 # 默认：当前项目的 Claude Code .mcp.json
@@ -221,7 +216,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
 
-工具发现采用精简说明，保留日常调用所需的类型、默认值、关键约束及风险提示；只展示各操作适用的配置参数。完整字段说明来自同一套内置定义，可用 `sess_help` 渐进查询，无需预先加载完整 skill：
+工具发现直接提供完整工具说明及每个适用参数的语义、默认值、取值范围、互斥关系、执行与转义边界，包括 ssh_jumps 内嵌字段；模型获得工具定义后即可构造调用，无需先查 help。发现与 `sess_help` 使用同一套内置定义，只隐藏该操作不适用的配置参数。`sess_help` 继续提供可选的流程参考和排障查询：
 
 ```text
 sess_help()                                            # 简短主题目录
@@ -234,7 +229,7 @@ sess_help(topic="configuration", parameter="line_end") # 配置默认值/协议�
 
 内置主题包含 connections、tasks、timeouts、ssh_jumps、naming、exec_environment、interactive、read_only、output、configuration，也接受全部工具名作为 topic。query 与 topic/parameter 互斥，parameter 必须配合 topic。搜索使用固定代码的关键词/标题/正文匹配及中英文关键词映射，不调用模型、向量库、网络或本地文件，也不搜索会话输出/凭据；query 最长 512 字节，最多处理 16 个搜索词，limit=1..5，每条摘要最多约 220 字符。无匹配明确返回 matched=false；按结果的 topic/parameter 获取细节，避免重复加载全文。
 
-本轮只压缩发现与初始化说明，不更改协议执行、默认值或已有调用校验逻辑；原来已接受但对该操作无效的配置覆盖保持运行时兼容，发现列表和 help 不再推荐它们。数字配置仍支持整数及算术字符串。完整 skill 是可选流程参考，不要求常驻或每次查 help。
+全部工具统一使用完整描述，不再提供 tool_profile 切换；运行时协议和配置默认值保持不变；原来已接受但对该操作无效的配置覆盖保持运行时兼容，发现列表和 help 不再推荐它们。数字配置仍支持整数及算术字符串。完整 skill 是可选流程参考，不要求常驻或每次查 help。
 
 所有工具的配置参数都直接写在顶层，例如 `sess_configure({"session":"s1","read_only":true})`，或 `sess_read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
 
