@@ -58,7 +58,7 @@ const verifyTypography = require('./typography.cjs');
   assert.equal(await page.locator('#scrollback').inputValue(),'5000');
   assert.equal(await page.evaluate('terminal.options.scrollback'),5000);
   assert.match(await page.locator('#sessions').innerText(),/s1 · production/);assert.match(await page.locator('#sessions').innerText(),/s2 · closed-session/);
-  await page.waitForFunction(()=>terminal.buffer.active.getLine(0)?.translateToString().includes('$ both'));
+  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('$ both'));
   const text=await page.evaluate(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n'));
   assert.match(text,/stdout/);assert.match(text,/stderr/);
   assert.equal(await page.locator('#run').isDisabled(),true);
@@ -69,7 +69,7 @@ const verifyTypography = require('./typography.cjs');
   await page.evaluate(()=>new Promise(resolve=>terminal.write('\x1b[6n',resolve)));await page.waitForTimeout(100);
   assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').length),0);
   await page.locator('#command').fill('exit7');await page.locator('#run').click();await page.waitForFunction(()=>document.getElementById('tasks').textContent.includes('(7)'));
-  assert.equal(await page.locator('#run').isDisabled(),true); // task switch restores readonly
+  await page.waitForFunction(()=>!operationPending);assert.equal(await page.locator('#run').isDisabled(),false); // continuous view stays unlocked
   await page.locator('.session').filter({hasText:'s2 · closed-session'}).click();await page.waitForFunction(()=>document.getElementById('title').textContent==='s2 · closed-session');assert.equal(await page.locator('#unlock').isDisabled(),true);
   await page.locator('.session').filter({hasText:'s3 · console'}).click();await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));
   await page.evaluate(async()=>{const orig=Terminal.prototype.write;Terminal.prototype.write=function(data,callback){return orig.call(this,data,()=>setTimeout(()=>callback?.(),75));};try{const previous=selectSession('s1');await new Promise(r=>setTimeout(r,25));await selectSession('s3');await previous;}finally{Terminal.prototype.write=orig;}});
@@ -96,7 +96,7 @@ const verifyTypography = require('./typography.cjs');
    localEcho.add('\x1b[');localEcho.add('D');check(text()==='ab','split arrow suppressed');
    localEcho.add('\x1bOD');check(text()==='ab','application arrow suppressed');
    localEcho.add('\x1b]title\x07');check(text()==='ab','OSC suppressed');
-   const event={kind:'output',session:selected,handle,encoding:'utf-8',epoch:decoderEpoch,seq:cursor+1,data:btoa('unrelated')};
+   const event={kind:'output',session:selected,handle,encoding:'utf-8',epoch:taskDecoders.get(handle)?.epoch||0,seq:cursor+1,data:btoa('unrelated')};
    await apply({...event,session:'another-session'},generation,true);check(text()==='ab','other session preserves preview');
    await apply({...event,data:''},generation,true);check(text()==='ab','empty event preserves preview');
    await apply(event,generation,true);check(text()==='','unrelated output clears whole preview');

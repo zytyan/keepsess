@@ -264,3 +264,52 @@ func TestReplayLargeArchiveContinuesWithoutGaps(t *testing.T) {
 		t.Fatal(requests, seen, after)
 	}
 }
+
+// Omitting handle selects a complete session, including tasks no longer in the
+// core catalog. An explicit empty handle continues to select stream output.
+func TestReplaySessionAndExplicitHandleSelection(t *testing.T) {
+	s, m, st := setup(t, Options{Listen: "127.0.0.1:0"})
+	for _, e := range []core.Event{
+		{Session: "s1", Data: []byte("stream")},
+		{Session: "s1", Handle: "task1", Data: []byte("one")},
+		{Session: "s1", Handle: "task2", Data: []byte("two")},
+		{Session: "s2", Handle: "task3", Data: []byte("other")},
+	} {
+		e.Kind = "output"
+		e.Encoding = "utf-8"
+		st.Emit(e)
+	}
+	waitRecorded(t, st)
+	for _, tc := range []struct{ query, want string }{
+		{"", "streamonetwo"}, {"&handle=", "stream"},
+		{"&handle=task1", "one"}, {"&handles=task1,task2", "onetwo"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			r, err := http.Get(s.Info().URL + "api/replay?instance=" + m.InstanceID() + "&session=s1" + tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Body.Close()
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.StatusCode != 200 || len(b) < 4 || string(b[:4]) != "KSR1" {
+				t.Fatalf("bad replay: %s %q", r.Status, b)
+			}
+			var got []byte
+			for i := 4; i < len(b); {
+				n := int(binary.BigEndian.Uint32(b[i:]))
+				i += 4
+				frame := b[i : i+n]
+				i += n
+				if frame[0] == 1 {
+					got = append(got, decodeOutput(t, frame).Data...)
+				}
+			}
+			if string(got) != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}

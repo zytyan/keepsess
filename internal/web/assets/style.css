@@ -6,19 +6,11 @@
 
 /* Overview is one continuous transcript; only task boundaries have a rule. */
 .overview-toggle{text-align:left;font-size:12px;flex-shrink:0;border-color:transparent}.overview-toggle.active{color:var(--accent);background:#19303b}
-.terminal-panel.overview-active{border:0;border-radius:0;background:transparent}
-.overview-active .terminal-bar{display:none}
-.overview-toolbar{display:flex;align-items:center;gap:7px;padding:4px 0 12px;font-size:11px;color:var(--muted)}.overview-toolbar>span{flex:1}.overview-toolbar button{padding:4px 9px;border-color:transparent}.overview-toolbar button:hover{background:#192737}
-.overview{flex:1;min-height:0;overflow:auto;padding:0 12px 0 0;overflow-anchor:none;outline:none}
-.overview-card{padding:18px 0 22px;border:0;border-radius:0;background:transparent}.overview-card+.overview-card{border-top:1px solid #263247}
-.overview-card-header{display:flex;align-items:center;gap:12px;padding:0 0 8px;font-size:12px}.overview-card-header strong{color:var(--accent);font-weight:500}.overview-state{flex:1;color:var(--muted);font-size:11px}.overview-open{padding:3px 0 3px 10px;font-size:11px;border:0;border-radius:0}.overview-open:hover{color:var(--accent)}
-.overview-command{margin:0 0 10px;max-height:80px;overflow:auto;padding:0;color:#e5edf5;font:13px/1.6 var(--app-font);white-space:pre-wrap;overflow-wrap:anywhere}
-.overview-terminal{margin:0;min-height:0}.overview-hint{padding:4px 0 0;font-size:12px;color:var(--muted)}
 
 
 pre,code,kbd,samp{font-family:var(--app-font)}
 
-.terminal-panel.replaying #terminal,.terminal-panel.replaying #overview{visibility:hidden}
+.terminal-panel.replaying #terminal{visibility:hidden}
 /* Shared high contrast chrome: selection has both a bright edge and a fill. */
 :root{--muted:#a5b5ca;--border:#485d78;color:#e5edf5}
 .session{color:#e5edf5}.session.active{background:#29475e;border-color:#93d9f5;box-shadow:inset 4px 0 #93d9f5}
@@ -52,3 +44,5 @@ dialog{width:min(1100px,95vw);max-height:92vh;overflow:hidden;background:#111a28
 #session-errors{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}#session-error-summary{padding:6px 3px;color:#d6b884;font-size:12px}#failed-sessions{margin-top:8px}
 
 #instance-rename{margin-top:6px;padding:4px 8px;font-size:11px;align-self:flex-end}.instance-picker .instance-ai-name{color:var(--muted);font-size:10px}#instance-name-dialog{width:min(420px,90vw)}#instance-name-dialog form{border:0}#instance-name-error{color:#ffd479;white-space:pre-wrap}
+
+.task-sidebar{width:auto;max-width:230px}.task-sidebar:has(details[open]){width:230px}.task-sidebar details{display:flex;min-height:0;flex-direction:column}.task-sidebar summary{white-space:nowrap}.task-sidebar .tasks{max-height:65vh;overflow:auto}

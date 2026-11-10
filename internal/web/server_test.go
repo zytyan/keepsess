@@ -377,7 +377,7 @@ func TestIPProxyRelativeHTTPAndWebsocketWithoutPublicURL(t *testing.T) {
 				}
 				defer front.Close()
 				entry, _ := url.Parse(front.URL + "/console/")
-				for _, asset := range []string{"", "app.js", "overview.js", "vendor/xterm.js", "api/info"} {
+				for _, asset := range []string{"", "app.js", "local-echo.js", "vendor/xterm.js", "api/info"} {
 					relative, _ := url.Parse(asset)
 					u := entry.ResolveReference(relative)
 					if u.Host != entry.Host {

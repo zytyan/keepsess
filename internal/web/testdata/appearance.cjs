@@ -105,30 +105,12 @@ const paint=require('./highlight-paint.cjs');
   await page.evaluate(()=>terminal.scrollToTop());
   await page.waitForFunction(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.some(m=>m.line===0));
   assert.equal(await page.evaluate(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.every(m=>m.line<terminal.rows)),true);
-  await page.locator('#overview-toggle').click();await page.waitForFunction(()=>typeof overview!=='undefined'&&overview);
-  await page.evaluate(async()=>{const c=[...overview.cards.values()].find(c=>c.terminal);await new Promise(r=>c.terminal.write('\r\nERROR 10.0.0.1',r));});
-  await page.waitForFunction(()=>[...terminalHighlights].some(h=>[...overview.cards.values()].some(c=>c.terminal===h.term)&&h.decorations.length>0));
-  await page.evaluate(async()=>{const c=[...overview.cards.values()].find(c=>c.terminal);await new Promise(r=>c.terminal.write(Array.from({length:100},(_,i)=>'ERROR card '+i+'\r\n').join(''),r));});
-  const cardScreen=page.locator('#overview .xterm-screen').first();await cardScreen.hover();
-  const cardBefore=await page.evaluate(()=>[...overview.cards.values()].find(c=>c.terminal).terminal.buffer.active.viewportY);
-  await page.mouse.wheel(0,-300);
-  await page.waitForFunction(before=>[...overview.cards.values()].find(c=>c.terminal).terminal.buffer.active.viewportY<before,cardBefore);
-  await page.waitForFunction(()=>{
-   const t=[...overview.cards.values()].find(c=>c.terminal).terminal;
-   const h=[...terminalHighlights].find(h=>h.term===t);
-   return keywordPaintReady(t)&&h.markers.some(m=>m.line===t.buffer.active.viewportY);
-  });
-  await paint.check(page,'[...overview.cards.values()].find(c=>c.terminal).terminal');
-  await page.evaluate(()=>{[...overview.cards.values()][0].element.style.display='none';});
-  await page.waitForFunction(()=>[...terminalHighlights].every(h=>h.term===previewTerminal||h.decorations.length===0));
-  await page.evaluate(()=>{[...overview.cards.values()][0].element.style.display='';});
-  await page.waitForFunction(()=>[...terminalHighlights].some(h=>h.visible&&h.decorations.length>0));
   const released=await page.evaluate(()=>{
    const highlighters=[...terminalHighlights].filter(h=>h.layer),layers=highlighters.map(h=>h.layer);
    for(const h of highlighters){h.dispose();h.dispose();}
    return !document.querySelector('.keepsess-keyword')&&layers.every(layer=>!layer.rows.size)&&highlighters.every(h=>!terminalHighlights.has(h));
   });assert(released,'wrappers, row caches and owners must be released');
   await page.screenshot({path:require('node:path').join(require('node:os').tmpdir(),'keepsess-appearance.png'),fullPage:true});
-  assert.deepEqual(errors,[]);console.log('appearance passed: theme, CJK cells, ANSI, zero errors, chunks, repaint, wrap, raw selection, preview, persistence, native Worker, syntax validation, Unicode offsets, priority, 50000-row viewport-only highlighting, overview');
+  assert.deepEqual(errors,[]);console.log('appearance passed: theme, CJK cells, ANSI, zero errors, chunks, repaint, wrap, raw selection, preview, persistence, native Worker, syntax validation, Unicode offsets, priority, 50000-row viewport-only highlighting');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

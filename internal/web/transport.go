@@ -145,7 +145,7 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
 				goto done
 			}
 			if event.Kind == "output" || event.Kind == "input" {
-				if event.Session != session || !selected[event.Handle] {
+				if event.Session != session || ((q.Has("handle") || q.Has("handles")) && !selected[event.Handle]) {
 					after = event.Seq
 					continue
 				}
