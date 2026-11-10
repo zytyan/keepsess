@@ -3,6 +3,8 @@ const assert=require('node:assert/strict');
 const paint=require('./highlight-paint.cjs');
 (async()=>{const browser=await launch({headless:true,args:['--no-sandbox']});try{
  const page=await browser.newPage({viewport:{width:1500,height:1100},deviceScaleFactor:1}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ // Exercise the DOM fallback's render filter and direct text painting explicitly.
+ await page.route('**/vendor/addon-webgl.js',route=>route.fulfill({body:'var WebglAddon={WebglAddon:class{constructor(){throw Error("GPU disabled by fixture")}}}',contentType:'application/javascript'}));
  await page.goto(process.argv[2]);await page.waitForFunction(()=>typeof terminal!=='undefined'&&terminal&&!replaying);
  await page.evaluate(async()=>{
   terminal.reset();terminal.resize(120,35);terminal.options.scrollback=5000;

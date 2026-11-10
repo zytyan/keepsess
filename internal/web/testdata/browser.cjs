@@ -4,11 +4,13 @@ const verifyTypography = require('./typography.cjs');
 (async()=>{
  const browser=await launch({headless:true,args:['--no-sandbox']});
  try {
-  const page=await browser.newPage({viewport:{width:1400,height:1000},ignoreHTTPSErrors:process.env.KEEPSESS_BROWSER_INSECURE_TLS_TEST==='1'});const errors=[];
-  page.on('pageerror',e=>errors.push(e.message));
+  const context=await browser.newContext({viewport:{width:1400,height:1000},ignoreHTTPSErrors:process.env.KEEPSESS_BROWSER_INSECURE_TLS_TEST==='1'});const page=await context.newPage();const errors=[];
+  page.on('pageerror',e=>{errors.push(e.message);console.error('Page error:',e.message);});
   await page.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
-  await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));
+  await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接')).catch(async e=>{console.error(await page.evaluate(()=>({connection:document.getElementById('connection').textContent,warning:document.getElementById('warning').textContent,status:document.getElementById('status').textContent,selected,instance,current,replaying,renderer:terminal?.keepsessRenderer})));throw e;});
   await verifyTypography(page);
+  await require('./context-menu.cjs')(page);
+  await require('./theme-width.cjs')(page);
   await page.evaluate(()=>{
    const now=new Date(2026,10,9,14,8),check=(date,want)=>{const got=instanceTime(date,now);if(got!==want)throw Error(`${got} != ${want}`);};
    check(new Date(+now-59000),'刚刚');check(new Date(+now-60000),'1分钟前');check(new Date(+now-3599999),'59分钟前');
@@ -31,7 +33,7 @@ const verifyTypography = require('./typography.cjs');
   await page.keyboard.press('Escape');assert.equal(await page.locator('#instances').getAttribute('open'),null);
 
   // Human names are server-backed, independent of AI labels, and never send terminal input.
-  await page.locator('#instance-rename').click();
+  await page.locator('#instance-selected').click();await page.locator('.instance-option-row:has(.instance-choice[aria-current=true]) .instance-rename').click();
   await page.locator('#instance-human-name').fill('人类实例名称');
   await page.locator('#instance-name-save').click();
   await page.waitForFunction(()=>!document.getElementById('instance-name-dialog').open);
@@ -43,7 +45,7 @@ const verifyTypography = require('./typography.cjs');
   });
   assert.equal(await page.locator('#instance-selected strong').textContent(),'人类实例名称');
   assert.equal(await page.locator('#instance-selected .instance-ai-name').textContent(),'AI：AI 工作描述');
-  await page.locator('#instance-rename').click();await page.locator('#instance-human-name').fill('');
+  await page.locator('#instance-selected').click();await page.locator('.instance-option-row:has(.instance-choice[aria-current=true]) .instance-rename').click();await page.locator('#instance-human-name').fill('');
   await page.locator('#instance-name-save').click();await page.waitForFunction(()=>!document.getElementById('instance-name-dialog').open);
   assert.equal(await page.locator('#instance-selected strong').textContent(),'未命名实例');
   assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input'||m.type==='exec').length),0);
@@ -89,8 +91,10 @@ const verifyTypography = require('./typography.cjs');
   assert.equal(await page.locator('.local-echo-preview').textContent(),'');
   const sentText=await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join(''));assert.equal(sentText,'show version\r\n');
   await page.keyboard.insertText('中文');await page.keyboard.press('Control+j');await page.waitForFunction(()=>document.getElementById('receipts').textContent.includes('中文'));await page.waitForFunction(()=>!operationPending&&!inputQueue.length);assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join('')),'show version\r\n中文\n');
+  await require('./ime.cjs')(page);
   await page.evaluate(async()=>{
    const check=(ok,label)=>{if(!ok)throw Error(label);};
+   localEcho.clear();terminal.scrollToBottom();
    const text=()=>localEcho.layer.textContent;
    localEcho.add('ab中');localEcho.add('\x7f');check(text()==='ab','grapheme backspace');
    localEcho.add('\x1b[');localEcho.add('D');check(text()==='ab','split arrow suppressed');

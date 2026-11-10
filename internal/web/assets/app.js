@@ -16,7 +16,7 @@ let scrollVersion=0, renderedTask='';
 const sessions = new Map(), tasks = new Map();
 const renderWaiters=new Set();
 let terminalEvents=new AbortController(), replayRequest=null;
-let replayChunks=[],replaySize=0;
+let replayChunks=[],replaySize=0,replayProcessed=0,replayNotes='';
 const REPLAY_WRITE_SIZE=512*1024;
 function cancelRender(){for(const finish of [...renderWaiters])finish();}
 let scrollback = 5000;
@@ -24,7 +24,7 @@ try { const n = Number(localStorage.getItem('keepsess.scrollback')); if (Number.
 $('scrollback').value = scrollback;
 function warn(text) { $('warning').hidden = !text; $('warning').textContent = text || ''; }
 function status(text) { $('status').textContent = text; }
-function note(text) { const p = $('receipts'); p.textContent = (p.textContent + '\n' + text).slice(-24000); }
+function note(text) { if(replaying){replayNotes=(replayNotes+'\n'+text).slice(-24000);return;}const p = $('receipts'); p.textContent = (p.textContent + '\n' + text).slice(-24000); }
 async function api(endpoint, query = {}) { const u = new URL('api/' + endpoint, root); for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v); const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);try{const r = await fetch(u,{signal:controller.signal}); if (!r.ok) throw new Error(await r.text()); return await r.json();}finally{clearTimeout(timer);} }
 function historyState(info) { const h = info.history || info; if (h.error) warn('历史记录不完整：' + h.error + '；缺失事件 ' + (h.lost_events || 0)); }
 function failedSession(e){return e.kind!=='connecting'&&!e.ever_connected&&!e.status.connected&&!!(e.status.error||e.status.disconnect_reason);}
@@ -108,7 +108,8 @@ function createTerminal() {
  localEcho?.dispose();localEcho=null;terminalEvents.abort();terminalEvents=new AbortController();
  if (terminal) terminal.dispose(); $('terminal').replaceChildren(); taskDecoders.clear();
  terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
- terminal.open($('terminal')); attachTerminalAppearance(terminal); fit();localEcho=new LocalEchoPreview(terminal);
+ terminal.keepsessReplaying=true;
+ terminal.open($('terminal')); attachTerminalRenderer(terminal); attachTerminalSearch(terminal); attachTerminalContextMenu(terminal); attachTerminalAppearance(terminal); fit();localEcho=new LocalEchoPreview(terminal);
  const owned=terminal;owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
  for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
  const queueInput = data => {
@@ -119,15 +120,7 @@ function createTerminal() {
   if ($('echo').checked) localEcho.add(data);
   clearTimeout(inputTimer); inputTimer=setTimeout(flushInput,10);
  };
- // onData also contains parser-generated replies. Forward trusted human key,
- // paste and IME events explicitly so replay/terminal queries cannot write.
- let keyText='';
- terminal.onKey(({key,domEvent}) => { if(domEvent.isTrusted && !domEvent.isComposing){keyText=key;queueInput(key);} });
- terminal.textarea.addEventListener('keyup',()=>{keyText='';},true);
- terminal.textarea.addEventListener('paste',event=>{if(!event.isTrusted)return;event.preventDefault();event.stopImmediatePropagation();queueInput(event.clipboardData.getData('text/plain'));},true);
- let compositionText='';
- terminal.textarea.addEventListener('compositionend',event=>{if(event.isTrusted){compositionText=event.data;queueInput(event.data);setTimeout(()=>compositionText='',0);}},true);
- terminal.textarea.addEventListener('input',event=>{if(event.isTrusted&&!event.isComposing&&event.inputType==='insertText'&&event.data!==compositionText&&event.data!==keyText)queueInput(event.data);},true);
+ attachTerminalInput(terminal,queueInput);
 
  updateControls();
 }
@@ -135,7 +128,8 @@ function termWrite(text,gen){
  if(replaying){if(text&&gen===generation){replayChunks.push(text);replaySize+=text.length;if(replaySize>=REPLAY_WRITE_SIZE)return flushReplay(gen);}return Promise.resolve();}
  return writeTerminalNow(text,gen);
 }
-function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];replaySize=0;return writeTerminalNow(text,gen);}
+async function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];replaySize=0;await writeTerminalNow(text,gen);if(gen===generation){replayProcessed+=text.length;$('loading').textContent='正在回放历史… 已回放约 '+(replayProcessed/10000).toFixed(1)+' 万字符';}}
+function finishReplay(){replaying=false;terminal.keepsessReplaying=false;for(const h of terminalHighlights)if(h.term===terminal)h.invalidate();if(replayNotes){note(replayNotes);replayNotes='';}}
 function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);owned.write(text,()=>finish(true));});}
 async function apply(e, gen, live=false) {
  if (gen !== generation) return;
@@ -161,12 +155,12 @@ async function apply(e, gen, live=false) {
  cursor=Math.max(cursor,e.seq); if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
 }
 async function selectSession(id, task) {
- generation++;cancelRender();replayRequest?.abort();replayRequest=new AbortController();replayChunks=[];replaySize=0; inputQueue=""; clearTimeout(inputTimer); const gen=generation; if(socket)socket.close();socket=null;unlocked=false;operationPending=false;selected=id;cursor=0;
+ generation++;cancelRender();replayRequest?.abort();replayRequest=new AbortController();replayChunks=[];replaySize=0;replayProcessed=0;replayNotes=''; inputQueue=""; clearTimeout(inputTimer); const gen=generation; if(socket)socket.close();socket=null;unlocked=false;operationPending=false;selected=id;cursor=0;
  const e=sessions.get(id);handle=task||'';
  $('empty').hidden=true;$('terminal').hidden=false;$('receipts').textContent='终端输入（包括密码）会原样保存在本机历史中。';$('echo').checked=e?.protocol==='ssh';
  createTerminal();
  renderSidebar();renderTasks();$('terminal-label').textContent=handle||id;
- replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').hidden=false;updateControls();
+ replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').textContent='正在读取历史…';$('loading').hidden=false;updateControls();
  try {
   do {
    const before=cursor,u=new URL('api/replay',root);u.searchParams.set('instance',instance);u.searchParams.set('session',id);u.searchParams.set('after',cursor);
@@ -180,9 +174,9 @@ async function selectSession(id, task) {
   if(gen!==generation)return;
   if(instance!==current||!liveSession())for(const entry of taskDecoders.values())await termWrite(entry.decoder.decode(),gen);
   if(gen!==generation)return;
-  await flushReplay(gen);if(gen!==generation)return;replaying=false;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
+  await flushReplay(gen);if(gen!==generation)return;finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
   updateControls();if(instance===current)connect(gen);else{$('connection').textContent='历史归档 · 只读';status('归档只读。旧实例运行中任务的最终结果可能未知。');}
- } catch(err){if(gen===generation){replaying=false;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;warn(err.message);updateControls();}}
+ } catch(err){if(gen===generation){finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;warn(err.message);updateControls();}}
 }
 function connect(gen) {
  if(gen!==generation)return;
@@ -229,7 +223,7 @@ $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
 async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;$('session-errors').open=false;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(firstSession())selectSession(firstSession());else{localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;$('empty').hidden=false;$('terminal').hidden=true;}}
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}});
-function renderInstanceChoices(){$('instance-rename').disabled=!instanceItems.some(i=>i.id===instance);renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)));}
+function renderInstanceChoices(){renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)),new Date(),openInstanceName);}
 setInterval(renderInstanceChoices,60000);
 function refreshInstances(){if(!instanceRefresh)instanceRefresh=refreshInstanceList().finally(()=>{instanceRefresh=null});return instanceRefresh;}
 async function refreshInstanceList(){
@@ -250,8 +244,9 @@ async function refreshInstanceList(){
 })().catch(e=>warn(e.message));
 
 let namingInstance='';
-$('instance-rename').onclick=()=>{
- const item=instanceItems.find(i=>i.id===instance);if(!item)return;
+function openInstanceName(id){
+ const item=instanceItems.find(i=>i.id===id);if(!item)return;
+ $('instances').open=false;$('instance-selected').focus();
  namingInstance=item.id;$('instance-human-name').value=item.human_name||'';
  $('instance-name-error').textContent='';$('instance-name-dialog').showModal();$('instance-human-name').focus();
 };

@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');
 exports.install=page=>page.evaluate(()=>{
  window.keywordPaintReady=term=>{
+  if(term.keepsessRenderer==='webgl'){const h=[...terminalHighlights].find(h=>h.term===term);return h?.layer.items?.some(d=>d.marker.line===term.buffer.active.viewportY&&d.options.foregroundColor==='#ff8585');}
   const row=term.element.querySelector('.xterm-rows')?.firstElementChild;if(!row?.textContent.startsWith('ERROR'))return false;
   const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT),colors=[];let node;
   while((node=walker.nextNode())&&colors.length<5)colors.push(...[...node.textContent].map(()=>getComputedStyle(node.parentElement).color));

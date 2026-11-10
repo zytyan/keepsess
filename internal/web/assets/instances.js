@@ -23,15 +23,23 @@ function paintInstance(node, item, now){
  node.title=instanceTime(item.started,now,true);
  node.setAttribute('aria-label',`${name}${item.name?'，AI：'+item.name:''}，${item.current?'活动实例':'归档，只读'}${item.current&&item.pid?'，PID '+item.pid:''}，${time}，启动于 ${node.title}`);
 }
-function renderInstancePicker(list, selected, onselect, now=new Date()){
+function renderInstancePicker(list, selected, onselect, now=new Date(), onrename=()=>{}){
  const picker=document.getElementById('instances'),options=document.getElementById('instance-options');
  const retained=new Set(list.map(i=>i.id));
- for(const [id,button] of instanceButtons){if(!retained.has(id)){button.remove();instanceButtons.delete(id);}}
+ for(const [id,button] of instanceButtons){if(!retained.has(id)){button.parentElement.remove();instanceButtons.delete(id);}}
  list.forEach((item,index)=>{
   let button=instanceButtons.get(item.id);
-  if(!button){button=document.createElement('button');button.type='button';instanceButtons.set(item.id,button);}
+  if(!button){
+   const row=document.createElement('div');row.className='instance-option-row';
+   button=document.createElement('button');button.type='button';button.className='instance-choice';
+   const rename=document.createElement('button');rename.type='button';rename.className='instance-rename';
+   rename.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L9 17l-4 1 1-4Z"/></svg>';
+   row.append(button,rename);instanceButtons.set(item.id,button);
+  }
   // Reuse DOM nodes so polling and minute updates preserve keyboard focus.
-  if(options.children[index]!==button)options.insertBefore(button,options.children[index]||null);
+  const row=button.parentElement;
+  if(options.children[index]!==row)options.insertBefore(row,options.children[index]||null);
+  const rename=row.querySelector('.instance-rename');rename.title='重命名实例';rename.setAttribute('aria-label','重命名实例：'+(item.human_name||item.name||'未命名实例'));rename.onclick=event=>{event.stopPropagation();onrename(item.id);};
   paintInstance(button,item,now);button.setAttribute('aria-current',String(item.id===selected));
   button.onclick=()=>{picker.open=false;document.getElementById('instance-selected').focus();if(item.id!==selected)onselect(item.id);};
  });
@@ -40,7 +48,7 @@ function renderInstancePicker(list, selected, onselect, now=new Date()){
  else{summary.textContent='等待实例';summary.classList.remove('instance-live');summary.removeAttribute('title');summary.setAttribute('aria-label','选择实例');}
 }
 document.getElementById('instances').addEventListener('keydown',event=>{
- const picker=event.currentTarget,buttons=[...document.getElementById('instance-options').children];
+ const picker=event.currentTarget,buttons=[...document.querySelectorAll('#instance-options .instance-choice')];
  if(event.key==='Escape'&&picker.open){event.preventDefault();picker.open=false;document.getElementById('instance-selected').focus();return;}
  if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key)||!buttons.length)return;
  event.preventDefault();picker.open=true;

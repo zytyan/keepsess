@@ -43,6 +43,53 @@ dialog{width:min(1100px,95vw);max-height:92vh;overflow:hidden;background:#111a28
 
 #session-errors{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}#session-error-summary{padding:6px 3px;color:#d6b884;font-size:12px}#failed-sessions{margin-top:8px}
 
-#instance-rename{margin-top:6px;padding:4px 8px;font-size:11px;align-self:flex-end}.instance-picker .instance-ai-name{color:var(--muted);font-size:10px}#instance-name-dialog{width:min(420px,90vw)}#instance-name-dialog form{border:0}#instance-name-error{color:#ffd479;white-space:pre-wrap}
+.instance-picker .instance-ai-name{color:var(--muted);font-size:10px}#instance-name-dialog{width:min(420px,90vw)}#instance-name-dialog form{border:0}#instance-name-error{color:#ffd479;white-space:pre-wrap}
 
 .task-sidebar{width:auto;max-width:230px}.task-sidebar:has(details[open]){width:230px}.task-sidebar details{display:flex;min-height:0;flex-direction:column}.task-sidebar summary{white-space:nowrap}.task-sidebar .tasks{max-height:65vh;overflow:auto}
+
+/* Keep the instance action adjacent to the picker, including narrow sidebars. */
+.instance-selector-row{display:flex;align-items:center;gap:6px;min-width:0}
+.instance-selector-row .instance-picker{flex:1;min-width:0}
+
+.theme-setting{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}
+.theme-setting select{width:auto}
+:root[data-theme=light]{color-scheme:light;color:#172b42;background:#f3f6fa;--muted:#50647b;--border:#adbdce;--accent:#086b5c}
+[data-theme=light] :is(aside,form,dialog,.appearance-heading,.instance-options){background:#eaf0f6;color:#172b42}
+[data-theme=light] :is(input,select,textarea,.instance-picker summary,.instance-options button){background:#fff;color:#172b42}
+[data-theme=light] button{background:#dceee9;color:#155e50;border-color:#8aa99f}
+[data-theme=light] .quiet{background:transparent;color:var(--muted);border-color:var(--border)}
+[data-theme=light] :is(.session,.tasks button strong,.instance-picker){color:#172b42}
+[data-theme=light] :is(.session.active,.tasks button.active,.overview-toggle.active){background:#d5e6f4;border-color:#316589;box-shadow:inset 4px 0 #316589;color:#164a6b}
+[data-theme=light] .tasks button.active strong{color:#164a6b}
+[data-theme=light] :is(.tasks button .task-command,dialog p){color:#50647b}
+[data-theme=light] :is(.terminal-panel,#highlight-preview){background:#fff}
+[data-theme=light] .logo{background:#dceee9;border-color:#8aa99f}
+[data-theme=light] #loading{background:#dceee9;color:#155e50}
+[data-theme=light] :is(#warning,#highlight-notice){background:#fff3d6;color:#714707;border-color:#b19153}
+[data-theme=light] :is(#highlight-status,#instance-name-error,#session-error-summary){color:#805300}
+[data-theme=light] #unlock.writable{background:#fff3d6;color:#714707;border-color:#b19153}
+[data-theme=light] .instance-picker .instance-live{background:#dceee9}
+[data-theme=light] .instance-live::before,[data-theme=light] .dot.live{background:#087565}
+[data-theme=light] .instance-options button[aria-current=true]{border-color:#316589;box-shadow:inset 3px 0 #316589}
+[data-theme=light] .local-echo-preview{color:#172b42}
+[data-theme=light] :is(button,input,select,textarea,summary):focus-visible{outline-color:#316589}
+#terminal-search{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;font-size:11px}
+#search-text{flex:1;min-width:140px;padding:6px}
+#terminal-search button{padding:5px 8px;font-size:11px}
+#search-status{min-width:48px;color:var(--muted)}
+.terminal-context-menu{position:fixed;z-index:100;min-width:150px;padding:5px;background:#151f2e;border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 22px #0006}
+.terminal-context-menu button{display:block;width:100%;border:0;border-radius:4px;background:transparent;color:#e5edf5;text-align:left;padding:8px 12px;font-size:12px}
+.terminal-context-menu button:hover,.terminal-context-menu button:focus-visible{background:#29475e;filter:none}
+.terminal-context-menu button:disabled{opacity:.45;background:transparent}
+[data-theme=light] .terminal-context-menu{background:#fff}
+[data-theme=light] .terminal-context-menu button{background:transparent;color:#172b42}
+[data-theme=light] .terminal-context-menu button:hover,[data-theme=light] .terminal-context-menu button:focus-visible{background:#d5e6f4}
+
+/* Rename is an independent action inside each dropdown row, never a nested button. */
+.instance-option-row{position:relative;margin-bottom:5px}
+.instance-option-row:last-child{margin-bottom:0}
+.instance-options .instance-choice{margin:0;padding-right:50px;min-height:72px}
+.instance-options .instance-rename{position:absolute;right:9px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:32px;height:32px;margin:0;padding:5px;border-color:transparent;background:transparent;color:var(--muted)}
+.instance-options .instance-rename:hover,.instance-options .instance-rename:focus-visible{background:#29475e;color:#e5edf5;filter:none}
+[data-theme=light] .instance-options .instance-rename{background:transparent;color:var(--muted)}
+[data-theme=light] .instance-options .instance-rename:hover,[data-theme=light] .instance-options .instance-rename:focus-visible{background:#d5e6f4;color:#172b42}

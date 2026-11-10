@@ -35,3 +35,22 @@ jumps and actual painted keyword pixels. Recheck these when
 upgrading xterm; do not silently copy the substitution into a different version.
 
 Normal Go builds embed the committed asset and require no npm or Node tooling.
+
+Cell metrics use the existing DOM measurement strategy rather than OffscreenCanvas.
+The renderer is DOM based: browser font substitution, minimum font sizes and font
+loading can otherwise produce different Canvas metrics and visible glyph widths.
+The 32-character DOM probe measures in CSS pixels (no extra devicePixelRatio
+scaling). This keeps cell spacing on the same font/layout path as the rendered
+rows. The patch script includes this substitution and remains idempotent.
+
+## Offline renderer and search addons
+
+Embedded official MIT packages compatible with xterm 5.5.0:
+- `@xterm/addon-webgl@0.18.0` (`ADDON-WEBGL-LICENSE`)
+- `@xterm/addon-search@0.15.0` (`ADDON-SEARCH-LICENSE`)
+
+Assets are copied from the packages' `lib/` directories. No CDN or npm runtime
+is needed. WebGL is preferred; initialization failure or context loss disposes
+the renderer and falls back to DOM without replaying output/input. Search is
+literal, bounded to the current loaded scrollback and 1000 decorated matches.
+Keyword colors use xterm decorations in WebGL and the existing DOM fallback.

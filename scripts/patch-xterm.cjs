@@ -3,6 +3,8 @@
 const fs=require('node:fs'),path=require('node:path');
 const file=path.join(__dirname,'../internal/web/assets/vendor/xterm.js');
 const changes=[
+ // DOM glyphs and cell metrics must share browser font substitution/minimum sizing.
+ ['try{this._measureStrategy=this.register(new d(this._optionsService))}catch{this._measureStrategy=this.register(new l(e,t,this._optionsService))}','/* keepsess DOM metrics */this._measureStrategy=this.register(new l(e,t,this._optionsService));'],
  ['this.register(this._renderService.onRenderedViewportChange((e=>this._onRender.fire(e))))','this.register(this._renderService.onRender((e=>this._onRender.fire(e))))'],
  ['this._widthCache,-1,-1))}}get _terminalSelector()', 'this._widthCache,-1,-1))}this._terminal._onRender.fire({start:e,end:t})}get _terminalSelector()'],
  ['n?(o===s?t:r)-1:-1))}}};t.DomRenderer=', 'n?(o===s?t:r)-1:-1))}this._terminal._onRender.fire({start:i,end:s})}};t.DomRenderer='],
@@ -16,4 +18,6 @@ for(const [before,after] of changes){
  if(source.split(before).length!==2)throw Error('Unexpected xterm build: inspect render notifications before patching');
  source=source.replace(before,after);
 }
+// Validate substitutions before replacing the embedded browser asset.
+new (require('node:vm').Script)(source,{filename:file});
 fs.writeFileSync(file,source);console.log('xterm render notification patch applied (idempotent)');

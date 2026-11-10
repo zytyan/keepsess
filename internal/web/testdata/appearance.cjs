@@ -8,6 +8,7 @@ const paint=require('./highlight-paint.cjs');
   if(process.env.KEEPSESS_HIGHLIGHT_FALLBACK==='1')await page.route('**/keyword-layer.js',route=>route.fulfill({body:'class DOMKeywordLayer{static supported(){return false;}}',contentType:'application/javascript'}));
   page.setDefaultTimeout(7000);
   page.on('pageerror',e=>errors.push(e.message));
+  if(process.env.KEEPSESS_HIGHLIGHT_FALLBACK==='1')await page.route('**/vendor/addon-webgl.js',route=>route.fulfill({body:'var WebglAddon={WebglAddon:class{constructor(){throw Error("GPU disabled by fixture")}}}',contentType:'application/javascript'}));
   await page.goto(process.argv[2]);await page.waitForFunction(()=>typeof terminal!=='undefined'&&terminal&&terminalHighlights.size>0&&!replaying);
   await paint.install(page);
   assert.equal(await page.evaluate(()=>terminal.options.minimumContrastRatio),4.5);
@@ -23,7 +24,7 @@ const paint=require('./highlight-paint.cjs');
    await new Promise(r=>terminal.write('😀中文 ERROR e\u0301',r));
   });
   await page.waitForFunction(()=>[...terminalHighlights].find(h=>h.term===terminal).decorations.length===1);
-  if(await page.evaluate(()=>!![...terminalHighlights].find(h=>h.term===terminal).layer))assert.equal(await page.locator('#terminal .keepsess-keyword').allTextContents().then(text=>text.join('')),'😀中文 ERROR e\u0301');
+  if(await page.evaluate(()=>[...terminalHighlights].find(h=>h.term===terminal).layer instanceof DOMKeywordLayer))assert.equal(await page.locator('#terminal .keepsess-keyword').allTextContents().then(text=>text.join('')),'😀中文 ERROR e\u0301');
   await page.evaluate(()=>{terminal.selectAll();});assert.equal(await page.evaluate(()=>terminal.getSelection().trim()),'😀中文 ERROR e\u0301');
   await page.evaluate(async()=>{terminal.reset();applyAppearance({enabled:true,rules:[{name:'override',pattern:'ERROR',enabled:true,override_ansi:true,foreground:'#ff8585'}]});await new Promise(r=>terminal.write('\x1b[35mERROR\x1b[0m',r));});
   await page.waitForFunction(()=>[...terminalHighlights].find(h=>h.term===terminal).decorations.length===1);await paint.check(page);
@@ -106,7 +107,7 @@ const paint=require('./highlight-paint.cjs');
   await page.waitForFunction(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.some(m=>m.line===0));
   assert.equal(await page.evaluate(()=>[...terminalHighlights].find(h=>h.term===terminal).markers.every(m=>m.line<terminal.rows)),true);
   const released=await page.evaluate(()=>{
-   const highlighters=[...terminalHighlights].filter(h=>h.layer),layers=highlighters.map(h=>h.layer);
+   const highlighters=[...terminalHighlights].filter(h=>h.layer instanceof DOMKeywordLayer),layers=highlighters.map(h=>h.layer);
    for(const h of highlighters){h.dispose();h.dispose();}
    return !document.querySelector('.keepsess-keyword')&&layers.every(layer=>!layer.rows.size)&&highlighters.every(h=>!terminalHighlights.has(h));
   });assert(released,'wrappers, row caches and owners must be released');

@@ -1,6 +1,6 @@
 /* Shared sans-serif typography, served entirely from embedded local assets. */
 'use strict';
-const WEB_FONT_FAMILY='"JetBrains Mono", "Noto Sans SC", sans-serif';
+const WEB_FONT_FAMILY='"JetBrains Mono", "Noto Sans SC", monospace';
 const terminalFontsLoaded=document.fonts?Promise.all([
  document.fonts.load('400 14px "JetBrains Mono"','Keepsess 0123456789'),
  document.fonts.load('700 14px "JetBrains Mono"','Keepsess 0123456789'),

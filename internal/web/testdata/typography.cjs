@@ -6,6 +6,8 @@ module.exports=async function verifyTypography(page){
  for(const family of families){assert.match(family,/JetBrains Mono/);assert.match(family,/Noto Sans SC/);assert.match(family,/sans-serif$/);}
  assert.equal(await page.evaluate(()=>terminal.options.fontFamily===WEB_FONT_FAMILY),true);
  await page.evaluate(()=>{const probe=document.createElement('div');probe.id='font-probe';probe.style.cssText='position:fixed;left:0;top:0;opacity:0;pointer-events:none';for(const[id,text]of [['latin','Keepsess English 0123456789'],['cjk','中文终端会话历史']]){const span=document.createElement('span');span.id='font-probe-'+id;span.textContent=text;probe.append(span);}document.body.append(probe);});
+ await page.evaluate(()=>document.getElementById('font-probe').getBoundingClientRect());
+ await page.evaluate(()=>new Promise(requestAnimationFrame));
  const cdp=await page.context().newCDPSession(page);
  try{
   await cdp.send('DOM.enable');await cdp.send('CSS.enable');const {root}=await cdp.send('DOM.getDocument');

@@ -58,6 +58,10 @@ type queued struct {
 	size  int
 }
 type Store struct {
+	readCursorMu   sync.Mutex
+	readCursors    map[readCursorKey]readCursor
+	readCursorKeys []readCursorKey
+	readCursorNext int
 	root, instance string
 	view           bool
 	maxBytes       int64
@@ -570,7 +574,22 @@ func (s *Store) Read(instance string, after uint64, limit int) (Page, error) {
 		return p, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return p, err
+	}
+	position := s.readPosition(readCursorKey{instance: instance, segment: names[idx], after: after}, info)
+	if position > 0 {
+		if _, err = f.Seek(position, io.SeekStart); err != nil {
+			return p, err
+		}
+	}
 	scan := bufio.NewScanner(io.LimitReader(f, segmentBytes+(3<<20)))
+	scan.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		advance, token, err := bufio.ScanLines(data, atEOF)
+		position += int64(advance)
+		return advance, token, err
+	})
 	scan.Buffer(make([]byte, 64<<10), 3<<20)
 	count := 0
 	bytesRead := 0
@@ -611,6 +630,7 @@ func (s *Store) Read(instance string, after uint64, limit int) (Page, error) {
 		p.More = true
 	}
 	p.State = s.archiveState(instance)
+	s.rememberReadPosition(readCursorKey{instance: instance, segment: names[idx], after: p.Next}, position, info)
 	return p, nil
 }
 func (s *Store) archiveState(instance string) State {

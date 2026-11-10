@@ -1,6 +1,6 @@
 'use strict';
-const TERMINAL_THEME={background:'#0a1019',foreground:'#e5edf5',cursor:'#83e6d0',selectionBackground:'#42647d',black:'#66768c',red:'#ff8585',green:'#83e6b0',yellow:'#ffd479',blue:'#8dbaff',magenta:'#d3a6ff',cyan:'#88d8ff',white:'#e5edf5',brightBlack:'#a1b0c4',brightRed:'#ffadad',brightGreen:'#b1f5cd',brightYellow:'#ffe6a6',brightBlue:'#b6d3ff',brightMagenta:'#e5c9ff',brightCyan:'#b8edff',brightWhite:'#ffffff'};
-const TERMINAL_APPEARANCE={theme:TERMINAL_THEME,minimumContrastRatio:4.5,allowProposedApi:true};
+const DARK_TERMINAL_THEME={background:'#0a1019',foreground:'#e5edf5',cursor:'#83e6d0',selectionBackground:'#42647d',black:'#66768c',red:'#ff8585',green:'#83e6b0',yellow:'#ffd479',blue:'#8dbaff',magenta:'#d3a6ff',cyan:'#88d8ff',white:'#e5edf5',brightBlack:'#a1b0c4',brightRed:'#ffadad',brightGreen:'#b1f5cd',brightYellow:'#ffe6a6',brightBlue:'#b6d3ff',brightMagenta:'#e5c9ff',brightCyan:'#b8edff',brightWhite:'#ffffff'};
+const TERMINAL_APPEARANCE={theme:DARK_TERMINAL_THEME,minimumContrastRatio:4.5,allowProposedApi:true};
 let appearance={enabled:false,rules:[]},appearanceDefaults=appearance,appearanceWritable=false;
 const terminalHighlights=new Set();
 function highlightNotice(message){document.getElementById('highlight-status').textContent=message;const notice=document.getElementById('highlight-notice');notice.textContent=message;notice.hidden=!message;}
@@ -44,7 +44,7 @@ const syncHighlightMatcher=new HighlightMatcher();
 class TerminalHighlight {
  constructor(term){
   this.term=term;this.decorations=[];this.markers=[];this.closed=false;this.version=0;this.timer=null;this.busy=false;this.failed=false;this.dirty=false;this.visible=false;this.scrollUntil=0;
-  this.layer=DOMKeywordLayer.supported(term)?new DOMKeywordLayer(term):null;
+  this.layer=WebGLKeywordLayer.supported(term)?new WebGLKeywordLayer(term):DOMKeywordLayer.supported(term)?new DOMKeywordLayer(term):null;
   this.generation=0;this.cache=new Map();this.direction=-1;this.lastView=term.buffer.active.viewportY;
   this.renderPending=false;
   this.renderFilter=this.layer?term.registerDOMRenderFilter(()=>this.prepareRender()):null;
@@ -81,7 +81,7 @@ class TerminalHighlight {
  resumeRender(){if(this.renderPending){this.renderPending=false;this.term.refresh(0,this.term.rows-1);}}
  readyView(){const b=this.term.buffer.active;for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows,b.viewportY+200);y++)if(!this.cache.has(y))return false;return true;}
  prepareRender(){
-  if(this.closed||!this.visible||this.failed||!appearance.enabled||this.term.buffer.active.type!=='normal'){this.renderPending=false;return true;}
+  if(this.closed||!this.visible||this.failed||this.term.keepsessReplaying||!appearance.enabled||this.term.buffer.active.type!=='normal'){this.renderPending=false;return true;}
   this.viewportChanged();
   if(this.readyView()){this.renderPending=false;return true;}
   // Keep the last colored frame until this uncached viewport can be committed
@@ -92,7 +92,7 @@ class TerminalHighlight {
   return false;
  }
  project(){
-  if(this.renderPending||!this.visible||this.closed||!appearance.enabled||this.term.buffer.active.type!=='normal')return;
+  if(this.renderPending||!this.visible||this.closed||this.term.keepsessReplaying||!appearance.enabled||this.term.buffer.active.type!=='normal')return;
   const term=this.term,b=term.buffer.active,view=this.viewKey();
   if(this.projectedView!==view||this.projectedCache!==this.cache){
   this.clearView(false);
@@ -105,9 +105,9 @@ class TerminalHighlight {
   }
   this.layer.paint(this.decorations);
  }
- schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||!appearance.enabled)return;if(this.layer){this.timer=requestAnimationFrame(()=>{this.timer=null;this.scan();});return;}this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
+ schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||this.term.keepsessReplaying||!appearance.enabled)return;if(this.term.keepsessRenderer==='webgl'&&this.syncRules){this.scan();return;}if(this.layer){this.timer=requestAnimationFrame(()=>{this.timer=null;this.scan();});return;}this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
  scan(){
-  if(this.closed||!this.visible||this.failed||!appearance.enabled)return;this.dirty=false;
+  if(this.closed||!this.visible||this.failed||this.term.keepsessReplaying||!appearance.enabled)return;this.dirty=false;
   const term=this.term,b=term.buffer.active;
   if(b.type!=='normal'){this.clear();return;}
   const groups=[],scannedRows=new Set();let scanned=0;
@@ -220,7 +220,7 @@ async function initAppearance(){
  const el=id=>document.getElementById(id);
  el('appearance-open').onclick=()=>{
   appearanceOriginal=cloneAppearance(appearance);renderAppearanceForm(appearance);el('appearance-dialog').showModal();
-  if(!previewTerminal){previewTerminal=new Terminal({...TERMINAL_APPEARANCE,cols:65,rows:7,scrollback:0,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,convertEol:true});previewTerminal.open(el('highlight-preview'));attachTerminalAppearance(previewTerminal);previewTerminal.write('ERROR: connection failed\nWARNING: retry disabled\nLink is UP  GigabitEthernet1/0/1\nProtocol is DOWN  192.168.1.10\nMAC 00:11:22:aa:bb:cc  0 errors\n中文测试 自定义关键词\n\x1b[35mERROR: 远端 ANSI 颜色保留\x1b[0m');}
+  if(!previewTerminal){previewTerminal=new Terminal({...TERMINAL_APPEARANCE,cols:65,rows:7,scrollback:0,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,convertEol:true});previewTerminal.open(el('highlight-preview'));attachTerminalRenderer(previewTerminal);attachTerminalAppearance(previewTerminal);previewTerminal.write('ERROR: connection failed\nWARNING: retry disabled\nLink is UP  GigabitEthernet1/0/1\nProtocol is DOWN  192.168.1.10\nMAC 00:11:22:aa:bb:cc  0 errors\n中文测试 自定义关键词\n\x1b[35mERROR: 远端 ANSI 颜色保留\x1b[0m');}
   el('highlight-save').disabled=!appearanceWritable;
  };
  el('highlight-add').onclick=()=>{try{const a=readAppearanceForm();if(a.rules.length>=32)throw Error('最多 32 条规则。');a.rules.push({name:'自定义',pattern:'关键词',enabled:true,regex:false,case_sensitive:false,override_ansi:false,foreground:'#ffd479',background:''});renderAppearanceForm(a);}catch(e){highlightNotice(e.message);}};
