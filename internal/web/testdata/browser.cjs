@@ -30,6 +30,24 @@ const verifyTypography = require('./typography.cjs');
   assert(focused);await page.evaluate(()=>refreshInstances());assert(await page.evaluate(()=>document.activeElement===document.querySelector('#instance-options button')));
   await page.keyboard.press('Escape');assert.equal(await page.locator('#instances').getAttribute('open'),null);
 
+  // Human names are server-backed, independent of AI labels, and never send terminal input.
+  await page.locator('#instance-rename').click();
+  await page.locator('#instance-human-name').fill('人类实例名称');
+  await page.locator('#instance-name-save').click();
+  await page.waitForFunction(()=>!document.getElementById('instance-name-dialog').open);
+  assert.equal(await page.locator('#instance-selected strong').textContent(),'人类实例名称');
+  await page.reload();await page.waitForFunction(()=>document.getElementById('instance-selected').textContent.includes('人类实例名称'));
+  await page.evaluate(()=>{
+   const item=instanceItems.find(i=>i.id===instance);
+   paintInstance(document.getElementById('instance-selected'),{...item,name:'AI 工作描述'},new Date());
+  });
+  assert.equal(await page.locator('#instance-selected strong').textContent(),'人类实例名称');
+  assert.equal(await page.locator('#instance-selected .instance-ai-name').textContent(),'AI：AI 工作描述');
+  await page.locator('#instance-rename').click();await page.locator('#instance-human-name').fill('');
+  await page.locator('#instance-name-save').click();await page.waitForFunction(()=>!document.getElementById('instance-name-dialog').open);
+  assert.equal(await page.locator('#instance-selected strong').textContent(),'未命名实例');
+  assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input'||m.type==='exec').length),0);
+
   assert.deepEqual(await page.locator('#session-list .session strong').allTextContents(),['s1 · production','s3 · console','s2 · closed-session']);
   assert.equal(await page.locator('#failed-sessions .session').count(),1);assert.equal(await page.locator('#failed-sessions .session').isVisible(),false);
   await page.locator('#session-error-summary').click();assert.equal(await page.locator('#failed-sessions .session').isVisible(),true);

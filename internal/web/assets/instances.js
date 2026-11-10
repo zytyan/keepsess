@@ -14,13 +14,14 @@ function instanceTime(started, now=new Date(), absolute=false){
 }
 const instanceButtons=new Map();
 function paintInstance(node, item, now){
- const name=item.name||'未命名实例',time=instanceTime(item.started,now);
+ const name=item.human_name||item.name||'未命名实例',time=instanceTime(item.started,now);
  node.classList.toggle('instance-live',!!item.current);
- if(!node.firstElementChild){node.replaceChildren(document.createElement('strong'),document.createElement('small'));}
+ if(!node.firstElementChild){node.replaceChildren(document.createElement('strong'),document.createElement('small'),document.createElement('small'));}
  node.firstChild.textContent=name;
+ const ai=node.children[1];ai.className='instance-ai-name';ai.textContent=item.name?'AI：'+item.name:'';ai.hidden=!item.name;
  node.lastChild.textContent=(item.current&&item.pid?`PID ${item.pid} · `:'')+time;
  node.title=instanceTime(item.started,now,true);
- node.setAttribute('aria-label',`${name}，${item.current?'活动实例':'归档，只读'}${item.current&&item.pid?'，PID '+item.pid:''}，${time}，启动于 ${node.title}`);
+ node.setAttribute('aria-label',`${name}${item.name?'，AI：'+item.name:''}，${item.current?'活动实例':'归档，只读'}${item.current&&item.pid?'，PID '+item.pid:''}，${time}，启动于 ${node.title}`);
 }
 function renderInstancePicker(list, selected, onselect, now=new Date()){
  const picker=document.getElementById('instances'),options=document.getElementById('instance-options');

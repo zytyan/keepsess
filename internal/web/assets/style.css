@@ -50,3 +50,5 @@ dialog{width:min(1100px,95vw);max-height:92vh;overflow:hidden;background:#111a28
 @media(prefers-reduced-motion:reduce){.instance-live::before{animation:none}}
 
 #session-errors{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}#session-error-summary{padding:6px 3px;color:#d6b884;font-size:12px}#failed-sessions{margin-top:8px}
+
+#instance-rename{margin-top:6px;padding:4px 8px;font-size:11px;align-self:flex-end}.instance-picker .instance-ai-name{color:var(--muted);font-size:10px}#instance-name-dialog{width:min(420px,90vw)}#instance-name-dialog form{border:0}#instance-name-error{color:#ffd479;white-space:pre-wrap}

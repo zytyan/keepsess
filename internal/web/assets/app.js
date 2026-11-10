@@ -259,7 +259,7 @@ $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
 async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;$('session-errors').open=false;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(firstSession())selectSession(firstSession());else{overview?.dispose();overview=null;localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;overviewMode=false;document.querySelector('.terminal-panel').classList.remove('overview-active');$('overview').hidden=true;$('overview-toolbar').hidden=true;$('empty').hidden=false;$('terminal').hidden=true;}}
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));terminalResize.observe($('overview'));
 terminalFontsLoaded.then(loaded=>{if(!loaded)return;if(terminal){remeasureTerminalFonts(terminal);fit();}overview?.refreshFonts();});
-function renderInstanceChoices(){renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)));}
+function renderInstanceChoices(){$('instance-rename').disabled=!instanceItems.some(i=>i.id===instance);renderInstancePicker(instanceItems,instance,id=>chooseInstance(id).catch(e=>warn(e.message)));}
 setInterval(renderInstanceChoices,60000);
 function refreshInstances(){if(!instanceRefresh)instanceRefresh=refreshInstanceList().finally(()=>{instanceRefresh=null});return instanceRefresh;}
 async function refreshInstanceList(){
@@ -278,3 +278,23 @@ async function refreshInstanceList(){
  if(!selected)$('connection').textContent='等待会话';
  setInterval(async()=>{try{await refreshInstances();if(!selected&&instance){await loadCatalog();if(firstSession())await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
 })().catch(e=>warn(e.message));
+
+let namingInstance='';
+$('instance-rename').onclick=()=>{
+ const item=instanceItems.find(i=>i.id===instance);if(!item)return;
+ namingInstance=item.id;$('instance-human-name').value=item.human_name||'';
+ $('instance-name-error').textContent='';$('instance-name-dialog').showModal();$('instance-human-name').focus();
+};
+$('instance-name-cancel').onclick=()=>$('instance-name-dialog').close();
+$('instance-name-dialog').oncancel=event=>{if($('instance-name-save').disabled)event.preventDefault();};
+$('instance-name-form').onsubmit=async event=>{
+ event.preventDefault();const target=namingInstance,value=$('instance-human-name').value;
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+ $('instance-name-save').disabled=true;$('instance-name-cancel').disabled=true;$('instance-human-name').disabled=true;
+ try{
+  const response=await fetch(new URL('api/instance-name',root),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instance:target,human_name:value}),signal:controller.signal});
+  if(!response.ok)throw new Error(await response.text());
+  await response.json();if(instanceRefresh)await instanceRefresh;await refreshInstances();$('instance-name-dialog').close();
+ }catch(e){$('instance-name-error').textContent=e.message;}
+ finally{clearTimeout(timer);$('instance-name-save').disabled=false;$('instance-name-cancel').disabled=false;$('instance-human-name').disabled=false;}
+};

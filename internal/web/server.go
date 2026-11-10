@@ -123,6 +123,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 	files := http.FileServer(http.FS(sub))
 	mux.HandleFunc(o.BasePath+"api/appearance", s.appearance)
 	mux.HandleFunc(o.BasePath+"api/instances", s.instances)
+	mux.HandleFunc(o.BasePath+"api/instance-name", s.instanceName)
 	mux.HandleFunc(o.BasePath+"api/catalog", s.catalog)
 	mux.HandleFunc(o.BasePath+"api/history", s.read)
 	mux.HandleFunc(o.BasePath+"api/replay", s.replay)
@@ -164,8 +165,8 @@ func (s *Server) Close() {
 }
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		appearanceWrite := r.Method == "POST" && r.URL.Path == s.info.BasePath+"api/appearance"
-		if r.Method != "GET" && !appearanceWrite {
+		jsonWrite := r.Method == "POST" && (r.URL.Path == s.info.BasePath+"api/appearance" || r.URL.Path == s.info.BasePath+"api/instance-name")
+		if r.Method != "GET" && !jsonWrite {
 			http.Error(w, "GET required", 405)
 			return
 		}
@@ -173,7 +174,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "unrecognized Host; use an IP/localhost address or configure web.public_url in ~/.keepsess.toml for a DNS name", 403)
 			return
 		}
-		if appearanceWrite && (r.Header.Get("Origin") == "" || r.Header.Get("Content-Type") != "application/json") {
+		if jsonWrite && (r.Header.Get("Origin") == "" || r.Header.Get("Content-Type") != "application/json") {
 			http.Error(w, "same-origin JSON required", 403)
 			return
 		}

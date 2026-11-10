@@ -7,6 +7,8 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#instance-options .instance-live').count(),2);
  assert.match(await page.locator('#instance-options').textContent(),/PID/);
  await page.locator('#instance-selected').click();await page.getByRole('button',{name:/部署检查 A/}).click();await page.waitForFunction(id=>instance===id&&selected==='s1'&&!replaying,process.argv[3]);
+ assert.equal(await page.locator('#instance-selected strong').textContent(),'人类部署实例');
+ assert.equal(await page.locator('#instance-selected .instance-ai-name').textContent(),'AI：部署检查 A');
  await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('stdout'));
  assert.equal(await page.locator('#run').isDisabled(),true);
  await page.locator('#instance-selected').click();await page.getByRole('button',{name:/网络诊断 B/}).click();await page.waitForFunction(id=>instance===id&&selected==='s1'&&!replaying,process.argv[4]);

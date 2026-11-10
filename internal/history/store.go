@@ -36,6 +36,7 @@ type State struct {
 type Instance struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name,omitempty"`
+	HumanName   string    `json:"human_name,omitempty"`
 	Started     time.Time `json:"started"`
 	Current     bool      `json:"current"`
 	PID         int       `json:"pid,omitempty"`
@@ -441,6 +442,17 @@ func (s *Store) Instances() ([]Instance, error) {
 		if known && !has {
 			continue
 		}
+		labelBytes, labelErr := os.ReadFile(filepath.Join(dir, "human-name.json"))
+		if labelErr != nil && !errors.Is(labelErr, os.ErrNotExist) {
+			return nil, labelErr
+		}
+		var label humanLabel
+		if labelErr == nil {
+			if err := json.Unmarshal(labelBytes, &label); err != nil {
+				return nil, err
+			}
+		}
+		i.HumanName = label.Name
 		i.Current = i.ID == s.instance
 		out = append(out, i)
 	}

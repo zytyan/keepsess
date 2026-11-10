@@ -222,6 +222,19 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 		fetch(t, r.Info.URL, "api/instances", &instances)
 		return len(instances) == 2 && instances[0].Current && instances[1].Current && instances[0].Name != "" && instances[1].Name != ""
 	})
+	// Human labels are owned by the shared Web service, not the agent process.
+	nameReq, _ := http.NewRequest("POST", r.Info.URL+"api/instance-name", strings.NewReader(`{"instance":"`+id1+`","human_name":"人类部署实例"}`))
+	nameURL, _ := url.Parse(r.Info.URL)
+	nameReq.Header.Set("Origin", nameURL.Scheme+"://"+nameURL.Host)
+	nameReq.Header.Set("Content-Type", "application/json")
+	nameResp, nameErr := http.DefaultClient.Do(nameReq)
+	if nameErr != nil {
+		t.Fatal(nameErr)
+	}
+	nameResp.Body.Close()
+	if nameResp.StatusCode != http.StatusOK {
+		t.Fatal(nameResp.Status)
+	}
 	if _, err := os.Stat(filepath.Join(c.History.Dir, emptyID)); err != nil {
 		t.Fatal("live empty Agent removed", err)
 	}
@@ -289,7 +302,15 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 	r, cancel, done = start(t, c)
 	eventually(t, func() bool {
 		fetch(t, r.Info.URL, "api/instances", &instances)
-		return len(instances) == 2 && instances[0].Current && instances[1].Current
+		if len(instances) != 2 || !instances[0].Current || !instances[1].Current {
+			return false
+		}
+		for _, i := range instances {
+			if i.ID == id1 {
+				return i.HumanName == "人类部署实例"
+			}
+		}
+		return false
 	})
 	continued := a.call(t, "sess_exec", map[string]any{"session": "s1", "command": "both"})
 	if continued["exit_code"] != float64(0) {
@@ -300,7 +321,7 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 		fetch(t, r.Info.URL, "api/instances", &instances)
 		for _, i := range instances {
 			if i.ID == id1 {
-				return !i.Current && i.Name == "部署检查 A" && instances[0].ID == id2 && instances[0].Current
+				return !i.Current && i.Name == "部署检查 A" && i.HumanName == "人类部署实例" && instances[0].ID == id2 && instances[0].Current
 			}
 		}
 		return false
