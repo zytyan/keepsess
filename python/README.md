@@ -57,6 +57,8 @@ with Keepsess() as ks:
 - Python 优先用 `sess_send_text` / `sess_sendline_text`。普通字符串 `"\r"`、`"\x03"` 已包含实际控制字符；原始字符串 `r"\x03"` 保留字面反斜杠。只有明确需要再解码一层时使用 `*_escaped`。`line_end` 仍是工具解释的可见转义，如 `r"\r"`。
 - Python 本地响应等待默认 `rpc_timeout=125` 秒，启动握手默认 `startup_timeout=15` 秒；构造时可修改，只接受有限正数。服务端单 RPC 仍为 115 秒，exec 默认等待 120 秒；配置的完成等待超时默认尝试 TERM，RPC 预算到期不发 TERM。
 - 长命令可用 `collect_output=False` 启动，再通过 handle 调用 `sess_task_wait` / read；需要自行设置总预算。`term_on_timeout=False` 只结束等待。客户端不自动重连、重启或重放输入。
+- 全部 30 个工具固定可发现，无 tool_profile 开关。sess_exec 仅在恰好保留一个会话时可省略 session；建议脚本显式传入 conn.session。会话默认空闲 2h 回收，运行中任务不因静默回收。
+- 文件传输和 SSH 隧道可用 sess_get_file/sess_put_file、sess_tunnel_open/list/close；文件的本机路径及本地监听均相对 Go 引擎所在主机，隧道 handle 与 task handle 不混用。详见[文件传输与隧道](../docs/usage.md#文件传输与-ssh-隧道)。
 - 输出默认每页 64KiB，应处理 `more`、截断和历史丢失。并发、队列、输入输出均有界；本地超时或取消不保证远端任务终止。
 
 ## 人类观察与详细用法

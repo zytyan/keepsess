@@ -97,7 +97,7 @@ class SyncMethods:
         query: str | None = None,
         topic: str | None = None,
     ) -> HelpResult:
-        'Built-in help: no arguments lists topics; topic/parameter expands details; query searches short snippets (default 3). No files, sessions or network accessed.'
+        'Built-in reference help, optional for tool use: no arguments lists a short directory; topic returns a workflow or full tool schema; topic+parameter returns one field; query searches short English/Chinese snippets (default 3, limit 1..5). query is exclusive with topic/parameter. Only static built-in documentation is searched; no files, sessions, credentials or network accessed and no runtime state changed.'
         arguments = {
             'limit': limit,
             'parameter': parameter,
@@ -145,7 +145,7 @@ class SyncMethods:
         username: str | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ConnectResult:
-        'Create persistent SSH/Telnet session. SSH defaults exec; network devices/shells need stream, Telnet always stream. SSH host-key checking defaults OFF unless host_key/known_hosts supplied. No automatic Telnet login.'
+        'Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.'
         arguments = {
             'host': host,
             'port': port,
@@ -190,7 +190,7 @@ class SyncMethods:
         self, *,
         session: str,
     ) -> ConnectResult:
-        'Explicitly reconnect with saved private parameters; preserve session ID/name. Discards old output/tasks; never replays input. Busy during active operations.'
+        'Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.'
         arguments = {
             'session': session,
         }
@@ -201,7 +201,7 @@ class SyncMethods:
         name: str,
         session: str,
     ) -> Result:
-        'Rename a session alias; stable sN ID remains valid. Old alias stops resolving. Duplicate names rejected.'
+        'Rename a session alias without changing its stable ID, connection or running tasks. Names must be unique among retained/pending sessions. Old alias stops resolving; stable ID remains valid.'
         arguments = {
             'name': name,
             'session': session,
@@ -213,7 +213,7 @@ class SyncMethods:
         handle: str,
         name: str,
     ) -> Result:
-        'Rename a task alias; stable taskN ID remains valid. Names unique across retained tasks. No output consumed.'
+        'Rename a retained task alias; stable taskN ID remains valid. Task names are process-wide unique among retained records; no output consumed.'
         arguments = {
             'handle': handle,
             'name': name,
@@ -246,10 +246,9 @@ class SyncMethods:
         strip_ansi: bool | None = None,
         tcp_keepalive_ms: int | str | None = None,
         term_on_timeout: bool | None = None,
-        tool_profile: Literal['standard', 'full'] | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ConfigResult:
-        'Without session: set instance_name (Unicode label) or tool_profile (standard/full). With session alone: inspect settings; with patches: update top-level session defaults atomically; omitted fields unchanged. read_only changes return busy during application writes.'
+        'Without session: set instance_name (display label). With session alone: inspect effective config. With session and patches: atomically update defaults; omitted fields unchanged. Cannot mix instance and session changes. Current readers/writers retain snapshots; read_only changes during application writes return busy with the entire patch unchanged. Connection-only settings and read_only can be changed only here or at connect, never as operation overrides. No authentication data returned.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -275,7 +274,6 @@ class SyncMethods:
             'strip_ansi': strip_ansi,
             'tcp_keepalive_ms': tcp_keepalive_ms,
             'term_on_timeout': term_on_timeout,
-            'tool_profile': tool_profile,
             'write_timeout_ms': write_timeout_ms,
         }
         return self._invoke('sess_configure', arguments)
@@ -284,7 +282,7 @@ class SyncMethods:
         self, *,
         session: str,
     ) -> ConfigResult:
-        'Inspect effective session settings, field descriptions and platform capabilities; no credentials.'
+        'All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.'
         arguments = {
             'session': session,
         }
@@ -293,7 +291,7 @@ class SyncMethods:
     def sess_list(
         self,
     ) -> SessionList:
-        'List retained sessions, names and connection state plus process instance_id; consumes nothing.'
+        'List retained process-local sessions, names, transport/exec state, instance_id and shared Web URL/status without consuming output. For unknown handles, inspect this list and sess_task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.'
         arguments = {
         }
         return self._invoke('sess_list', arguments)
@@ -327,7 +325,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ExecResult:
-        'SSH mode=exec only. Run command with protocol exit status; Bash login by default, stdin EOF. Sync waits by default; collect_output=false starts async and returns task handle. Early returns retain handle: continue wait/read, never replay. Ignores read timeouts/end_pattern.'
+        'Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with sess_task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome.'
         arguments = {
             'command': command,
             'backpressure_bytes': backpressure_bytes,
@@ -362,7 +360,7 @@ class SyncMethods:
         self, *,
         session: str | None = None,
     ) -> TaskList:
-        'List retained tasks, optionally by session; includes completed records and handles omitted by normal sync completion. No output consumed.'
+        'List retained exec tasks, optionally filtered by session. Does not consume output. Handles are process-local task1, task2, ... and never reused. Finished records expire after 30 minutes and may be evicted earlier at retention limits.'
         arguments = {
             'session': session,
         }
@@ -372,7 +370,7 @@ class SyncMethods:
         self, *,
         handle: str,
     ) -> ExecResult:
-        'Inspect task state, exit/warnings, age, stdin state and unread output; consumes nothing. Finished channel without exit status still has unknown outcome.'
+        'Immediately inspect task state, exit_code/exit_signal/warning, unread output (more), interactive/pty/stdin_open, and latest signal request. Does not consume output. Missing exit status is unknown outcome even if state=finished.'
         arguments = {
             'handle': handle,
         }
@@ -399,7 +397,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ExecResult:
-        'Wait again on an existing task, collecting incremental output with a fresh completion budget. Returns elapsed time/timeout_source. RPC/caller deadline never sends TERM.'
+        "Wait for this task's completion and consume incremental output. Uses top-level exec_total_timeout_ms and term_on_timeout (override session defaults and legacy config values), ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Configured completion timeout attempts TERM by default and retains handle; RPC budget expiry does not signal. Cancellation/output_limit do not signal. Every call gets a fresh completion budget; results include wait_elapsed_ms, started_at, task_elapsed_ms and timeout_source (exec_wait/rpc_budget/caller_deadline). One reader per task."
         arguments = {
             'handle': handle,
             'backpressure_bytes': backpressure_bytes,
@@ -427,7 +425,7 @@ class SyncMethods:
         handle: str,
         signal: Literal['ABRT', 'ALRM', 'FPE', 'HUP', 'ILL', 'INT', 'KILL', 'PIPE', 'QUIT', 'SEGV', 'TERM', 'USR1', 'USR2'],
     ) -> Result:
-        'Request SSH signal, guarded by read_only. sent confirms request write only, not exit. No automatic KILL or retry.'
+        'Send one bounded SSH signal request to a running task, independent of output collection. Does not guarantee exit or terminate a process tree. No automatic escalation/retry. Stalled transport writes close the shared connection and report unknown outcomes.'
         arguments = {
             'handle': handle,
             'signal': signal,
@@ -438,7 +436,7 @@ class SyncMethods:
         self, *,
         handle: str,
     ) -> Result:
-        'Release a completed idle task and its output. Running, unknown or active records are rejected.'
+        'Delete a finished task record and retained output. Running/unknown tasks and active operations return busy; use signal to request termination and inspect completion first. Connection close discards all associated handles without guaranteeing remote exit.'
         arguments = {
             'handle': handle,
         }
@@ -448,7 +446,7 @@ class SyncMethods:
         self, *,
         handle: str,
     ) -> Result:
-        'Send SSH EOF to interactive task stdin; idempotent, not Ctrl-D, not termination. No output consumed; read_only guarded.'
+        'Send SSH stdin EOF to an interactive exec task, leaving stdout/stderr and exit status readable. This is not a Ctrl-D byte or termination signal. read_only blocks it. Idempotent once closed; no output consumed. Bounded by write_timeout_ms; stalled/cancelled writes close shared transport and leave outcomes unknown.'
         arguments = {
             'handle': handle,
         }
@@ -478,7 +476,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Send literal text, optionally collecting unread output (default true). Local write receipt only; empty output is not delivery/login evidence.'
+        'Send encoded text and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Does not decode escapes; sendline appends line_end. Collection is not attributed to this input. sent/written_bytes acknowledge LOCAL write completion only, not peer receipt, password acceptance or shell readiness. Empty output/start=end leaves authentication unknown; do not resend credentials or add Enter. Use a bounded read_until with observed prompts. Appends no line ending; include CR/LF explicitly when desired, or choose sendline_text/sendline_escaped. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -528,7 +526,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Decode one layer of visible escapes then send; no appended line ending (include CR/LF explicitly). Invalid escapes send nothing. Collects unread output by default. Never retry on silence.'
+        'Decode one escape layer, send and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once. sent/written_bytes mean LOCAL write completion, not peer delivery/authentication. Empty output is inconclusive; never replay credentials or add Enter on silence. Appends no line ending; include CR/LF explicitly when desired, or choose sendline_text/sendline_escaped. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -578,7 +576,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Send literal text plus one configured line ending, collecting output by default. Local write receipt only; never add Enter/replay on silence.'
+        'Send encoded text and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Does not decode escapes; sendline appends line_end. Collection is not attributed to this input. sent/written_bytes acknowledge LOCAL write completion only, not peer receipt, password acceptance or shell readiness. Empty output/start=end leaves authentication unknown; do not resend credentials or add Enter. Use a bounded read_until with observed prompts. Appends exactly one configured line_end after encoded/decoded data, even if data already ends with it; default SSH \\r, Telnet \\r\\n. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -628,7 +626,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Decode visible escapes, append one line ending, send and collect by default. Invalid escapes send nothing; never retry on silence.'
+        'Decode one escape layer, send and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once. sent/written_bytes mean LOCAL write completion, not peer delivery/authentication. Empty output is inconclusive; never replay credentials or add Enter on silence. Appends exactly one configured line_end after encoded/decoded data, even if data already ends with it; default SSH \\r, Telnet \\r\\n. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -676,7 +674,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Immediately collect unread output, without waiting. Partial characters/ANSI/filtered lines may remain unread. Never sends signals.'
+        'Immediately consume currently available unread output, bounded by max_output_bytes; never wait. A partial encoded character remains unread until completed. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -722,7 +720,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Collect until pattern, total/idle timeout or output/state boundary. Timeout preserves connection and never sends TERM. Pattern does not prove execution/login success.'
+        'Consume unread and future output until match, total_timeout, idle_timeout, aborted, cancelled, output_limit, closed or SSH exec_finish. Default total 30000ms, idle 500ms; timeouts preserve connection. Pattern match consumes only through match. Any return condition wins; read_idle_timeout_ms=0 disables silence termination for slow output, while total remains bounded. Read settings omitted here inherit current session defaults. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -769,7 +767,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Read last N retained raw lines (default 20), without moving incremental cursor. Reports history loss/output bounds.'
+        'Read last N retained lines immediately, bounded by output budget. Raw offsets allow paging with read_history; no cursor change. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -817,7 +815,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Page retained raw history from offset; does not move incremental cursor. Use returned end as next offset; reports dropped bytes.'
+        'Read retained history immediately, bounded by output budget, not future output. Dropped bytes are reported. Page with offset=end. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -846,7 +844,7 @@ class SyncMethods:
         self, *,
         session: str,
     ) -> Result:
-        'Close session; discard all buffers/tasks/private reconnect parameters. Remote programs may keep running. No output returned.'
+        'Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.'
         arguments = {
             'session': session,
         }
@@ -855,7 +853,7 @@ class SyncMethods:
     def sess_close_all(
         self,
     ) -> Result:
-        'Close every session and discard buffers/tasks/private parameters; cancels pending connects/reconnects. Remote programs may keep running.'
+        'Close every session, discard buffers, tasks and private reconnect parameters; cancel pending connects/reconnects so closed handles cannot reappear. Remote programs may keep running. No terminal output returned.'
         arguments = {
         }
         return self._invoke('sess_close_all', arguments)
@@ -950,7 +948,7 @@ class AsyncMethods:
         query: str | None = None,
         topic: str | None = None,
     ) -> HelpResult:
-        'Built-in help: no arguments lists topics; topic/parameter expands details; query searches short snippets (default 3). No files, sessions or network accessed.'
+        'Built-in reference help, optional for tool use: no arguments lists a short directory; topic returns a workflow or full tool schema; topic+parameter returns one field; query searches short English/Chinese snippets (default 3, limit 1..5). query is exclusive with topic/parameter. Only static built-in documentation is searched; no files, sessions, credentials or network accessed and no runtime state changed.'
         arguments = {
             'limit': limit,
             'parameter': parameter,
@@ -998,7 +996,7 @@ class AsyncMethods:
         username: str | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ConnectResult:
-        'Create persistent SSH/Telnet session. SSH defaults exec; network devices/shells need stream, Telnet always stream. SSH host-key checking defaults OFF unless host_key/known_hosts supplied. No automatic Telnet login.'
+        'Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.'
         arguments = {
             'host': host,
             'port': port,
@@ -1043,7 +1041,7 @@ class AsyncMethods:
         self, *,
         session: str,
     ) -> ConnectResult:
-        'Explicitly reconnect with saved private parameters; preserve session ID/name. Discards old output/tasks; never replays input. Busy during active operations.'
+        'Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.'
         arguments = {
             'session': session,
         }
@@ -1054,7 +1052,7 @@ class AsyncMethods:
         name: str,
         session: str,
     ) -> Result:
-        'Rename a session alias; stable sN ID remains valid. Old alias stops resolving. Duplicate names rejected.'
+        'Rename a session alias without changing its stable ID, connection or running tasks. Names must be unique among retained/pending sessions. Old alias stops resolving; stable ID remains valid.'
         arguments = {
             'name': name,
             'session': session,
@@ -1066,7 +1064,7 @@ class AsyncMethods:
         handle: str,
         name: str,
     ) -> Result:
-        'Rename a task alias; stable taskN ID remains valid. Names unique across retained tasks. No output consumed.'
+        'Rename a retained task alias; stable taskN ID remains valid. Task names are process-wide unique among retained records; no output consumed.'
         arguments = {
             'handle': handle,
             'name': name,
@@ -1099,10 +1097,9 @@ class AsyncMethods:
         strip_ansi: bool | None = None,
         tcp_keepalive_ms: int | str | None = None,
         term_on_timeout: bool | None = None,
-        tool_profile: Literal['standard', 'full'] | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ConfigResult:
-        'Without session: set instance_name (Unicode label) or tool_profile (standard/full). With session alone: inspect settings; with patches: update top-level session defaults atomically; omitted fields unchanged. read_only changes return busy during application writes.'
+        'Without session: set instance_name (display label). With session alone: inspect effective config. With session and patches: atomically update defaults; omitted fields unchanged. Cannot mix instance and session changes. Current readers/writers retain snapshots; read_only changes during application writes return busy with the entire patch unchanged. Connection-only settings and read_only can be changed only here or at connect, never as operation overrides. No authentication data returned.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -1128,7 +1125,6 @@ class AsyncMethods:
             'strip_ansi': strip_ansi,
             'tcp_keepalive_ms': tcp_keepalive_ms,
             'term_on_timeout': term_on_timeout,
-            'tool_profile': tool_profile,
             'write_timeout_ms': write_timeout_ms,
         }
         return await self._invoke('sess_configure', arguments)
@@ -1137,7 +1133,7 @@ class AsyncMethods:
         self, *,
         session: str,
     ) -> ConfigResult:
-        'Inspect effective session settings, field descriptions and platform capabilities; no credentials.'
+        'All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.'
         arguments = {
             'session': session,
         }
@@ -1146,7 +1142,7 @@ class AsyncMethods:
     async def sess_list(
         self,
     ) -> SessionList:
-        'List retained sessions, names and connection state plus process instance_id; consumes nothing.'
+        'List retained process-local sessions, names, transport/exec state, instance_id and shared Web URL/status without consuming output. For unknown handles, inspect this list and sess_task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.'
         arguments = {
         }
         return await self._invoke('sess_list', arguments)
@@ -1180,7 +1176,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ExecResult:
-        'SSH mode=exec only. Run command with protocol exit status; Bash login by default, stdin EOF. Sync waits by default; collect_output=false starts async and returns task handle. Early returns retain handle: continue wait/read, never replay. Ignores read timeouts/end_pattern.'
+        'Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with sess_task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome.'
         arguments = {
             'command': command,
             'backpressure_bytes': backpressure_bytes,
@@ -1215,7 +1211,7 @@ class AsyncMethods:
         self, *,
         session: str | None = None,
     ) -> TaskList:
-        'List retained tasks, optionally by session; includes completed records and handles omitted by normal sync completion. No output consumed.'
+        'List retained exec tasks, optionally filtered by session. Does not consume output. Handles are process-local task1, task2, ... and never reused. Finished records expire after 30 minutes and may be evicted earlier at retention limits.'
         arguments = {
             'session': session,
         }
@@ -1225,7 +1221,7 @@ class AsyncMethods:
         self, *,
         handle: str,
     ) -> ExecResult:
-        'Inspect task state, exit/warnings, age, stdin state and unread output; consumes nothing. Finished channel without exit status still has unknown outcome.'
+        'Immediately inspect task state, exit_code/exit_signal/warning, unread output (more), interactive/pty/stdin_open, and latest signal request. Does not consume output. Missing exit status is unknown outcome even if state=finished.'
         arguments = {
             'handle': handle,
         }
@@ -1252,7 +1248,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ExecResult:
-        'Wait again on an existing task, collecting incremental output with a fresh completion budget. Returns elapsed time/timeout_source. RPC/caller deadline never sends TERM.'
+        "Wait for this task's completion and consume incremental output. Uses top-level exec_total_timeout_ms and term_on_timeout (override session defaults and legacy config values), ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Configured completion timeout attempts TERM by default and retains handle; RPC budget expiry does not signal. Cancellation/output_limit do not signal. Every call gets a fresh completion budget; results include wait_elapsed_ms, started_at, task_elapsed_ms and timeout_source (exec_wait/rpc_budget/caller_deadline). One reader per task."
         arguments = {
             'handle': handle,
             'backpressure_bytes': backpressure_bytes,
@@ -1280,7 +1276,7 @@ class AsyncMethods:
         handle: str,
         signal: Literal['ABRT', 'ALRM', 'FPE', 'HUP', 'ILL', 'INT', 'KILL', 'PIPE', 'QUIT', 'SEGV', 'TERM', 'USR1', 'USR2'],
     ) -> Result:
-        'Request SSH signal, guarded by read_only. sent confirms request write only, not exit. No automatic KILL or retry.'
+        'Send one bounded SSH signal request to a running task, independent of output collection. Does not guarantee exit or terminate a process tree. No automatic escalation/retry. Stalled transport writes close the shared connection and report unknown outcomes.'
         arguments = {
             'handle': handle,
             'signal': signal,
@@ -1291,7 +1287,7 @@ class AsyncMethods:
         self, *,
         handle: str,
     ) -> Result:
-        'Release a completed idle task and its output. Running, unknown or active records are rejected.'
+        'Delete a finished task record and retained output. Running/unknown tasks and active operations return busy; use signal to request termination and inspect completion first. Connection close discards all associated handles without guaranteeing remote exit.'
         arguments = {
             'handle': handle,
         }
@@ -1301,7 +1297,7 @@ class AsyncMethods:
         self, *,
         handle: str,
     ) -> Result:
-        'Send SSH EOF to interactive task stdin; idempotent, not Ctrl-D, not termination. No output consumed; read_only guarded.'
+        'Send SSH stdin EOF to an interactive exec task, leaving stdout/stderr and exit status readable. This is not a Ctrl-D byte or termination signal. read_only blocks it. Idempotent once closed; no output consumed. Bounded by write_timeout_ms; stalled/cancelled writes close shared transport and leave outcomes unknown.'
         arguments = {
             'handle': handle,
         }
@@ -1331,7 +1327,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Send literal text, optionally collecting unread output (default true). Local write receipt only; empty output is not delivery/login evidence.'
+        'Send encoded text and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Does not decode escapes; sendline appends line_end. Collection is not attributed to this input. sent/written_bytes acknowledge LOCAL write completion only, not peer receipt, password acceptance or shell readiness. Empty output/start=end leaves authentication unknown; do not resend credentials or add Enter. Use a bounded read_until with observed prompts. Appends no line ending; include CR/LF explicitly when desired, or choose sendline_text/sendline_escaped. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -1381,7 +1377,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Decode one layer of visible escapes then send; no appended line ending (include CR/LF explicitly). Invalid escapes send nothing. Collects unread output by default. Never retry on silence.'
+        'Decode one escape layer, send and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once. sent/written_bytes mean LOCAL write completion, not peer delivery/authentication. Empty output is inconclusive; never replay credentials or add Enter on silence. Appends no line ending; include CR/LF explicitly when desired, or choose sendline_text/sendline_escaped. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -1431,7 +1427,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Send literal text plus one configured line ending, collecting output by default. Local write receipt only; never add Enter/replay on silence.'
+        'Send encoded text and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Does not decode escapes; sendline appends line_end. Collection is not attributed to this input. sent/written_bytes acknowledge LOCAL write completion only, not peer receipt, password acceptance or shell readiness. Empty output/start=end leaves authentication unknown; do not resend credentials or add Enter. Use a bounded read_until with observed prompts. Appends exactly one configured line_end after encoded/decoded data, even if data already ends with it; default SSH \\r, Telnet \\r\\n. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -1481,7 +1477,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> SendResult:
-        'Decode visible escapes, append one line ending, send and collect by default. Invalid escapes send nothing; never retry on silence.'
+        'Decode one escape layer, send and collect unread output by default; collect_output=false only sends. Stream session or interactive exec task handle. Explicit escape-to-byte input for XML/JSON agents; no input IDs or automatic replay. sendline appends configured ending exactly once. sent/written_bytes mean LOCAL write completion, not peer delivery/authentication. Empty output is inconclusive; never replay credentials or add Enter on silence. Appends exactly one configured line_end after encoded/decoded data, even if data already ends with it; default SSH \\r, Telnet \\r\\n. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'data': data,
             'backpressure_bytes': backpressure_bytes,
@@ -1529,7 +1525,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Immediately collect unread output, without waiting. Partial characters/ANSI/filtered lines may remain unread. Never sends signals.'
+        'Immediately consume currently available unread output, bounded by max_output_bytes; never wait. A partial encoded character remains unread until completed. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -1575,7 +1571,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Collect until pattern, total/idle timeout or output/state boundary. Timeout preserves connection and never sends TERM. Pattern does not prove execution/login success.'
+        'Consume unread and future output until match, total_timeout, idle_timeout, aborted, cancelled, output_limit, closed or SSH exec_finish. Default total 30000ms, idle 500ms; timeouts preserve connection. Pattern match consumes only through match. Any return condition wins; read_idle_timeout_ms=0 disables silence termination for slow output, while total remains bounded. Read settings omitted here inherit current session defaults. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -1622,7 +1618,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Read last N retained raw lines (default 20), without moving incremental cursor. Reports history loss/output bounds.'
+        'Read last N retained lines immediately, bounded by output budget. Raw offsets allow paging with read_history; no cursor change. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -1670,7 +1666,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ReadResult:
-        'Page retained raw history from offset; does not move incremental cursor. Use returned end as next offset; reports dropped bytes.'
+        'Read retained history immediately, bounded by output budget, not future output. Dropped bytes are reported. Page with offset=end. Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success.'
         arguments = {
             'backpressure_bytes': backpressure_bytes,
             'config': config,
@@ -1699,7 +1695,7 @@ class AsyncMethods:
         self, *,
         session: str,
     ) -> Result:
-        'Close session; discard all buffers/tasks/private reconnect parameters. Remote programs may keep running. No output returned.'
+        'Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.'
         arguments = {
             'session': session,
         }
@@ -1708,7 +1704,7 @@ class AsyncMethods:
     async def sess_close_all(
         self,
     ) -> Result:
-        'Close every session and discard buffers/tasks/private parameters; cancels pending connects/reconnects. Remote programs may keep running.'
+        'Close every session, discard buffers, tasks and private reconnect parameters; cancel pending connects/reconnects so closed handles cannot reappear. Remote programs may keep running. No terminal output returned.'
         arguments = {
         }
         return await self._invoke('sess_close_all', arguments)

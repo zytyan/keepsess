@@ -1,3 +1,20 @@
+# 验证记录索引
+
+本文是按功能追加的历史实测记录，不是当前 API 规范。各节中的“当前”“默认”“新增”仅指当时构建；旧工具数量、standard/full/tool_profile、input_id、旧超时及输出上限均不应作为现行调用依据。当前规范见 [使用参考](docs/usage.md)、[AI skill](skills/keepsess/SKILL.md) 与 [开发约束](AGENTS.md)。
+
+当前实现：全部 30 工具固定发现、完整参数说明；无 tool_profile 参数，旧 TOML `[tools].profile` 兼容读取但忽略；会话空闲默认 2h，read 默认 total=30000ms/idle=500ms，exec 完成等待默认 120000ms（最高 300000ms），RPC 上限 115s；输出默认 64KiB、最高 512KiB，exec 无无输出静默保护。分发 skill 与 CLI 内嵌 skill 应保持一致。
+
+2026-11-11 文档校准：按当前代码修正文档，不代表重新运行下文全部历史验收，也不增加真实设备或目标平台实测结论。
+
+本次文档校准检查：工具目录与运行时导出的30工具、配置表与Config全部22字段一致；两份skill逐字一致且skill validator通过，git diff --check通过。Go1.22.1、CGO_ENABLED=0的internal/mcp测试及CLI命令/skill安装导出相关测试通过。CLI全包的TestServeWebDiscoveryAndStdioIsolation/default遇到daemon startup timed out；Python generate.py --check未通过，现有_methods.py仍保留旧tool_profile签名及旧描述。本次仅更新文档与内嵌skill正文，未修改生成API或daemon实现，以上失败未宣称修复。
+
+
+后续 Python 代码同步：重新运行 python/tools/generate.py，_methods.py 的同步/异步30方法按当前工具定义更新，移除 tool_profile 参数并更新完整说明；集成测试改为直接命名实例。generate.py --check 与 git diff --check 通过，4项异步客户端测试和30方法签名测试通过；当前Go1.22.1构建引擎的异步集成用例通过。完整Python测试在同步客户端start阶段停滞，单独用例35s外部截止仍未完成；因此未宣称全套通过，未修改客户端传输实现。此前“生成API过期”已由本次重新生成解决，daemon测试超时仍未修复。
+
+Python停滞排查与最终复核：受限沙箱拒绝Unix socket写入（socketpair.send返回PermissionError），asyncio.call_soon_threadsafe无法唤醒同步客户端后台线程；独立事件循环示例同样复现。允许本地socket后，同步启动/关闭与超时测试正常，无需修改SDK线程/传输代码。另修正Web归档集成测试：按当前隐藏空实例的规则，先建立本机Telnet会话，再验证命名、活动展示与退出归档。最终Python3.13.5全部23项测试通过（包含当前引擎、本机SSH/Telnet模拟端点及Web归档），generate.py --check和git diff --check通过；Go1.22.1、CGO_ENABLED=0的internal/cli及internal/mcp全包非缓存复跑通过。此前同步启动停滞和CLI daemon超时不再作为未解决的产品缺陷；不据此声称真实设备或其他平台实测。
+
+---
+
 # 本地回显临时预览（2026-11-09）
 
 - 本地输入以 45% 不透明度的独立 DOM 层展示，不写入 xterm 缓冲、输出历史或复制选择；预览最多保留 4096 个 UTF-16 单元，仅渲染可见网格，支持字素退格与控制序列隐藏。

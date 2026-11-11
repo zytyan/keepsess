@@ -167,4 +167,4 @@ PYTHONPATH=python KEEPSESS_TEST_BINARY=/tmp/keepsess-sdk \
   python3 -m unittest discover -s python/tests -v
 ```
 
-`GO=/path/to/go` 可为生成脚本指定 Go 路径。生成的 API 已纳入源码，普通安装和导入无需运行生成器。SDK 不依赖默认 tools/list 的 18 项发现列表，隐藏工具也有同名方法。
+`GO=/path/to/go` 可为生成脚本指定 Go 路径。生成的 API 已纳入源码，普通安装和导入无需运行生成器。SDK 提供全部 30 个同名方法；MCP tools/list 同样统一展示全部 30 个工具，不存在隐藏工具或发现分组。

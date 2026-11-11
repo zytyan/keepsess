@@ -64,6 +64,7 @@ with Keepsess() as ks:
 - 所有配置参数放在顶层；connect/configure 修改会话默认值，操作参数只影响本次。全部 30 个工具统一可发现，提供完整参数说明，无需切换发现分组。
 - `sess_help()` 列目录，`sess_help(topic="sess_exec")` 查看工具，`query` 搜索内置帮助。
 - Python 优先 `sess_send_text` / `sess_sendline_text`：普通字符串已解释 `"\r"`、`"\x03"`。仅在需要显式解码可见转义文本时使用 `*_escaped`；`line_end` 配置仍使用可见转义，例如 `r"\r"`。
+- 会话默认连续 2h 无操作且无活跃任务后回收，可用 session_idle_timeout_ms=0 禁用。sess_exec 仅在恰好保留一个会话时可省略 session，多会话必须明确指定。
 - 默认增量输出，每页 64KiB；长任务返回 handle 后继续 wait/read，不重复提交。单 RPC 上限 115 秒；exec 默认等待 120 秒，配置等待超时默认尝试 TERM，RPC 预算到期不发 TERM。
 - 空输出、超时和本地写入成功都不证明远端执行或认证成功。缺失退出状态表示结果未知；断连后显式重连，不自动重放命令或凭据。
 
@@ -81,7 +82,9 @@ with Keepsess() as ks:
 
 SSH 默认跳过主机密钥验证；显式设置 `host_key` 或 `known_hosts` 启用。Telnet 为明文。历史可能包含终端输入的密码，不要提交凭据、审计日志、历史、本地配置或内部令牌。Web 对外提供服务时应配置认证代理。
 
-[完整使用参考](docs/usage.md) · [AI skill](skills/keepsess/SKILL.md) · [验证记录](VALIDATION.md)
+[完整使用参考与30工具目录](docs/usage.md) · [AI skill](skills/keepsess/SKILL.md) · [历史验证记录](VALIDATION.md)
+
+当前调用以使用参考、tools/list 和 sess_help 为准；验证记录及现场反馈中的历史节保留当时行为，不能作为当前参数规范。
 
 ### 升级共享 daemon
 

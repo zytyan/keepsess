@@ -35,15 +35,15 @@ keepsess install-skill --dir ./keepsess-skill
 
 ## 人类 Web 终端与持久历史
 
-`keepsess serve` 默认同时启动离线打包的 xterm.js 界面，监听 `127.0.0.1:8765`。
+`keepsess serve` 默认加入每用户共享 daemon，由 daemon 提供离线打包的 xterm.js 界面，默认监听 `127.0.0.1:8765`。支持桌面端近期稳定版 Chromium 内核浏览器（Chrome、Edge）。
 
 网页“本地回显”仅以半透明文字预览输入，不进入终端输出缓冲、复制内容或输出历史。当前终端收到任意非空远程输出字节时，清除全部预览，再显示远程原文，不匹配内容；无关日志、控制序列或分包字符也会清除预览。关闭回显、锁定、切换、断连或发送失败时也会清除。预览不改变发送内容，不自动重试；开启时密码输入同样可见。
 
 界面、单任务终端和会话连续视图统一使用 JetBrains Mono（英文）与 Noto Sans SC（中文），均为非衬线字体；字体内嵌，无需 CDN 或本机安装。
 
-网页使用统一高对比主题，增强当前 session/task 的选中边框、辅助文字和 ANSI 调色板。右上角“显示与高亮”可启停高亮、编辑规则、预览、调整优先级或恢复默认。默认高亮错误、警告、明确上下文中的链路状态、IPv4、MAC 和接口名；颜色仅辅助阅读，不代表执行/认证成功。
+网页支持夜间（默认）、日间和跟随系统三种主题，选择保存在当前浏览器。默认使用离线 WebGL addon 渲染，初始化失败或上下文丢失时回退 DOM，不重放输入/输出。Ctrl+F 使用 Search addon 搜索已加载的终端滚动历史，不搜索尚未加载的磁盘历史。当前 session/task 使用选中边框、辅助文字和 ANSI 调色板区分。右上角“显示与高亮”可启停高亮、编辑规则、预览、调整优先级或恢复默认。默认高亮错误、警告、明确上下文中的链路状态、IPv4、MAC 和接口名；颜色仅辅助阅读，不代表执行/认证成功。
 
-自定义支持关键词或浏览器原生 JavaScript Unicode 正则、大小写、前景/背景色及覆盖远端 ANSI 颜色。规则从上到下优先，默认保留远端已有颜色。匹配终端解析后的可见文字，支持终端折行，不跨实际换行；备用屏幕（例如全屏程序）不应用高亮。原始历史、复制内容和 MCP 输出不变。每终端扫描最多 200 可见行、64KiB UTF-16 文本，每逻辑行片段最多 8192 UTF-16 单元，每视图最多 1024 个匹配/装饰；屏外历史在滚动进入可见区后重算。默认规则、自定义规则与关键词匹配统一使用浏览器原生正则，规则编译后复用。所有终端共用一个 Worker，队列最多 32 项，每终端最多一个待处理扫描。引擎启动时限 10 秒、计算时限 1 秒，超时暂停高亮，修改规则或重新应用后恢复。不引入 WASM、CDN 或新 Go 依赖。后端校验配置结构和容量，浏览器通过同一匹配引擎校验表达式语法。
+自定义支持关键词或浏览器原生 JavaScript Unicode 正则、大小写、前景/背景色及覆盖远端 ANSI 颜色。规则从上到下优先，默认保留远端已有颜色。匹配终端解析后的可见文字，支持终端折行，不跨实际换行；备用屏幕（例如全屏程序）不应用高亮。原始历史、复制内容和 MCP 输出不变。每终端扫描最多 200 可见行、32768 个 UTF-16 单元（64KiB），每逻辑行片段最多 8192 UTF-16 单元，每视图最多 1024 个匹配/装饰；屏外历史在滚动进入可见区后重算。默认规则、自定义规则与关键词匹配统一使用浏览器原生正则，规则编译后复用。所有终端共用一个 Worker，队列最多 32 项，每终端最多一个待处理扫描。引擎启动时限 10 秒、计算时限 1 秒，超时暂停高亮，修改规则或重新应用后恢复。不引入 WASM、CDN 或新 Go 依赖。后端校验配置结构和容量，浏览器通过同一匹配引擎校验表达式语法。
 
 点击“应用预览”临时应用当前编辑，关闭窗口撤销未保存预览。“保存到本机配置”将规则写入 `~/.keepsess.toml` 的 `[web.appearance]` / `[[web.appearance.rules]]`，立即生效，其他浏览器约 10 秒内读取，无需重启 daemon。仅显示配置被修改，其他配置值和注释保留；内联或特殊格式无法安全保留时拒绝保存，可改为标准表格格式后再试。规则最多 32 条，表达式最多 512 字节；保存接口只接受通过现有 Host/Origin 检查的同源 JSON 请求。
 
@@ -97,6 +97,8 @@ keepsess daemon run     # 前台运行，用于诊断；日志默认 ~/.keepsess
 
 实例首次连接成功会提示 AI 调用 `sess_configure({"instance_name":"当前任务名称"})`，不用传 `session`。
 实例名允许 1..64 个可见 Unicode 字符，显示在活动/归档列表；不改变稳定 `instance_id`，不同实例可重名。
+实例下拉列表的编辑图标可独立设置人类名称，活动和归档均支持，刷新或 daemon 重启后保留。人类名称优先显示，AI 名称在下方展示；清空后恢复显示 AI 名称。活动实例优先于归档，页面显示活动状态与本地时间。
+未产生 session 记录的实例隐藏；连接失败也算记录。正常退出后清理已完整写入的空实例目录，异常退出仅在确认写入者结束且历史完整时有界清理，无法确认则保留。会话按已连接/连接中、已关闭/断开、首次连接失败排序；失败记录默认折叠，排序不改变当前选择。
 全部 30 个工具统一通过 tools/list 可发现，每个工具携带完整参数说明，无需切换发现分组。
 `sess_send_escaped` 只解码一层转义，不追加行尾；需要 CR/LF 时在 data 中明确指定。`sess_sendline_escaped` 解码后追加一次配置的行尾。
 `sess_help` 提供可选的流程参考；配置查询可用 `sess_configure({"session":"s1"})` 或 `sess_get_config`。
@@ -175,6 +177,16 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 格式参考：[MCP 工具标准](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[Claude Code MCP](https://code.claude.com/docs/en/mcp)、[Cursor MCP](https://cursor.com/docs/mcp)、[VS Code MCP](https://code.visualstudio.com/docs/agents/reference/mcp-configuration)、[Codex MCP](https://developers.openai.com/codex/mcp)。Skill 目录参考：[Claude](https://code.claude.com/docs/en/skills)、[Cursor](https://cursor.com/help/customization/skills)、[VS Code](https://code.visualstudio.com/docs/agent-customization/agent-skills)、[Codex](https://learn.chatgpt.com/docs/build-skills)。
 
+## 文件传输与 SSH 隧道
+
+文件传输与隧道复用既有 SSH 连接（exec/stream 均可，支持跳板），Telnet 不支持。路径中的“本机”指 keepsess 所在主机，不一定是浏览器或 Python 调用方所在主机。
+
+`sess_get_file(session, src, dst?)` 下载，`sess_put_file(session, src, dst)` 上传单个普通文件。`backend` 为 auto（默认）、sftp、scp 或 exec；auto 仅探测后端可用性，已启动的传输不重试。`overwrite=false` 默认禁止覆盖，不递归、不续传，传输预算 110s；不使用 PTY 或 Bash login 包装。上传在目标旁暂存后发布，失败/未知结果可能留下 `temporary_path`。SFTP 无覆盖发布需要 hardlink 扩展，覆盖需要 posix-rename。取消可能关闭共享 SSH transport，应检查同连接任务的未知结果，不自动重放。
+
+`sess_tunnel_open` 的 `type` 支持 local、remote、dynamic、remote_dynamic。local/dynamic 在 keepsess 本机监听，从最终 SSH 服务器连接目标；remote/remote_dynamic 在 SSH 服务器监听，从 keepsess 本机连接目标。dynamic 两种模式仅支持 SOCKS5 CONNECT；local/remote 必须提供 `target_host` 和 `target_port`。`bind_host` 默认 127.0.0.1，`bind_port` 默认 0 自动分配，远端绑定受 SSH 服务器 GatewayPorts 限制。返回 `listen_address` 与独立隧道 handle，后者不是 task handle。
+
+每会话最多 16 个监听，全局 64 个，每监听最多 64 个连接。`sess_tunnel_list(session)` 查询，`sess_tunnel_close(session, handle)` 关闭监听及连接。断连/重连关闭旧隧道，不自动恢复。read_only 禁止上传和新建隧道，允许下载，已有隧道流量继续。
+
 ## 工具
 
 发送工具默认发送后等待并收集未读输出；`collect_output=false` 时仅发送。`sess_read_history` 是有输出预算的保留历史读取，并非一次返回全部输出。工具名已改为 `sess_send_text`、`sess_sendline_text`、`sess_read_history`；旧工具名不再注册，更新后需刷新客户端 tools/list。
@@ -192,7 +204,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_rename | session、name；更新会话别名，稳定 sN ID 保持有效，不重建连接 |
 | sess_task_rename | handle、name；更新任务别名，稳定 taskN ID 保持有效，不消费输出 |
 | sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
-| sess_configure | session、顶层配置字段；原子更新出现的字段，其余不变 |
+| sess_configure | session、顶层配置字段；原子更新出现的字段，其余不变；或仅传 instance_name 命名实例，不与会话配置混用 |
 | sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | sess_list | 无参数；列出连接和 exec 状态 |
 | sess_exec | session?、command、name?、login?、cwd?、env?、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
@@ -212,6 +224,11 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | sess_task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
 | sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
 | sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
+| sess_get_file | session、src、dst?、backend?、overwrite?；下载一个普通文件，省略 dst 时返回本机绝对临时路径 |
+| sess_put_file | session、src、dst、backend?、overwrite?；上传一个普通文件，受 read_only 保护 |
+| sess_tunnel_open | session、type、bind_host?、bind_port?、target_host?、target_port?；建立 TCP/SOCKS5 CONNECT 监听，受 read_only 保护 |
+| sess_tunnel_list | session；列出隧道句柄、监听地址和活动连接 |
+| sess_tunnel_close | session、handle；关闭隧道监听及其连接，handle 为隧道句柄 |
 
 工具发现直接提供完整工具说明及每个适用参数的语义、默认值、取值范围、互斥关系、执行与转义边界，包括 ssh_jumps 内嵌字段；模型获得工具定义后即可构造调用，无需先查 help。发现与 `sess_help` 使用同一套内置定义，只隐藏该操作不适用的配置参数。`sess_help` 继续提供可选的流程参考和排障查询：
 
@@ -232,7 +249,7 @@ sess_help(topic="configuration", parameter="line_end") # 配置默认值/协议�
 
 会话和任务命名：connect/exec 可传顶层 `name`，默认仍返回稳定 `sN` / `taskN` ID。`session` 或 `handle` 也接受当前名字作为别名；结果中的 session/handle 始终是稳定 ID，name 单独返回。使用 `sess_rename({"session":"s1","name":"prod"})` 和 `sess_task_rename({"handle":"task1","name":"build"})` 更新别名；旧别名立即失效，稳定 ID 仍有效。名字限 1..64 个 ASCII 字母、数字、点、下划线或短横线，首位须字母/数字，`sN/taskN` 保留。会话名与任务名分别唯一；会话连接期间也预留名字，任务名在发送 exec 请求前原子预留，重复名字不发送。名字只在当前保留记录内有效，释放后可复用；长流程优先保留稳定 ID。
 
-每个服务进程生成 8 字符随机 `instance_id`，在 initialize 的 `_meta`、connect/reconnect、列表及未知句柄错误中展示，不要求调用方每次传入标识。未知句柄可能已关闭、过期或来自服务实例变化，先 list 检查，不自动重放；该诊断标识不是访问控制或强制实例校验，不提供重启恢复。本轮不增加 sess_expect 工具。
+每个服务进程生成短随机 Bitcoin Base58 `instance_id`（旧归档 ID 保持兼容），在 initialize 的 `_meta`、connect/reconnect、列表及未知句柄错误中展示，不要求调用方每次传入标识。未知句柄可能已关闭、过期或来自服务实例变化，先 list 检查，不自动重放；该诊断标识不是访问控制或强制实例校验，不提供重启恢复。本轮不增加 sess_expect 工具。
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
@@ -290,10 +307,10 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 
 | 配置项 | 默认值 | 语义 |
 |---|---|---|
-| read_only | false | 会话级输入保护，禁止 send、exec 及手动/自动信号；只能通过 connect/configure 设置，不能单次覆盖 |
+| read_only | false | 会话级输入保护，禁止 send、exec、上传、新建隧道及手动/自动信号；只能通过 connect/configure 设置，不能单次覆盖；已有任务和隧道继续 |
 | connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入配置字段 |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
-| session_idle_timeout_ms | 750000 | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
+| session_idle_timeout_ms | 7200000（2h） | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
 | read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |
 | read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 sess_exec |
 | exec_total_timeout_ms | 120000 | sess_exec/task_wait 等待协议完成的独立总时限，1..300000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
@@ -309,6 +326,9 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 | max_output_bytes | 65536 | 默认 64KiB 分页，返回 UTF-8 文本字节预算，包括非法字节的展示文本；1..524288（最高 512KiB） |
 | backpressure_bytes | 0 | 非零时按系统 TCP 队列阈值拒绝新写入，最高 1GiB；需平台支持 |
 | end_pattern | 空 | Go RE2，匹配解码后的未读输出；空表示禁用，最多 1024 字节；不影响 sess_exec |
+| strip_ansi | false | 仅投影返回文本，移除 ANSI 控制序列；保留原始历史/偏移 |
+| include_pattern | 空 | ANSI 投影后按行包含，Go RE2、最多 1024 字节；空禁用 |
+| exclude_pattern | 空 | 包含过滤后按行排除，Go RE2、最多 1024 字节；空禁用 |
 
 数字可传整数或只包含整数、四则运算、括号的字符串，例如：
 
@@ -316,7 +336,7 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 {"session_idle_timeout_ms":"2*60*60*1000","max_output_bytes":"64*1024","read_idle_timeout_ms":500,"session":"s1"}
 ```
 
-不执行 eval、函数调用或变量；除法必须得到整数，表达式长度与数值有界。read_only、connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms、ssh_keepalive_ms、ssh_keepalive_timeout_ms 是会话/连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
+不执行 eval、函数调用或变量；除法必须得到整数，表达式最长 128 字符，数值有界。read_only、connect_timeout_ms、session_idle_timeout_ms、tcp_keepalive_ms、ssh_keepalive_ms、ssh_keepalive_timeout_ms 是会话/连接配置，只能在 connect/configure 中设置；其余可按操作覆盖。
 
 ### 多人串口旁观
 

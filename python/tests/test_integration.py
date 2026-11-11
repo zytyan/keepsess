@@ -34,13 +34,13 @@ class EngineTests(unittest.TestCase):
         self.addCleanup(client.close)
         return client.start()
 
-    def test_help_profiles_and_typed_tool_errors(self):
+    def test_help_naming_and_typed_tool_errors(self):
         client = self.client()
         self.assertEqual(client.sess_list().sessions, [])
         self.assertTrue(client.meta.instance_id)
         self.assertTrue(client.sess_help().topics)
-        result = client.sess_configure(instance_name='Python巡检', tool_profile='full')
-        self.assertEqual(result.tool_count, 30)
+        result = client.sess_configure(instance_name='Python巡检')
+        self.assertEqual(result.instance_name, 'Python巡检')
         self.assertEqual(client.sess_list().instance_name, 'Python巡检')
         with self.assertRaises(ToolError) as caught:
             client.sess_read_available(session='s999')
@@ -160,7 +160,16 @@ class EngineTests(unittest.TestCase):
             subprocess.run([BINARY, 'daemon', 'stop'], env={**os.environ, **self.env},
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
         self.addCleanup(stop_daemon)
+        # Empty instances are intentionally hidden and removed on clean exit.
+        # Retain a real session so this test exercises a visible archive.
+        listener = socket.socket()
+        self.addCleanup(listener.close)
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
         client = self.client()
+        conn = client.sess_connect(protocol='telnet', host='127.0.0.1',
+                                   port=listener.getsockname()[1], mode='stream')
+        self.assertTrue(conn.connected)
         client.sess_configure(instance_name='Python-visible')
         self.assertTrue(client.meta.web.enabled, client.meta.web.error)
         url = client.meta.web.url + 'api/instances'

@@ -13,26 +13,28 @@ provide known_hosts or host_key explicitly when verification is required.
 
 ## Human Web terminal and persistent history
 
-`serve` also starts an embedded offline xterm.js interface, default `127.0.0.1:8765`.
+`serve` joins the shared per-user daemon, which serves an embedded offline xterm.js interface, default `127.0.0.1:8765`.
 Occupied ports are retried; inspect `initialize._meta.web` or `sess_list.web` for the
-actual URL and recording health. Startup notices use stderr only. `--web=false`
-disables Web/history; never start another process just to obtain the current URL.
+actual URL and recording health, or run `keepsess daemon status`. Startup notices use stderr only.
+Set `[web] enabled=false` in `~/.keepsess.toml` before Agent startup to disable its
+Web/history; the old Web command-line flags are removed. Never start another Agent just to obtain the URL.
 The browser lists stable session IDs plus model-assigned aliases, retains closed
 sessions and offers older instance archives. Archives do not restore connections.
 Browser input is read-only until explicitly unlocked and returns to read-only on
 refresh/reconnection. Unlocking never overrides session `read_only`. Human writes
 share core write limits and receipts, and are never automatically retried.
 Terminal scrollback defaults to 5000 lines, adjustable and saved in that browser;
-this does not limit persistent disk history or change MCP output cursors. Tasks
-appear in a secondary sidebar, ordered by creation. Output follows the viewport
-only at the bottom. A new task is selected automatically only while viewing the
-latest task at its bottom; reading older output/tasks keeps the current selection.
-Pending input/receipts pause automatic switching; switching restores read-only.
-A read-only session overview can display several commands and their outputs together.
-It pages at most 20 task previews, caps each expanded terminal at 12 rows and divides
-its scrollback budget across previews. Decoder/ANSI state stays task-local; PTY tasks
-link to their individual terminals. Reading older content holds position; at the tail,
-new output/tasks follow automatically. Overview observation never sends terminal input.
+this does not limit persistent disk history or change MCP output cursors. SSH exec opens a continuous session view by default, showing commands, output and
+completion in event order. It has no 20-task pagination or per-task row quota; all
+commands share the session scrollback budget. New tasks do not switch this view.
+Task details are collapsed by default; open one task for independent ANSI/PTY state
+and interactive input, or return to the continuous session view. Output follows
+only while at the bottom; scrolling up preserves position. In an individual task
+view, automatic switching follows new tasks only from the latest task at its tail,
+with no pending input/receipts. Switching restores read-only. Observation never
+sends terminal input. WebGL rendering is preferred, with DOM fallback on failure;
+Ctrl+F searches currently loaded scrollback, not the full disk archive. Desktop
+Chromium-based browsers are supported. Dark/light/system theme is browser-local.
 
 User preferences live in `~/.keepsess.toml`; Agent launch arguments need only
 `serve`. The first process starts a shared per-user daemon, and all other processes
@@ -43,23 +45,23 @@ refresh/reconnect/switch. The daemon stays alive after Agents exit.
 After the first successful connect, give the current Agent instance a work label:
 `sess_configure({"instance_name":"short task label"})`, without session/settings.
 Labels support 1..64 printable Unicode characters and do not change instance_id.
+Humans can independently set or clear a persistent display name in the instance
+selector, including archives; a human name takes precedence over the AI label.
+Instances without session records are hidden; failed connections count as records.
 
-Default tools/list exposes 18 daily tools, including sess_send_escaped for exact
-byte control with no appended line ending; include CR/LF explicitly when needed.
-sess_sendline_escaped remains in the full profile for compatibility. Use
-`sess_configure({"tool_profile":"full"})` to expose all 30 when tunnels, escaped
-sendline, raw history, alias or retention tools are needed; standard restores the daily
-set. The server sends tools/list_changed. Existing tool calls remain compatible,
-and sess_help still covers the complete API. Inspect effective session settings
-using `sess_configure({"session":"s1"})` with no patch.
-`[tools] profile="standard"|"full"` sets the startup default for each Agent.
+All 30 tools are always discoverable through tools/list, with complete parameter
+documentation; no discovery profile or expansion call is needed. sess_send_escaped
+decodes once and appends no line ending; include CR/LF explicitly when needed.
+sess_sendline_escaped decodes once and appends one configured line ending.
+Inspect effective session settings using sess_configure({"session":"s1"})
+with no patch, or sess_get_config. Legacy [tools] profile settings are ignored.
 
 History defaults to `~/.keepsess/history` (an existing legacy default directory is
 reused), with private instance directories/files. Commands, raw terminal input
 (including passwords) and output are retained; structured connection credentials
 and env fields are excluded. Never publish history, `.keepsess.toml`, or the daemon
 runtime token. `[history] dir` changes location; `max_bytes` enables a capacity
-guard (0 means no automatic cleanup). Recording failures/gaps do not block remote
+guard (0 means unlimited disk capacity; the guard never automatically deletes archives). Recording failures/gaps do not block remote
 connections. `[web] enabled=false` disables registration/history for this Agent.
 Web/history changes need `keepsess daemon stop`; live Agents may restart it and
 register again. Changing history.dir requires restarting existing Agents too.
@@ -91,11 +93,11 @@ content-addressed directory, so the original download can be moved. It does not 
 or approve/trust MCP tools. Reload the client and use its own trust flow. Generic JSON clients
 must support the selected skill discovery directory. Unsupported TOML layouts or conflicting
 keepsess entries fail before writes. Never publish config backups that may contain secrets.
-The standard profile discovers 18 tools; the full profile discovers all 30 through MCP tools/list, not individual installation.
+All 30 tools are discovered through MCP tools/list, not individual installation.
 
 ## Progressive built-in help
 
-Tools/list uses concise descriptions and advertises only applicable settings, retaining types, defaults, target exclusivity and essential safety rules. Routine calls do not require loading this full skill or invoking help. For uncertain details use sess_help(): no arguments returns a compact directory; topic="sess_exec" returns one tool's full schema; topic="sess_exec", parameter="env" returns one parameter. Semantic topics: connections, tasks, timeouts, ssh_jumps, naming, exec_environment, interactive, read_only, output, configuration. Configuration fields can be queried with topic="configuration", parameter="line_end".
+Tools/list includes complete tool and applicable parameter descriptions, including nested fields, defaults, ranges, target exclusivity, escaping and execution boundaries. Routine calls do not require loading this full skill or invoking help. For uncertain details use sess_help(): no arguments returns a compact directory; topic="sess_exec" returns one tool's full schema; topic="sess_exec", parameter="env" returns one parameter. Semantic topics: connections, tasks, timeouts, ssh_jumps, naming, exec_environment, interactive, read_only, output, configuration. Configuration fields can be queried with topic="configuration", parameter="line_end".
 
 Use query="RPC 超时" or query="跳板 telnet" for built-in keyword/full-text search (English/Chinese aliases). Default 3 results, limit 1..5, snippets about220 characters; expand the returned topic/parameter rather than requesting all help. Query max512 bytes/16 terms; query is exclusive with topic/parameter, and parameter requires topic. No match returns matched=false. Help reads static built-in documentation only, never endpoint output, credentials, files or network; it changes no session state. Full help and defaults come from the runtime definitions. Older ignored per-operation config overrides remain accepted, but are omitted from discovery/help; meaningful options stay available at the top level. Numeric settings still accept bounded arithmetic strings.
 
@@ -103,7 +105,7 @@ Use query="RPC 超时" or query="跳板 telnet" for built-in keyword/full-text s
 
 Session/task names: connect and exec accept optional name. Names are mutable aliases; results keep stable sN/taskN IDs plus name. References accept either ID or current alias. sess_rename(session,name) and sess_task_rename(handle,name) change aliases without reconnecting or restarting; old aliases stop resolving. Names are 1..64 ASCII alphanumeric/._-, start alphanumeric, and may not use reserved sN/taskN forms. Session names and global task names have separate namespaces; duplicates (including concurrent starts) are rejected before application input. Names expire with retained records and can be reused; prefer stable IDs for long workflows.
 
-Each process has a short random instance_id, shown in initialize._meta, connect/reconnect, lists and unknown-handle errors. No expected_instance_id parameter or mandatory check is needed. Missing records may mean closure/expiry or an instance change: inspect lists, never replay commands/login inputs. No automatic recovery or sess_expect tool.
+Each process has a short random Bitcoin Base58 instance_id (legacy archive IDs remain readable), shown in initialize._meta, connect/reconnect, lists and unknown-handle errors. No expected_instance_id parameter or mandatory check is needed. Missing records may mean closure/expiry or an instance change: inspect lists, never replay commands/login inputs. No automatic recovery or sess_expect tool.
 
 All tool input parameters are top-level, including timeouts, encoding, line_end, output limits and read_only. Never wrap settings in config. Connect/configure set session defaults; operation-level settings only affect that call. Connection-only/read_only settings remain restricted to connect/configure. Legacy nested config is accepted only for compatibility; top-level values take precedence.
 
@@ -126,7 +128,7 @@ host_key, known_hosts, default skip. insecure=false alone does not enable verifi
 {"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
 ```
 
-For SSH or Telnet targets, optional top-level ssh_jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Order example: local -> ssh_jumps[0] -> ssh_jumps[1] -> target. Errors identify 1-based hop_index (target is hop-count+1), host/port, from_host (logical configured previous host, first is local), stage and target. direct-tcpip supports SSH/Telnet stream; existing -L listener addresses can also be connected directly. No new listener-management tools. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. protocol selects the final target: SSH supports exec/stream; Telnet requires stream and uses the internal Telnet codec. The old jumps parameter is rejected. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Only SSH targets expose final target peer identity; Telnet targets never report a hop as their peer; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the chain to the SSH target or, for Telnet, the final SSH jump; this does not prove Telnet login/application readiness; TCP settings/backpressure apply to the first TCP socket.
+For SSH or Telnet targets, optional top-level ssh_jumps is an ordered array of up to 8 SSH hops, nearest first. Each hop takes host, username, password and/or keyfile; port defaults 22. key_passphrase, host_key, known_hosts and insecure work independently with the same verification precedence as the target. No inherited credentials or host-key policies. Order example: local -> ssh_jumps[0] -> ssh_jumps[1] -> target. Errors identify 1-based hop_index (target is hop-count+1), host/port, from_host (logical configured previous host, first is local), stage and target. direct-tcpip supports SSH exec/stream and Telnet stream; existing forwarded listener addresses can also be connected directly. The separate sess_tunnel_* tools manage listeners on an established SSH session. Requires direct-tcpip forwarding on every jump; no remote shell ssh commands. protocol selects the final target: SSH supports exec/stream; Telnet requires stream and uses the internal Telnet codec. The old jumps parameter is rejected. One connect_timeout_ms covers the entire chain, including forwarding/authentication. Failure/cancellation closes the chain, without retries. Explicit reconnect privately reuses all hops/current configuration; close releases them. Only SSH targets expose final target peer identity; Telnet targets never report a hop as their peer; audit recursively redacts hop passwords/passphrases. SSH keepalive traverses the chain to the SSH target or, for Telnet, the final SSH jump; this does not prove Telnet login/application readiness; TCP settings/backpressure apply to the first TCP socket.
 
 Example sess_connect:
 ```json
@@ -474,6 +476,11 @@ was closed/expired. Inspect remote state before retrying side effects.
 
 ## File transfer and forwarding
 
-Use sess_get_file(session,src,dst?) / sess_put_file(session,src,dst) for binary files, backend auto/sftp/scp/exec. Local means the keepsess host; omitted download dst returns an absolute temporary path. Uploads stage beside the destination; failed/unknown operations may leave temporary_path. Never replay automatically. overwrite defaults false; no recursion/resume; 110s budget.
+Use sess_get_file(session,src,dst?) / sess_put_file(session,src,dst) on existing SSH exec/stream connections (including jumps) for binary files, backend auto/sftp/scp/exec. Auto probes backend availability only; a started transfer is never retried. Transfers do not use PTY or the Bash login wrapper. Local means the keepsess host; omitted download dst returns an absolute temporary path. Uploads stage beside the destination; failed/unknown operations may leave temporary_path. Never replay automatically. overwrite defaults false; no recursion/resume; 110s budget.
 
-Use sess_tunnel_open(session,type,bind_host?,bind_port?,target_host?,target_port?) for local/remote/dynamic/remote_dynamic TCP forwarding. Bind defaults loopback and port 0. Local/dynamic targets connect from final SSH server; remote/remote_dynamic from keepsess host. Dynamic is SOCKS5 CONNECT only. Returned listen_address is usable by Python on the listening host. sess_tunnel_list(session) inspects; sess_tunnel_close(session,handle) releases listener/connections. Disconnect/reconnect closes tunnels without restoring them. read_only blocks uploads/new tunnels, not existing tunnel traffic. See sess_help for full parameters.
+Use sess_tunnel_open(session,type,bind_host?,bind_port?,target_host?,target_port?) for local/remote/dynamic/remote_dynamic TCP forwarding. Bind defaults loopback and port 0. Local/dynamic targets connect from final SSH server; remote/remote_dynamic from keepsess host. Dynamic is SOCKS5 CONNECT only. Returned listen_address is usable by Python on the listening host. sess_tunnel_list(session) inspects; sess_tunnel_close(session,handle) releases listener/connections. Disconnect/reconnect closes tunnels without restoring them. read_only blocks uploads/new tunnels, not downloads or existing tunnel traffic. Limits are 16 listeners/session, 64 globally and 64 accepted sockets/listener. Tunnel handles are separate from exec task handles. See sess_help for full parameters.
+
+Use `keepsess daemon upgrade` after installing a new binary to restart observation
+with that binary; it does not download updates or restart Agents/remote connections.
+Daemon v2 uses Protobuf with capability negotiation; old v1 Agents need a separately
+arranged restart. Lost input receipts remain unknown and are never replayed.

@@ -1,8 +1,8 @@
 # 0.3 接口迁移与现场反馈
 
-当前可调用的 22 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
+当前可调用的 30 个工具和完整参数以 [README](../README.md) 与 [skill](../skills/keepsess/SKILL.md) 为准。下文保留旧版本现场分析，旧工具名、input_id、wait 等不是 0.3 的调用规范。
 
-0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode 及其他顶层配置参数；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。普通 stream 空闲回收独立为 30min，可禁用。
+0.3 将 SSH exec 与双向 stream 分开，connect 使用 host/port/username/keyfile/mode 及其他顶层配置参数；配置原子更新，单次覆盖只影响该调用。read_idle_timeout_ms 默认 **500ms**，总读取默认 30000ms；正常读取超时不关闭 transport。无活动调用且无活跃任务的会话默认 2h 回收，session_idle_timeout_ms=0 可禁用；exec 无无输出静默保护。
 
 输入提供 raw/escaped 和是否追加 line_end 的四种组合。escaped 显式处理模型经过 agent 承载的可见转义，编码文字与直接字节区分；不把错误字节简单归因于模型不了解 JSON。输入和输出不建立关联，不再接受 input_id，也不自动重发。使用 sent/not_sent/unknown 和已确认写入字节数判断是否可能已执行。
 
@@ -20,7 +20,9 @@ Linux 支持真实 OS TCP 队列阈值；Windows 显式报告不支持该查询�
 
 ---
 
-## 历史分析（0.1 / 0.2）
+## 历史分析（0.1 / 0.2，仅作旧版故障记录）
+
+以下“更新”“建议”“新部署”等措辞均对应当时版本，不是当前调用规范。input_id/input_seq、旧工具名、30min 空闲及后台 exec 静默保护已过时；当前以本文开头和 [使用参考](usage.md) 为准，禁止照抄旧版复测调用。
 
 # 网络设备现场反馈复盘
 
