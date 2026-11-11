@@ -79,6 +79,8 @@ type Request struct {
 	Config        ConfigPatch       `json:"config,omitempty"`
 	Lines         int               `json:"lines,omitempty"`
 	Offset        *int64            `json:"offset,omitempty"`
+	Columns       int               `json:"columns,omitempty"`
+	Rows          int               `json:"rows,omitempty"`
 }
 
 // PeerIdentity is handshake metadata, emitted only on connect/reconnect.
@@ -131,6 +133,7 @@ type Result struct {
 	QueuedBytes        *int          `json:"queued_bytes,omitempty"`
 }
 type Session struct {
+	origin string // Internal Web task attribution, never inferred from command text.
 	events EventSink
 	epoch  uint64
 
@@ -346,13 +349,14 @@ func (s *Session) signal() {
 	default:
 	}
 }
-func (s *Session) Write(p []byte) (int, error) {
+func (s *Session) Write(p []byte) (int, error) { return s.writeOutput(p, "") }
+func (s *Session) writeOutput(p []byte, source string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.disposed {
 		return len(p), nil
 	}
-	s.recordLocked("output", p, "", "", nil)
+	s.recordSourceLocked("output", p, "", "", nil, source)
 	s.last = time.Now()
 	s.total += int64(len(p))
 	if len(p) >= HistoryLimit {

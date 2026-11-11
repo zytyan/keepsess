@@ -17,14 +17,12 @@ const assert=require('node:assert/strict');
   await page.evaluate(()=>new Promise(r=>terminal.write('\x1b[6n',r)));assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='input').length),0);
   await control('/create',{name:'long'});await contains('long initial line 099');
   for(let i=0;i<22;i++)await control('/create',{name:'done-'+String(i).padStart(2,'0')});
-  await contains('done-21');await contains('short-first initial line 001');assert.equal(await page.locator('.overview-card').count(),0);assert.equal(await page.evaluate(()=>terminal.options.scrollback),5000);
+  await contains('done-21').catch(async e=>{console.log(await text());console.log(await page.locator('#warning').textContent());throw e;});await contains('short-first initial line 001');assert.equal(await page.locator('.overview-card').count(),0);assert.equal(await page.evaluate(()=>terminal.options.scrollback),5000);
   await page.reload();await ready();await contains('done-21');await contains('short-first initial line 001');
-  await page.locator('#scrollback').fill('100');await page.locator('#apply').click();
+  await page.locator('#appearance-open').click();await page.locator('#scrollback').fill('100');await page.locator('#apply').click();await page.locator('#appearance-close').click();
   await control('/append',{name:'long',tag:'bounded',lines:200});await contains('bounded 199');assert(await page.evaluate(()=>terminal.buffer.active.length<=terminal.rows+100));
   const pty=await control('/create',{name:'short-pty',pty:true});await contains('short-pty initial line 001');
-  await page.locator('#task-details summary').click();await page.locator(`#tasks button[data-handle="${pty.handle}"]`).click();await page.waitForFunction(id=>handle===id&&!replaying,pty.handle);
-  await page.locator('#unlock').click();await page.waitForFunction(()=>unlocked);assert.equal(await page.evaluate(()=>terminal.options.disableStdin),false);
-  await page.locator('#overview-toggle').click();await ready();assert.equal(await page.evaluate(()=>terminal.options.disableStdin),true);
-  assert.deepEqual(errors,[]);console.log('continuous output passed: independent decoders, >20 commands, full output replay, total scrollback bound, PTY detail');
+  await page.locator('#history-toggle').click();await page.locator(`#tasks button[data-handle="${pty.handle}"]`).click();await ready();assert.equal(await page.evaluate(()=>handle),'');assert.equal(await page.evaluate(()=>terminal.options.disableStdin),true);
+  assert.deepEqual(errors,[]);console.log('continuous output passed: independent decoders, >20 commands, full output replay, total scrollback bound, PTY mixed projection');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

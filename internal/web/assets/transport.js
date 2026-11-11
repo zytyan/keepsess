@@ -3,6 +3,7 @@
 const wireText=new TextDecoder();
 function outputMessage(raw){
  const b=raw instanceof Uint8Array?raw:new Uint8Array(raw);
+ if(b[0]===0)return JSON.parse(wireText.decode(b.subarray(1)));
  if(b.length<20||b[0]!==1||b[17]>2)throw new Error('无效输出帧');
  const v=new DataView(b.buffer,b.byteOffset,b.byteLength),seq=Number(v.getBigUint64(1)),epoch=Number(v.getBigUint64(9));
  const end=20+b[18]+b[19];if(end>b.length||!Number.isSafeInteger(seq)||!Number.isSafeInteger(epoch))throw new Error('无效输出游标');

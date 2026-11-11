@@ -18,6 +18,8 @@ message Request {
   map<string, bytes> config = 13;
   int64 lines = 14;
   optional int64 offset = 15;
+  int64 columns = 16;
+  int64 rows = 17;
 }
 message Result {
   string name = 1;
@@ -90,6 +92,8 @@ message Event {
   string cwd = 17;
   Result status = 18;
   Result receipt = 19;
+  string source = 20;
+  string origin = 21;
 }
 message History {
   bool recording = 1;

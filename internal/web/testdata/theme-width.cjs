@@ -45,7 +45,7 @@ module.exports=async function(page){
  assert(['webgl','dom'].includes(renderer));
  await page.evaluate(()=>{document.getElementById('search-text').value='out';searchTerminal();});
  assert(await page.evaluate(()=>terminal.getSelection().includes('out')),'official search addon must select a retained match');
- await page.locator('#search-clear').click();
+ await page.locator('#search-toggle').click();await page.locator('#search-clear').click();await page.locator('#search-toggle').click();
  assert.equal(await page.evaluate(()=>terminal.getSelection()),'');
  if(renderer==='webgl'){
   assert(await page.locator('#terminal canvas').count()>0);

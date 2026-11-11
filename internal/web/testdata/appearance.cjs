@@ -44,7 +44,7 @@ const paint=require('./highlight-paint.cjs');
   await page.evaluate(()=>new Promise(r=>terminal.write('\x1b[?1049hERROR',r)));
   await page.waitForTimeout(300);assert.equal(await page.evaluate(()=>[...terminalHighlights].find(h=>h.term===terminal).decorations.length),0);
   await page.evaluate(async()=>{await new Promise(r=>terminal.write('\x1b[?1049l',r));applyAppearance(appearanceDefaults);});
-  await page.locator('#appearance-open').click();await page.locator('#highlight-apply').click();await page.waitForFunction(()=>[...terminalHighlights].some(h=>h.term===previewTerminal&&h.decorations.length>0));
+  await page.locator('#appearance-open').click();await page.locator('[data-settings=highlight]').click();await page.locator('#highlight-apply').click();await page.waitForFunction(()=>[...terminalHighlights].some(h=>h.term===previewTerminal&&h.decorations.length>0));
   await page.locator('#highlight-add').click();const row=page.locator('.highlight-rule').last();await row.locator('[data-field="name"]').fill('自定义');await row.locator('[data-field="pattern"]').fill('中文测试');
   await page.locator('#highlight-save').click();await page.waitForFunction(()=>document.getElementById('highlight-status').textContent.includes('已保存'));
   await page.setViewportSize({width:1000,height:500});

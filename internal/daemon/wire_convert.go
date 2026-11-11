@@ -10,6 +10,8 @@ import (
 
 func encodeRequest(v core.Request) *wire.Request {
 	w := &wire.Request{}
+	w.Columns = int64(v.Columns)
+	w.Rows = int64(v.Rows)
 	w.Name = v.Name
 	if v.Login != nil {
 		x := bool(*v.Login)
@@ -44,6 +46,8 @@ func decodeRequest(w *wire.Request) core.Request {
 	if w == nil {
 		return v
 	}
+	v.Columns = int(w.Columns)
+	v.Rows = int(w.Rows)
 	v.Name = w.Name
 	if w.Login != nil {
 		x := bool(*w.Login)
@@ -238,6 +242,8 @@ func decodeSignalResult(w *wire.SignalResult) core.SignalResult {
 }
 func encodeEvent(v core.Event) *wire.Event {
 	w := &wire.Event{}
+	w.Source = v.Source
+	w.Origin = v.Origin
 	w.Instance = v.Instance
 	w.Seq = v.Seq
 	w.Time = v.Time.Format(time.RFC3339Nano)
@@ -266,6 +272,8 @@ func decodeEvent(w *wire.Event) core.Event {
 	if w == nil {
 		return v
 	}
+	v.Source = w.Source
+	v.Origin = w.Origin
 	v.Instance = w.Instance
 	v.Seq = w.Seq
 	v.Time, _ = time.Parse(time.RFC3339Nano, w.Time)

@@ -180,6 +180,8 @@ func (c *Client) attach(r Runtime, onReady func()) error {
 				switch req.Kind {
 				case "task_list":
 					reply.Tasks, err = c.manager.TaskList(req.Request.Session)
+				case "web_shell", "web_resize", "web_end":
+					reply.Result, err = c.manager.WebOperate(callCtx, req.Kind, req.Request)
 				case "exec", "send_text":
 					reply.Result, err = c.manager.Operate(callCtx, req.Kind, req.Request)
 				default:

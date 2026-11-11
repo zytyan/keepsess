@@ -215,8 +215,9 @@ let previewTerminal=null,appearanceOriginal=null;
 async function initAppearance(){
  try{
   const response=await fetch('api/appearance');if(!response.ok)throw Error(await response.text());const data=await response.json();
-  appearanceDefaults=data.defaults;appearanceWritable=data.writable;applyAppearance(data.appearance);
- }catch(e){highlightNotice('无法加载高亮配置：'+e.message);}
+  appearanceDefaults=data.defaults;appearanceWritable=true;applyAppearance(preferences.appearance||data.appearance);
+ if(!preferences.appearance){try{savePreferences({appearance:data.appearance});}catch(e){highlightNotice(e.message);}}
+ }catch(e){appearanceWritable=true;if(preferences.appearance)applyAppearance(preferences.appearance);else highlightNotice('无法加载默认高亮配置：'+e.message);}
  const el=id=>document.getElementById(id);
  el('appearance-open').onclick=()=>{
   appearanceOriginal=cloneAppearance(appearance);renderAppearanceForm(appearance);el('appearance-dialog').showModal();
@@ -225,14 +226,12 @@ async function initAppearance(){
  };
  el('highlight-add').onclick=()=>{try{const a=readAppearanceForm();if(a.rules.length>=32)throw Error('最多 32 条规则。');a.rules.push({name:'自定义',pattern:'关键词',enabled:true,regex:false,case_sensitive:false,override_ansi:false,foreground:'#ffd479',background:''});renderAppearanceForm(a);}catch(e){highlightNotice(e.message);}};
  el('highlight-defaults').onclick=()=>renderAppearanceForm(cloneAppearance(appearanceDefaults));
- el('highlight-apply').onclick=()=>{try{applyAppearance(readAppearanceForm());highlightNotice('预览已应用；关闭窗口将撤销，保存后对所有浏览器生效。');}catch(e){highlightNotice(e.message);}};
+ el('highlight-apply').onclick=()=>{try{applyAppearance(readAppearanceForm());highlightNotice('预览已应用；关闭窗口将撤销，保存到当前浏览器后保留。');}catch(e){highlightNotice(e.message);}};
  el('highlight-save').onclick=async()=>{
   try{const value=readAppearanceForm();el('highlight-save').disabled=true;await validateHighlightRules(value.rules);
-   const response=await fetch('api/appearance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});if(!response.ok)throw Error(await response.text());const data=await response.json();applyAppearance(data.appearance);appearanceOriginal=cloneAppearance(appearance);highlightNotice('已保存至 ~/.keepsess.toml，无需重启。');
+   savePreferences({appearance:value});applyAppearance(value);appearanceOriginal=cloneAppearance(appearance);highlightNotice('已保存到当前浏览器。');
   }catch(e){highlightNotice('保存失败：'+e.message);}finally{el('highlight-save').disabled=!appearanceWritable;}
  };
  el('appearance-close').onclick=()=>el('appearance-dialog').close();
  el('appearance-dialog').addEventListener('close',()=>{if(appearanceOriginal)applyAppearance(appearanceOriginal);});
- // Observe shared defaults in other tabs without disturbing an open editor.
- setInterval(async()=>{if(el('appearance-dialog').open)return;try{const r=await fetch('api/appearance');if(!r.ok)return;const d=await r.json();if(JSON.stringify(d.appearance)!==JSON.stringify(appearance))applyAppearance(d.appearance);}catch(_){}},10000);
 }

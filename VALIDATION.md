@@ -316,3 +316,13 @@ Go 1.22.1 全量 race 与 SESSMCP_LONG_TEST=1 长测试通过：core 包 112.674
 - 标准集恢复 sess_send_escaped（18 个工具），保持 sess_sendline_escaped 仅在 full 展示；运行时完整 30 工具接口与线上字节语义保持。
 - MCP/CLI/settings 回归通过；验证 standard → full → standard 后，send_escaped 可发现而 sendline_escaped 继续隐藏，既有接口仍可调用。
 - 初始化说明、配置模板、帮助与内置/分发 skill 同步更新：转义 send 不追加行尾，CR/LF 由调用者显式指定。
+
+## 2026-11-12：紧凑 Web 工作台与独立人类终端
+
+- 主观察页移除命令输入和单任务窗口；连续输出增加来源侧栏与来源/输出流/文本过滤，命令历史默认收起。只投影 ANSI 颜色，原始字节继续保留在历史，MCP 双流合并行为保持。
+- 独立浏览器标签页使用复用连接上的 Bash/PTY；明确启动、重新解锁、恢复已有任务、窗口尺寸更新和 TERM 请求均已验证。关闭标签页不结束 shell，不自动重发输入。只读拒绝与 resize 取消关闭共享 transport、其他任务结果未知有独立测试。
+- 浏览器设置统一 localStorage，支持字号、主题、滚动历史、高亮、过滤、布局与临时回显；JSON 导入导出采用校验后整体应用，网页不回写服务器高亮配置。
+- Go 1.22.1 的 `go test ./...`、`go test -race ./... -count=1 -timeout 4m` 和 `go vet ./...` 通过。纯 Go、CGO_ENABLED=0 的 linux/amd64、linux/arm64、windows/amd64 编译通过。
+- Chromium 验证来源分流、UTF-8 分包、文本分包过滤、设置导入导出、独立终端恢复、归档、HTTPS 反代、stream 输入、多实例 daemon、尾部跟随、20 条以上命令与 12000 条历史回放。WebGL 与 DOM 回退高亮、中文字体、搜索、右键复制及 50000 行高亮预算回归通过；测试基于模拟 SSH 端点，未声称实测特定厂商设备。
+- Buf FILE 同时对冻结基线与改动前 main 的 Protobuf descriptor 比较通过；新增字段不复用编号，人类终端操作使用独立协商能力。MCP 30 工具、Python 生成方法与两份分发 skill 的接口保持不变。
+- 截图使用无真实凭据的 SSH 模拟数据，生成在工作区外的截图目录；不提交本地历史、配置、审计文件或令牌。

@@ -55,5 +55,5 @@ function searchTerminal(backwards=false){
 document.getElementById('terminal-search').addEventListener('submit',event=>{event.preventDefault();searchTerminal();});
 document.getElementById('search-prev').onclick=()=>searchTerminal(true);
 document.getElementById('search-clear').onclick=()=>{document.getElementById('search-text').value='';searchTerminal();};
-document.getElementById('search-text').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.shiftKey){event.preventDefault();searchTerminal(true);}if(event.key==='Escape'){document.getElementById('search-clear').click();terminal?.focus();}});
-document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&!document.querySelector('dialog[open]')){event.preventDefault();document.getElementById('search-text').focus();document.getElementById('search-text').select();}});
+document.getElementById('search-text').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.shiftKey){event.preventDefault();searchTerminal(true);}if(event.key==='Escape'){document.getElementById('search-clear').click();document.getElementById('terminal-search').hidden=true;terminal?.focus();}});
+document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&!document.querySelector('dialog[open]')){event.preventDefault();document.getElementById('terminal-search').hidden=false;document.getElementById('search-text').focus();document.getElementById('search-text').select();}});

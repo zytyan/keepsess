@@ -288,6 +288,11 @@ func (m *Manager) startTask(ctx context.Context, s *Session, r Request, c Config
 			displayCwd = "默认目录（未探测）"
 		}
 	}
+	if ctx.Value(webTerminalKey{}) == true {
+		t.out.mu.Lock()
+		t.out.origin = "human"
+		t.out.mu.Unlock()
+	}
 	t.out.record("command", nil, r.Command, displayCwd, nil)
 	v = t.start(ctx, string(b), c)
 	t.out.record("receipt", nil, "", "", &v)

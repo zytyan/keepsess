@@ -23,6 +23,11 @@ func outputFrame(e core.Event) ([]byte, error) {
 	if len(e.Session) > 255 || len(e.Handle) > 255 || len(e.Data) > outputBatchBytes {
 		return nil, errors.New("invalid output frame size")
 	}
+	// JSON control frames already support additive event metadata.
+	if e.Source != "" || e.Origin != "" {
+		b, err := json.Marshal(map[string]any{"type": "event", "event": e})
+		return append([]byte{0}, b...), err
+	}
 	encoding := byte(0)
 	switch e.Encoding {
 	case "", "utf-8":
@@ -64,13 +69,13 @@ func (b *outputBatch) flush() error {
 }
 func (b *outputBatch) add(e core.Event) error {
 	p := &b.event
-	if p.Kind != "" && (p.Session != e.Session || p.Handle != e.Handle || p.Epoch != e.Epoch || p.Encoding != e.Encoding || len(p.Data)+len(e.Data) > outputBatchBytes) {
+	if p.Kind != "" && (p.Session != e.Session || p.Handle != e.Handle || p.Epoch != e.Epoch || p.Encoding != e.Encoding || p.Source != e.Source || p.Origin != e.Origin || len(p.Data)+len(e.Data) > outputBatchBytes) {
 		if err := b.flush(); err != nil {
 			return err
 		}
 	}
 	if b.event.Kind == "" {
-		b.event = core.Event{Kind: "output", Session: e.Session, Handle: e.Handle, Epoch: e.Epoch, Encoding: e.Encoding}
+		b.event = core.Event{Kind: "output", Session: e.Session, Handle: e.Handle, Epoch: e.Epoch, Encoding: e.Encoding, Source: e.Source, Origin: e.Origin}
 	}
 	b.event.Seq = e.Seq
 	b.event.Data = append(b.event.Data, e.Data...)
@@ -213,6 +218,17 @@ func acceptsGzip(header string) bool {
 // EncodeOutput and DecodeOutput also serve the authenticated local relay.
 func EncodeOutput(e core.Event) ([]byte, error) { return outputFrame(e) }
 func DecodeOutput(b []byte) (core.Event, error) {
+	if len(b) > 0 && b[0] == 0 {
+		var v struct {
+			Type  string     `json:"type"`
+			Event core.Event `json:"event"`
+		}
+		err := json.Unmarshal(b[1:], &v)
+		if err != nil || v.Type != "event" || v.Event.Kind != "output" || len(v.Event.Data) > outputBatchBytes {
+			return core.Event{}, errors.New("invalid output frame")
+		}
+		return v.Event, nil
+	}
 	if len(b) < 20 || b[0] != 1 || b[17] > 2 || len(b) > outputBatchBytes+530 {
 		return core.Event{}, errors.New("invalid output frame")
 	}

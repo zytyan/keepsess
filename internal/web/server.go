@@ -128,6 +128,18 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 	mux.HandleFunc(o.BasePath+"api/catalog", s.catalog)
 	mux.HandleFunc(o.BasePath+"api/history", s.read)
 	mux.HandleFunc(o.BasePath+"api/replay", s.replay)
+	mux.HandleFunc(o.BasePath+"api/web-capabilities", func(w http.ResponseWriter, r *http.Request) {
+		b, err := s.backend(r)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		caps := []string{}
+		if m, ok := b.Manager.(interface{ WebCapabilities() []string }); ok {
+			caps = m.WebCapabilities()
+		}
+		respond(w, map[string]any{"capabilities": caps})
+	})
 	mux.HandleFunc(o.BasePath+"api/info", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Info()) })
 	mux.HandleFunc(o.BasePath+"ws", s.socket)
 	mux.Handle(o.BasePath, http.StripPrefix(o.BasePath, fontCache(files)))
@@ -352,6 +364,8 @@ type request struct {
 	Interactive bool   `json:"interactive"`
 	PTY         bool   `json:"pty"`
 	Enabled     bool   `json:"enabled"`
+	Columns     int    `json:"columns"`
+	Rows        int    `json:"rows"`
 }
 
 func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
@@ -616,6 +630,23 @@ func operateManager(parent context.Context, manager Manager, req request) (core.
 		if !found {
 			return core.Result{}, errors.New("task not retained in this session; nothing sent")
 		}
+	}
+	if req.Type == "web_shell" || req.Type == "web_resize" || req.Type == "web_end" {
+		if req.Command != "" || req.Data != "" || req.Cwd != "" || req.Interactive || req.PTY {
+			return core.Result{InputState: "not_sent"}, errors.New("unexpected terminal options")
+		}
+		if (req.Type == "web_shell" && req.Handle != "") || (req.Type != "web_shell" && req.Handle == "") {
+			return core.Result{InputState: "not_sent"}, errors.New("invalid terminal target")
+		}
+		m, ok := manager.(interface {
+			WebOperate(context.Context, string, core.Request) (core.Result, error)
+		})
+		if !ok {
+			return core.Result{InputState: "not_sent"}, errors.New("Agent does not support human terminals")
+		}
+		ctx, cancel := context.WithTimeout(parent, core.CallLimit)
+		defer cancel()
+		return m.WebOperate(ctx, req.Type, core.Request{Session: req.Session, Handle: req.Handle, Columns: req.Columns, Rows: req.Rows})
 	}
 	no := false
 	r := core.Request{Session: req.Session, Handle: req.Handle, Data: req.Data, Command: req.Command, Cwd: req.Cwd, Interactive: req.Interactive, PTY: req.PTY, CollectOutput: &no}

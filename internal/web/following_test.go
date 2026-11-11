@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +39,7 @@ func TestBrowserAppearanceFallback(t *testing.T) {
 	runBrowserFixture(t, "appearance.cjs", "short-first")
 }
 func TestBrowserFollowing(t *testing.T) { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserWorkspace(t *testing.T) { runBrowserFixture(t, "workspace.cjs", "demo-health") }
 func TestBrowserOverview(t *testing.T)  { runBrowserFixture(t, "overview.cjs", "short-first") }
 func runBrowserFixture(t *testing.T, script, initial string) {
 	if os.Getenv("KEEPSESS_BROWSER_TEST") != "1" {
@@ -55,10 +57,61 @@ func runBrowserFixture(t *testing.T, script, initial string) {
 		}
 		return streams[name]
 	}
-	addr, _ := testutil.SSHWithExec(t, func(command string, ch ssh.Channel, _ <-chan *ssh.Request) {
+	addr, _ := testutil.SSHWithExec(t, func(command string, ch ssh.Channel, requests <-chan *ssh.Request) {
 		payload := testutil.LoginPayload(command)
 		name := payload[strings.LastIndex(payload, "\n")+1:]
+		if name == "exec bash -il" {
+			lines := make(chan string, 1)
+			go func() {
+				reader := bufio.NewReader(ch)
+				var line strings.Builder
+				for {
+					b, err := reader.ReadByte()
+					if err != nil {
+						return
+					}
+					if b == '\r' || b == '\n' {
+						select {
+						case lines <- line.String():
+							line.Reset()
+						case <-stop:
+							return
+						}
+					} else {
+						line.WriteByte(b)
+					}
+				}
+			}()
+			_, _ = io.WriteString(ch, "\x1b[32mdemo@lab\x1b[0m:~$ ")
+			for {
+				select {
+				case line := <-lines:
+					_, _ = io.WriteString(ch, line+"\r\n")
+					if strings.HasPrefix(line, "echo ") {
+						_, _ = io.WriteString(ch, strings.TrimPrefix(line, "echo ")+"\r\n")
+					}
+					if line == "pwd" {
+						_, _ = io.WriteString(ch, "/home/demo\r\n")
+					}
+					_, _ = io.WriteString(ch, "\x1b[32mdemo@lab\x1b[0m:~$ ")
+				case req, ok := <-requests:
+					if !ok {
+						return
+					}
+					if req.Type == "signal" {
+						_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
+						return
+					}
+				case <-stop:
+					return
+				}
+			}
+		}
+
 		switch name {
+		case "systemctl status keepsess":
+			_, _ = io.WriteString(ch, "● keepsess.service — Persistent session daemon\n    Loaded: loaded (/etc/systemd/system/keepsess.service; enabled)\n    Active: \x1b[32mactive (running)\x1b[0m since Thu 2026-11-12 09:41:03 SGT\n  Main PID: 2418 (keepsess)\n     Tasks: 12     Memory: 18.4M\n\nNov 12 09:41:03 lab keepsess[2418]: daemon ready · 3 sessions online\nNov 12 09:41:04 lab keepsess[2418]: SSH transport healthy\n")
+			_, _ = io.WriteString(ch.Stderr(), "WARNING: history capacity is unlimited; check available disk space\n")
 		case "pwd":
 			_, _ = io.WriteString(ch, "/srv/keepsess\n")
 		case "hostname":
@@ -104,7 +157,11 @@ func runBrowserFixture(t *testing.T, script, initial string) {
 	create := func(name string, pty bool) (core.Result, error) {
 		stream(name)
 		no := false
-		return m.Operate(context.Background(), "exec", core.Request{Session: session.Session, Name: name, Command: name, Cwd: "/srv/keepsess", Interactive: pty, PTY: pty, CollectOutput: &no})
+		command := name
+		if name == "demo-health" {
+			command = "systemctl status keepsess"
+		}
+		return m.Operate(context.Background(), "exec", core.Request{Session: session.Session, Name: name, Command: command, Cwd: "/srv/keepsess", Interactive: pty, PTY: pty, CollectOutput: &no})
 	}
 	first, err := create(initial, false)
 	if err != nil || first.Handle == "" {

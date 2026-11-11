@@ -4,9 +4,9 @@ const verifyTypography = require('./typography.cjs');
 (async()=>{
  const browser=await launch({headless:true,args:['--no-sandbox']});
  try {
-  const context=await browser.newContext({viewport:{width:1400,height:1000},ignoreHTTPSErrors:process.env.KEEPSESS_BROWSER_INSECURE_TLS_TEST==='1'});const page=await context.newPage();const errors=[];
+  const context=await browser.newContext({viewport:{width:1400,height:1000},ignoreHTTPSErrors:process.env.KEEPSESS_BROWSER_INSECURE_TLS_TEST==='1'});let page=await context.newPage();const errors=[];
   page.on('pageerror',e=>{errors.push(e.message);console.error('Page error:',e.message);});
-  await page.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
+  await context.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
   await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接')).catch(async e=>{console.error(await page.evaluate(()=>({connection:document.getElementById('connection').textContent,warning:document.getElementById('warning').textContent,status:document.getElementById('status').textContent,selected,instance,current,replaying,renderer:terminal?.keepsessRenderer})));throw e;});
   await verifyTypography(page);
   await require('./context-menu.cjs')(page);
@@ -63,27 +63,20 @@ const verifyTypography = require('./typography.cjs');
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('$ both'));
   const text=await page.evaluate(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n'));
   assert.match(text,/stdout/);assert.match(text,/stderr/);
-  assert.equal(await page.locator('#run').isDisabled(),true);
-  await page.locator('#scrollback').fill('7500');await page.locator('#apply').click();assert.equal(await page.evaluate('terminal.options.scrollback'),7500);
-  await page.reload();await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));assert.equal(await page.locator('#scrollback').inputValue(),'7500');assert.equal(await page.evaluate('terminal.options.scrollback'),7500);
-  await page.locator('#unlock').click();await page.waitForFunction(()=>document.getElementById('mode').textContent==='INPUT ENABLED');
-  // Terminal status queries are render data and must never become remote input.
-  await page.evaluate(()=>new Promise(resolve=>terminal.write('\x1b[6n',resolve)));await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').length),0);
-  await page.locator('#command').fill('exit7');await page.locator('#run').click();await page.waitForFunction(()=>document.getElementById('tasks').textContent.includes('(7)'));
-  await page.waitForFunction(()=>!operationPending);assert.equal(await page.locator('#run').isDisabled(),false); // continuous view stays unlocked
+  assert.equal(await page.locator('#run,#command,#task-sidebar').count(),0);
+  assert.equal(await page.evaluate(()=>terminal.options.disableStdin),true);
+  await page.locator('#appearance-open').click();await page.locator('#scrollback').fill('7500');await page.locator('#apply').click();await page.locator('#appearance-close').click();assert.equal(await page.evaluate('terminal.options.scrollback'),7500);
+  await page.reload();await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));assert.equal(await page.locator('#scrollback').inputValue(),'7500');
+  await page.evaluate(()=>new Promise(resolve=>terminal.write('\x1b[6n',resolve)));assert.equal(await page.evaluate(()=>sent.filter(m=>m.type==='input').length),0);
   await page.locator('.session').filter({hasText:'s2 · closed-session'}).click();await page.waitForFunction(()=>document.getElementById('title').textContent==='s2 · closed-session');assert.equal(await page.locator('#unlock').isDisabled(),true);
   await page.locator('.session').filter({hasText:'s3 · console'}).click();await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));
   await page.evaluate(async()=>{const orig=Terminal.prototype.write;Terminal.prototype.write=function(data,callback){return orig.call(this,data,()=>setTimeout(()=>callback?.(),75));};try{const previous=selectSession('s1');await new Promise(r=>setTimeout(r,25));await selectSession('s3');await previous;}finally{Terminal.prototype.write=orig;}});
   await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接'));
-  await page.locator('#unlock').click();await page.waitForFunction(()=>document.getElementById('mode').textContent==='INPUT ENABLED');
+  const popup=page.context().waitForEvent('page');await page.locator('#open-terminal').click();const observer=page;page=await popup;await page.waitForFunction(()=>typeof replaying!=='undefined'&&!replaying&&typeof socket!=='undefined'&&socket?.readyState===1);
+  await page.locator('#unlock').click();await page.waitForFunction(()=>unlocked);
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('show version');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>!operationPending&&!inputQueue.length);
   assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join('')),'show version\r');
-  assert.equal(await page.locator('.local-echo-preview').textContent(),'show version');
-  assert.equal(await page.evaluate(()=>terminal.getSelection()),'');
-  assert.equal(await page.evaluate(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('show version')),false);
-  assert.equal(await page.locator('.local-echo-preview').evaluate(el=>getComputedStyle(el).opacity),'0.45');
   // This minimal SSH simulator has no PTY line discipline; LF explicitly
   // completes its line reader after verifying raw Enter was sent as CR.
   await page.keyboard.press('Control+j');
@@ -112,12 +105,13 @@ const verifyTypography = require('./typography.cjs');
    unlocked=false;updateControls();check(text()==='','lock clears');
   });
   await page.screenshot({path:process.env.KEEPSESS_SCREENSHOT||require('node:path').join(require('node:os').tmpdir(),'keepsess-web.png'),fullPage:true});
+  await page.close();page=observer;
   await page.locator('#instance-selected').click();
   await page.getByRole('button',{name:/归档，只读/}).click();
   await page.waitForFunction(()=>document.getElementById('title').textContent==='s1 · archived-console');
   await page.waitForFunction(()=>terminal.buffer.active.getLine(0)?.translateToString().includes('archive retained'));
   await page.waitForFunction(()=>terminal.buffer.active.getLine(1)?.translateToString().includes('中文'));
   assert.equal(await page.locator('#unlock').isDisabled(),true);assert.match(await page.locator('#subtitle').innerText(),/已关闭/);
-  assert.deepEqual(errors,[]);console.log('browser acceptance passed: scrollback, persistence, readonly, replay, exec, stream input, nested path, archive replay, no parser replies');
+  assert.deepEqual(errors,[]);console.log('browser acceptance passed: compact observer, persistence, stream terminal tab, nested path, archive replay, no parser replies');
  } finally {await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

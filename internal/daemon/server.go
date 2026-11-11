@@ -456,3 +456,8 @@ func agentURL(r Runtime) (string, error) {
 	u.Scheme = "ws"
 	return u.String(), nil
 }
+
+func (p *peer) WebCapabilities() []string { return append([]string(nil), p.capabilities...) }
+func (p *peer) WebOperate(ctx context.Context, kind string, r core.Request) (core.Result, error) {
+	return p.Operate(ctx, kind, r)
+}

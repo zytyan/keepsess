@@ -9,7 +9,7 @@ import (
 )
 
 // Baseline capabilities are permanent contracts, independent of build versions.
-var capabilities = []string{"exec.v1", "send_text.v1", "task_list.v1"}
+var capabilities = []string{"exec.v1", "send_text.v1", "task_list.v1", "web_shell.v1", "web_resize.v1", "web_end.v1"}
 
 func supports(caps []string, kind string) bool {
 	for _, c := range caps {

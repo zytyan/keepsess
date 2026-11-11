@@ -2,25 +2,27 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const root = new URL('./', location.href);
+const pageQuery=new URLSearchParams(location.search),humanPage=pageQuery.get('view')==='terminal';
+let transcript=null,webCaps=[],resizeTimer=null;
+if(humanPage)document.body.classList.add('human-page');
 let serverID='',activeInstances=new Set(),instanceRefresh=null,instanceItems=[];
 let instance = '', current = '', selected = '', handle = '', socket = null;
 let unlocked = false, cursor = 0, generation = 0, replaying = false;
 let localEcho=null;
 const taskDecoders=new Map();
-function continuous(){return sessions.get(selected)?.mode==='exec'&&!handle;}
+function continuous(){return sessions.get(selected)?.mode==='exec'&&!handle&&!humanPage;}
 
 let terminal = null;
 let pipeline = Promise.resolve(), buffered = 0, operationPending = false;
 let inputQueue = "", inputTimer = null;
-let scrollVersion=0, renderedTask='';
+let scrollVersion=0;
 const sessions = new Map(), tasks = new Map();
 const renderWaiters=new Set();
 let terminalEvents=new AbortController(), replayRequest=null;
 let replayChunks=[],replaySize=0,replayProcessed=0,replayNotes='';
 const REPLAY_WRITE_SIZE=512*1024;
 function cancelRender(){for(const finish of [...renderWaiters])finish();}
-let scrollback = 5000;
-try { const n = Number(localStorage.getItem('keepsess.scrollback')); if (Number.isFinite(n) && n >= 100) scrollback = Math.min(50000, Math.floor(n)); } catch (_) {}
+let scrollback = preferences.scrollback;
 $('scrollback').value = scrollback;
 function warn(text) { $('warning').hidden = !text; $('warning').textContent = text || ''; }
 function status(text) { $('status').textContent = text; }
@@ -40,11 +42,22 @@ function updateControls() {
  $('unlock').disabled = !writable; $('unlock').textContent = unlocked && writable ? '已解锁 · 点击锁定' : '只读 · 点击解锁';
  $('unlock').classList.toggle('writable', !!(unlocked && writable));
  $('mode').textContent = unlocked && writable ? 'INPUT ENABLED' : 'READ ONLY';
- $('run').disabled = !unlocked || !writable || operationPending;
+ $('open-terminal').disabled=!active||(meta?.mode==='exec'&&!webCaps.includes('web_shell.v1'));
+ $('open-terminal').title=meta?.mode==='exec'&&!webCaps.includes('web_shell.v1')?'该 Agent 未支持独立人类终端，请升级 Agent':'在新标签页操作终端';
+ $('unlock').hidden=!humanPage;
+ $('human-toolbar').hidden=!humanPage||meta?.mode!=='exec';
+ $('echo-setting').hidden=!humanPage;
+ $('shell-start').hidden=!!handle;
+ $('shell-start').disabled=!unlocked||!writable||operationPending||!webCaps.includes('web_shell.v1');
+ $('shell-end').disabled=!handle||!unlocked||!writable||operationPending||!webCaps.includes('web_end.v1')||taskState(tasks.get(handle)||{status:{}})!=='running';
  const task=tasks.get(handle);const stdinAvailable=meta?.mode==='stream'||!!(task?.status.interactive&&task.status.stdin_open&&task.status.state==='running'&&!task.disposed);
- if (terminal) terminal.options.disableStdin = !unlocked || !writable || replaying || !stdinAvailable;
+ if (terminal) terminal.options.disableStdin = !humanPage || !unlocked || !writable || replaying || !stdinAvailable;
  if(!unlocked||!writable||replaying||!stdinAvailable)localEcho?.clear();
- $('exec').hidden = !meta || meta.mode !== 'exec';
+ $('source-gutter').hidden=!continuous();
+ $('filter-toggle').disabled=!continuous();$('filter-toggle').title=continuous()?'按命令、输出流和文本过滤':'过滤适用于 SSH exec 连续输出';
+ $('history-toggle').disabled=meta?.mode!=='exec';
+ if(!continuous())$('filter-panel').hidden=true;
+ if(humanPage&&meta?.mode==='exec'&&!webCaps.includes('web_shell.v1'))status('该 Agent 不支持独立人类终端；需在会话可关闭时升级 Agent。');
 }
 function renderSidebar() {
  $('session-list').replaceChildren();$('failed-sessions').replaceChildren(); $('count').textContent = sessions.size;
@@ -55,7 +68,7 @@ function renderSidebar() {
   const small = document.createElement('small'); small.textContent = `${e.protocol} / ${e.mode} · ${state(e)}`; b.append(strong, small); b.onclick = () => selectSession(id); const isFailed=failedSession(e);if(isFailed)failed++; $(isFailed?'failed-sessions':'session-list').append(b);
  }
  $('session-errors').hidden=failed===0;$('session-error-summary').textContent=`连接失败（${failed}）`;$('session-errors').setAttribute('aria-label',`显示连接失败的会话，共 ${failed} 个`);
- const e = sessions.get(selected); if (e) { $('title').textContent = name(e); $('subtitle').textContent = `${e.protocol.toUpperCase()} · ${e.mode} · ${state(e)}${e.read_only ? ' · 会话 read_only' : ''}${failedSession(e)&&e.status.error?' · '+e.status.error:''}`; }
+ const e = sessions.get(selected); if (e) { $('title').textContent = name(e); $('subtitle').textContent = `${e.protocol.toUpperCase()} · ${e.mode} · ${state(e)}${humanPage&&e.mode==='stream'?' · 与其他操作者共享输入':''}${e.read_only ? ' · 会话 read_only' : ''}${failedSession(e)&&e.status.error?' · '+e.status.error:''}`; }
  else if(!selected){$('title').textContent='选择一个会话';$('subtitle').textContent=failed?'展开连接失败可查看诊断记录':'暂无会话';$('empty').textContent=failed?'展开左侧“连接失败”查看记录。':'会话创建后会显示在这里。';}
  updateControls();
 }
@@ -63,18 +76,20 @@ function taskState(e) { if(e.status.warning)return 'unknown outcome'; if (instan
 function sessionTasks(){return [...tasks.values()].filter(t=>t.session===selected).sort((a,b)=>Number(a.handle.slice(4))-Number(b.handle.slice(4)));}
 function atTail(term=terminal){return !!term&&term.buffer.active.viewportY>=term.buffer.active.baseY;}
 function renderTasks() {
- const e=sessions.get(selected),show=!!e&&e.mode==='exec',position=$('tasks').scrollTop,key=instance+'/'+selected+'/'+handle;$('task-sidebar').hidden=!show;$('tasks').replaceChildren();
- $('overview-toggle').classList.toggle('active',!handle);
- const candidates=sessionTasks();$('task-count').textContent=candidates.length;$('task-session').textContent=e?name(e):'';
- if(show&&!candidates.length){const empty=document.createElement('div');empty.className='tasks-empty';empty.textContent='尚无任务';$('tasks').append(empty);}
- for(const t of candidates){
-  const b=document.createElement('button');b.className=t.handle===handle?'active':'';b.dataset.handle=t.handle;if(t.handle===handle)b.setAttribute('aria-current','true');
-  const title=document.createElement('strong');title.textContent=t.handle+(t.name?' · '+t.name:'');
-  const state=document.createElement('small'),code=t.status.exit_code;state.textContent=taskState(t)+(code!==undefined?' ('+code+')':'');
-  const command=document.createElement('span');command.className='task-command';command.textContent=t.command||'';b.title=t.command||title.textContent;b.append(title,state,command);
-  b.onclick=()=>selectSession(selected,t.handle);$('tasks').append(b);
+ const position=$('tasks').scrollTop;$('tasks').replaceChildren();
+ const candidates=sessionTasks();$('task-count').textContent=candidates.length;
+ if(!candidates.length){const empty=document.createElement('div');empty.className='tasks-empty';empty.textContent='尚无命令';$('tasks').append(empty);}
+ for(const t of [...candidates].reverse()){
+  const b=document.createElement('button');b.dataset.handle=t.handle;
+  const title=document.createElement('strong');title.textContent=t.handle+(t.origin==='human'?' · 人类终端':'')+(t.name?' · '+t.name:'');
+  const state=document.createElement('small');state.textContent=taskState(t)+(t.status.exit_code!==undefined?' · '+t.status.exit_code:'');
+  const command=document.createElement('span');command.className='task-command';command.textContent=t.command||'';b.title=t.command||t.handle;b.append(title,state,command);
+  b.onclick=()=>{if(transcript?.locate(t.handle)){try{savePreferences({history:false});}catch(e){status(e.message);}}else status('该命令不在当前显示范围；可调整过滤或滚动历史后重新载入。');};$('tasks').append(b);
  }
- $('tasks').scrollTop=position;if(show&&$('task-details').open&&key!==renderedTask)$('tasks').querySelector('[aria-current]')?.scrollIntoView({block:'nearest'});renderedTask=key;
+ $('tasks').scrollTop=position;
+ const existing=$('shell-existing'),old=existing.value;existing.replaceChildren(new Option('恢复已有终端…',''));
+ for(const t of candidates.filter(t=>t.origin==='human'))existing.add(new Option(t.handle+' · '+taskState(t),t.handle));existing.value=old;
+ if(typeof renderSourceOptions==='function')renderSourceOptions();
 }
 
 function remember(e) {
@@ -107,13 +122,15 @@ function fit() {
 function createTerminal() {
  localEcho?.dispose();localEcho=null;terminalEvents.abort();terminalEvents=new AbortController();
  if (terminal) terminal.dispose(); $('terminal').replaceChildren(); taskDecoders.clear();
- terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:14,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
+ terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:preferences.fontSize,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
  terminal.keepsessReplaying=true;
  terminal.open($('terminal')); attachTerminalRenderer(terminal); attachTerminalSearch(terminal); attachTerminalContextMenu(terminal); attachTerminalAppearance(terminal); fit();localEcho=new LocalEchoPreview(terminal);
- const owned=terminal;owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
+ const owned=terminal,ownedGeneration=generation;transcript=continuous()?new SourceTranscript(owned,text=>writeTerminalNow(text,ownedGeneration)):null;
+ owned.onResize(()=>{if(humanPage&&handle&&unlocked){clearTimeout(resizeTimer);resizeTimer=setTimeout(sendResize,150);}});
+ owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
  for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
  const queueInput = data => {
-  if (replaying || !unlocked || !liveSession() || !data) return;
+  if (!humanPage || replaying || !unlocked || !liveSession() || !data) return;
   if (sessions.get(selected)?.mode === 'exec' && !handle) return;
   if (new TextEncoder().encode(inputQueue + data).length > 65536) { status('输入缓冲已满；本次输入未发送。'); return; }
   inputQueue += data;
@@ -139,29 +156,39 @@ async function apply(e, gen, live=false) {
   if (e.kind === 'output' && e.data) {
    // Any remote bytes invalidate the whole preview, before decoding (even partial UTF-8).
    const raw=outputBytes(e.data);if(raw.length)localEcho?.clear();
-   const key=e.handle||'',old=taskDecoders.get(key);let entry=old;
+   const key=(e.handle||'')+'/'+(e.source||'unknown'),old=taskDecoders.get(key);let entry=old;
    if(!entry||entry.epoch!==e.epoch||entry.encoding!==e.encoding){
-    if(entry)await termWrite(entry.decoder.decode(),gen);
+    if(entry){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,e);else await termWrite(tail,gen);}
     if(gen!==generation)return;
     let d;try{d=new TextDecoder(e.encoding==='shift-jis'?'shift_jis':e.encoding||'utf-8');}catch(_){d=new TextDecoder();}
     entry={decoder:d,epoch:e.epoch,encoding:e.encoding};taskDecoders.set(key,entry);
    }
-   await termWrite(entry.decoder.decode(raw,{stream:true}),gen);
-  } else if (e.kind === 'command') { await termWrite(`\r\n[${e.session} ${e.handle} ${e.cwd || '~'}] $ ${e.command}\r\n`,gen); }
+   const decoded=entry.decoder.decode(raw,{stream:true});
+   if(transcript)await transcript.append(decoded,e);else await termWrite(decoded,gen);
+  } else if (e.kind === 'command') { if(transcript)await transcript.append(`$ ${e.command}\r\n`,e,'command');else await termWrite(`\r\n$ ${e.command}\r\n`,gen); }
   else if (e.kind === 'input' && e.data) { const raw=outputBytes(e.data); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
-  if (e.disposed || e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown')) { const entry=taskDecoders.get(e.handle||'');if(entry){await termWrite(entry.decoder.decode(),gen);if(gen!==generation)return;taskDecoders.delete(e.handle||'');} if(gen!==generation)return; if(e.status.warning||e.status.error)status(e.status.warning||e.status.error);if(continuous()&&e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown'))await termWrite(`\r\n[${e.handle} · ${taskState(e)}${e.status.exit_code!==undefined?' · exit '+e.status.exit_code:''}]\r\n`,gen); }
+  if (e.disposed || e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown')) {
+   for(const [key,entry]of taskDecoders){if(!key.startsWith((e.handle||'')+'/'))continue;const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,{...e,source:key.slice(key.indexOf('/')+1)});else await termWrite(tail,gen);if(gen!==generation)return;taskDecoders.delete(key);}
+   if(transcript)await transcript.finish(e.handle||'');
+   if(gen!==generation)return;if(e.status.warning||e.status.error)status(e.status.warning||e.status.error);
+   if(continuous()&&e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown'))await transcript.append(`[${taskState(e)}${e.status.exit_code!==undefined?' · exit '+e.status.exit_code:''}]\r\n`,e,'status');
+  }
  }
  if(gen!==generation)return;
  cursor=Math.max(cursor,e.seq); if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
 }
 async function selectSession(id, task) {
  generation++;cancelRender();replayRequest?.abort();replayRequest=new AbortController();replayChunks=[];replaySize=0;replayProcessed=0;replayNotes=''; inputQueue=""; clearTimeout(inputTimer); const gen=generation; if(socket)socket.close();socket=null;unlocked=false;operationPending=false;selected=id;cursor=0;
- const e=sessions.get(id);handle=task||'';
- $('empty').hidden=true;$('terminal').hidden=false;$('receipts').textContent='终端输入（包括密码）会原样保存在本机历史中。';$('echo').checked=e?.protocol==='ssh';
+ const e=sessions.get(id);
+ if(humanPage&&task&&tasks.get(task)?.origin!=='human'){handle='';selected='';terminal?.dispose();terminal=null;transcript=null;$('terminal').hidden=true;$('empty').hidden=false;$('empty').textContent='目标人类终端不可用，请返回观察页选择。';warn('目标不是保留的人类终端；请返回观察页选择，不会启动或发送命令。');renderSidebar();return;}
+ handle=humanPage?task||'':'';
+ if(humanPage){const u=new URL(location.href);u.searchParams.set('instance',instance);u.searchParams.set('session',id);if(handle)u.searchParams.set('handle',handle);else u.searchParams.delete('handle');history.replaceState(null,'',u);}
+ $('empty').hidden=true;$('terminal').hidden=false;$('receipts').textContent='终端输入（包括密码）会原样保存在本机历史中。';$('echo').checked=preferences.echo;
  createTerminal();
  renderSidebar();renderTasks();$('terminal-label').textContent=handle||id;
  replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').textContent='正在读取历史…';$('loading').hidden=false;updateControls();
  try {
+  webCaps=[];try{const capabilities=await api('web-capabilities',{instance});if(gen!==generation)return;webCaps=capabilities.capabilities||[];}catch(_){if(gen!==generation)return;}updateControls();
   do {
    const before=cursor,u=new URL('api/replay',root);u.searchParams.set('instance',instance);u.searchParams.set('session',id);u.searchParams.set('after',cursor);
    if(!continuous())u.searchParams.set('handle',handle);
@@ -172,7 +199,7 @@ async function selectSession(id, task) {
    cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
   } while(gen===generation);
   if(gen!==generation)return;
-  if(instance!==current||!liveSession())for(const entry of taskDecoders.values())await termWrite(entry.decoder.decode(),gen);
+  if(instance!==current||!liveSession()){for(const [key,entry]of taskDecoders){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,{session:id,handle:key.split('/')[0],source:key.split('/')[1]});else await termWrite(tail,gen);}if(transcript){for(const t of sessionTasks())await transcript.finish(t.handle);}}
   if(gen!==generation)return;
   await flushReplay(gen);if(gen!==generation)return;finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
   updateControls();if(instance===current)connect(gen);else{$('connection').textContent='历史归档 · 只读';status('归档只读。旧实例运行中任务的最终结果可能未知。');}
@@ -189,7 +216,7 @@ function connect(gen) {
   pipeline=pipeline.then(async()=>{if(gen!==generation||socket!==ws)return;
    if(msg.type==='event'){if(msg.event.seq>cursor)await apply(msg.event,gen,true);}
    else if(msg.type==='checkpoint'){cursor=Math.max(cursor,msg.seq);}
-   else if(msg.type==='lock'){unlocked=!!msg.unlocked;updateControls();status(unlocked?'已解锁，输入将发送到当前终端。':'只读。');}
+   else if(msg.type==='lock'){unlocked=!!msg.unlocked;updateControls();status(unlocked?'已解锁，输入将发送到当前终端。':'只读。');if(unlocked)setTimeout(sendResize,0);}
    else if(msg.type==='receipt')await receiveReceipt(msg,gen,ws);
    else if(msg.type==='hello'||msg.type==='status'){historyState(msg.info);}
    else if(msg.type==='error')warn(msg.error);
@@ -199,7 +226,11 @@ function connect(gen) {
  ws.onerror=()=>ws.close();
 }
 async function receiveReceipt(msg,gen,ws){
- const r=msg.result||{},exec=!!r.handle&&msg.id.startsWith('exec-'),sent=!msg.error&&!r.error&&r.input_state==='sent';
+ const r=msg.result||{};
+ if(msg.id?.startsWith('web_resize-')){operationPending=false;if(msg.error||r.error)status(msg.error||r.error);updateControls();setTimeout(flushInput,0);return;}
+ if(msg.id?.startsWith('web_end-')){operationPending=false;localEcho?.clear();inputQueue='';note(JSON.stringify(msg));status(msg.error||r.error||r.signal?.error||('TERM 请求：'+(r.signal?.request_state||'unknown')+'；请以任务完成状态确认退出。'));updateControls();return;}
+ if(msg.id?.startsWith('web_shell-')){note(JSON.stringify(msg));operationPending=false;if(r.handle){await loadCatalog();if(gen===generation&&socket===ws)await selectSession(selected,r.handle);status(r.error||r.warning||'终端已创建；解锁后可输入。关闭标签页后仍保持运行。');return;}status(msg.error||r.error||'启动结果未知；请先检查已有终端，不要自动重试。');updateControls();return;}
+ const exec=!!r.handle&&msg.id.startsWith('exec-'),sent=!msg.error&&!r.error&&r.input_state==='sent';
  if(!exec)operationPending=false;
  if(!sent){localEcho?.clear();if(inputQueue)note('后续待发送输入已丢弃，未自动重试。');inputQueue='';}
  note(JSON.stringify(msg));status(msg.error||r.error||`${r.input_state||'unknown'} · 已确认写入 ${r.written_bytes||0} 字节；不证明远端收到`);
@@ -211,14 +242,11 @@ async function receiveReceipt(msg,gen,ws){
  }
  updateControls();if(sent)setTimeout(flushInput,0);
 }
-function send(req) { if(!unlocked||operationPending||socket?.readyState!==1)return;req.id=(req.type==='exec'?'exec-':'input-')+Date.now()+'-'+Math.random().toString(16).slice(2);req.session=selected;operationPending=true;updateControls();socket.send(JSON.stringify(req)); }
+function send(req) { if(!unlocked||operationPending||socket?.readyState!==1)return;req.id=req.type+'-'+Date.now()+'-'+Math.random().toString(16).slice(2);req.session=selected;operationPending=true;updateControls();socket.send(JSON.stringify(req)); }
 function flushInput(){if(!inputQueue||operationPending||!unlocked)return;const data=inputQueue.slice(0,4096);inputQueue=inputQueue.slice(data.length);send({type:'input',data,handle});}
-$('echo').onchange=()=>{if(!$('echo').checked)localEcho?.clear();};
+$('echo').onchange=()=>{if(!$('echo').checked)localEcho?.clear();try{savePreferences({echo:$('echo').checked});}catch(e){status(e.message);}};
 $('unlock').onclick=()=>{if(socket?.readyState===1){const enable=!unlocked;if(!enable){unlocked=false;inputQueue='';updateControls();}socket.send(JSON.stringify({type:'unlock',enabled:enable}));}};
-$('exec').onsubmit=event=>{event.preventDefault();if(!$('command').value)return;send({type:'exec',command:$('command').value,cwd:$('cwd').value,interactive:$('interactive').checked,pty:$('pty').checked});};
-$('pty').onchange=()=>{if($('pty').checked)$('interactive').checked=true};$('interactive').onchange=()=>{if(!$('interactive').checked)$('pty').checked=false};
-$('apply').onclick=()=>{const n=Number($('scrollback').value);if(!Number.isInteger(n)||n<100||n>50000){status('滚动历史须为 100..50000 行。');return}scrollback=n;try{localStorage.setItem('keepsess.scrollback',String(n))}catch(_){}if(terminal)terminal.options.scrollback=n;status(`前端滚动历史已设为 ${n} 行；磁盘历史不受影响。`);};
-$('overview-toggle').onclick=()=>selectSession(selected);
+$('apply').onclick=()=>{try{savePreferences({scrollback:Number($('scrollback').value)});status('滚动历史已保存到当前浏览器。');}catch(e){status(e.message);}};
 $('refresh').onclick=()=>loadCatalog().catch(e=>warn(e.message));
 async function chooseInstance(id){localEcho?.clear();generation++;cancelRender();replayRequest?.abort();inputQueue='';clearTimeout(inputTimer);if(socket)socket.close();socket=null;instance=id;$('session-errors').open=false;renderInstanceChoices();current=activeInstances.has(instance)?instance:'';selected='';handle='';sessions.clear();tasks.clear();unlocked=false;warn('');await loadCatalog();if(firstSession())selectSession(firstSession());else{localEcho?.dispose();localEcho=null;if(terminal)terminal.dispose();terminal=null;$('empty').hidden=false;$('terminal').hidden=true;}}
 const terminalResize=new ResizeObserver(()=>fit());terminalResize.observe($('terminal'));
@@ -238,9 +266,10 @@ async function refreshInstanceList(){
 }
 (async()=>{
  await waitForTerminalFonts();await initAppearance();const info=await api('info');serverID=info.instance_id;historyState(info);await refreshInstances();
- if(instance){await loadCatalog();if(firstSession())await selectSession(firstSession());}
+ if(humanPage&&pageQuery.get('instance')){instance=pageQuery.get('instance');current=activeInstances.has(instance)?instance:'';renderInstanceChoices();}
+ if(instance){await loadCatalog();const target=humanPage?pageQuery.get('session'):firstSession();if(target&&sessions.has(target)){await selectSession(target,humanPage?pageQuery.get('handle'):'');}else if(humanPage)warn('目标会话不存在或实例已变化；请返回观察页选择。');}
  if(!selected)$('connection').textContent='等待会话';
- setInterval(async()=>{try{await refreshInstances();if(!selected&&instance){await loadCatalog();if(firstSession())await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
+ setInterval(async()=>{try{await refreshInstances();if(!humanPage&&!selected&&instance){await loadCatalog();if(firstSession())await selectSession(firstSession());}}catch(e){status('共享 Web 暂不可达；输入结果未知，不会重发。');}},2000);
 })().catch(e=>warn(e.message));
 
 let namingInstance='';

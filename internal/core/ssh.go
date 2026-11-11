@@ -140,8 +140,8 @@ func (s *Session) connectSSH(ctx context.Context, o Options) error {
 			if e != nil {
 				return e
 			}
-			sh.Stdout = s
-			sh.Stderr = s
+			sh.Stdout = sourceWriter{s, "mixed"}
+			sh.Stderr = sourceWriter{s, "mixed"}
 			in, e := sh.StdinPipe()
 			if e != nil {
 				return e
@@ -197,7 +197,10 @@ func (s *Session) watchSSH(client *ssh.Client) {
 type sshExecChannel struct{ *ssh.Session }
 
 func (sh *sshExecChannel) start(command string, out *Session) error {
-	sh.Stdout, sh.Stderr = out, out
+	sh.Stdout, sh.Stderr = sourceWriter{out, "stdout"}, sourceWriter{out, "stderr"}
+	if out.pty {
+		sh.Stdout, sh.Stderr = sourceWriter{out, "mixed"}, sourceWriter{out, "mixed"}
+	}
 	return sh.Start(command)
 }
 
@@ -224,3 +227,11 @@ func (sh *sshExecChannel) prepareInput(pty bool) (io.WriteCloser, error) {
 	}
 	return stdin, err
 }
+
+// Attribution is captured before the existing combined MCP buffer.
+type sourceWriter struct {
+	session *Session
+	source  string
+}
+
+func (w sourceWriter) Write(p []byte) (int, error) { return w.session.writeOutput(p, w.source) }

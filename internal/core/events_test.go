@@ -57,9 +57,11 @@ func TestEventsObserveWithoutConsumingAndDoNotExposeAuth(t *testing.T) {
 	var output bytes.Buffer
 	closed := false
 	command := false
+	sources := map[string]string{}
 	for _, e := range r.snapshot() {
 		if e.Kind == "output" {
 			output.Write(e.Data)
+			sources[e.Source] += string(e.Data)
 		}
 		if e.Command == "both" {
 			command = true
@@ -71,6 +73,9 @@ func TestEventsObserveWithoutConsumingAndDoNotExposeAuth(t *testing.T) {
 	b, _ := json.Marshal(r.snapshot())
 	if bytes.Contains(b, []byte("authentication-secret")) || bytes.Contains(b, []byte("environment-secret")) {
 		t.Fatal("credential metadata in events")
+	}
+	if sources["stdout"] != "stdout\n" || sources["stderr"] != "stderr\n" {
+		t.Fatal("missing SSH source attribution", sources)
 	}
 	if !closed || !command || output.String() != v.Output {
 		t.Fatal(closed, command, output.String(), v.Output)

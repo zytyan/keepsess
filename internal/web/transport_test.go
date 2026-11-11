@@ -313,3 +313,39 @@ func TestReplaySessionAndExplicitHandleSelection(t *testing.T) {
 		})
 	}
 }
+
+func TestOutputSourcesSurviveBatchingAndFrames(t *testing.T) {
+	var got []core.Event
+	batch := outputBatch{emit: func(b []byte) error {
+		e, err := DecodeOutput(b)
+		if err == nil {
+			got = append(got, e)
+		}
+		return err
+	}}
+	for i, e := range []core.Event{
+		{Kind: "output", Session: "s1", Handle: "task1", Source: "stdout", Origin: "human", Data: []byte{0xe4, 0xb8}},
+		{Kind: "output", Session: "s1", Handle: "task1", Source: "stderr", Origin: "human", Data: []byte("error\n")},
+		{Kind: "output", Session: "s1", Handle: "task1", Source: "stdout", Origin: "human", Data: []byte{0xad, 0x0a}},
+	} {
+		e.Seq = uint64(i + 1)
+		if err := batch.add(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Source != "stdout" || got[1].Source != "stderr" || got[2].Source != "stdout" || got[1].Origin != "human" || !bytes.Equal(got[0].Data, []byte{0xe4, 0xb8}) {
+		t.Fatal(got)
+	}
+	legacy := core.Event{Kind: "output", Session: "s1", Handle: "task1", Data: []byte("old mixed output")}
+	b, err := EncodeOutput(legacy)
+	if err != nil || b[0] != 1 {
+		t.Fatal(err)
+	}
+	roundtrip, err := DecodeOutput(b)
+	if err != nil || roundtrip.Source != "" || string(roundtrip.Data) != string(legacy.Data) {
+		t.Fatal(roundtrip, err)
+	}
+}

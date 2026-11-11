@@ -27,6 +27,8 @@ type Event struct {
 	Cwd           string    `json:"cwd,omitempty"`
 	Status        Result    `json:"status"`
 	Receipt       *Result   `json:"receipt,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	Origin        string    `json:"origin,omitempty"`
 }
 
 // Emit must copy ownership and enqueue without blocking or calling core. Set
@@ -44,10 +46,13 @@ func (s *Session) record(kind string, data []byte, command, cwd string, receipt 
 	s.recordLocked(kind, data, command, cwd, receipt)
 }
 func (s *Session) recordLocked(kind string, data []byte, command, cwd string, receipt *Result) {
+	s.recordSourceLocked(kind, data, command, cwd, receipt, "")
+}
+func (s *Session) recordSourceLocked(kind string, data []byte, command, cwd string, receipt *Result, source string) {
 	if s.events == nil {
 		return
 	}
-	e := Event{Time: time.Now().UTC(), Kind: kind, Session: s.id, Handle: s.handle,
+	e := Event{Source: source, Origin: s.origin, Time: time.Now().UTC(), Kind: kind, Session: s.id, Handle: s.handle,
 		Epoch: s.epoch, Name: s.name, Protocol: s.protocol, Mode: s.mode,
 		Encoding: s.config.Encoding, ReadOnly: s.config.ReadOnly, Disposed: s.disposed,
 		Command: command, Cwd: cwd, Status: eventResult(s.statusLocked())}
