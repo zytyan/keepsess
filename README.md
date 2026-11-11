@@ -82,3 +82,9 @@ with Keepsess() as ks:
 SSH 默认跳过主机密钥验证；显式设置 `host_key` 或 `known_hosts` 启用。Telnet 为明文。历史可能包含终端输入的密码，不要提交凭据、审计日志、历史、本地配置或内部令牌。Web 对外提供服务时应配置认证代理。
 
 [完整使用参考](docs/usage.md) · [AI skill](skills/keepsess/SKILL.md) · [验证记录](VALIDATION.md)
+
+### 升级共享 daemon
+
+安装新二进制后运行 `keepsess daemon upgrade`，用当前二进制受控重启共享 daemon；
+`keepsess daemon status` 显示进程、版本、协议及摘要。Web 短暂断开，Agent 内的远端连接继续运行，输入不会重放。
+首次迁移至 Protobuf v2 需要自行安排重启旧 Agent；见 [升级与协议兼容说明](docs/daemon-upgrade.md)。

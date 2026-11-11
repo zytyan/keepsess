@@ -30,6 +30,7 @@ import (
 var assets embed.FS
 
 type Options struct {
+	StrictListen                bool
 	Listen, BasePath, PublicURL string
 	Registry                    Registry
 	Internal                    http.Handler
@@ -98,7 +99,7 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 		if err == nil {
 			break
 		}
-		if !addressInUse(err) {
+		if o.StrictListen || !addressInUse(err) {
 			return nil, err
 		}
 		if candidate == 0 {

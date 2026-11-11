@@ -21,13 +21,17 @@ import (
 	"github.com/zytyan/keepsess/internal/web"
 )
 
-const protocol = 1
+const protocol = 2
 
 type Runtime struct {
+	StartID         string   `json:"start_id,omitempty"`
+	Version         string   `json:"version,omitempty"`
+	BinarySHA256    string   `json:"binary_sha256,omitempty"`
+	Capabilities    []string `json:"capabilities,omitempty"`
 	PID             int      `json:"pid"`
 	Protocol        int      `json:"protocol"`
-	Endpoint        string   `json:"endpoint"`
-	Token           string   `json:"token"`
+	Endpoint        string   `json:"endpoint,omitempty"`
+	Token           string   `json:"token,omitempty"`
 	HistoryDir      string   `json:"history_dir"`
 	HistoryMaxBytes int64    `json:"history_max_bytes"`
 	ConfigHash      string   `json:"config_hash"`
@@ -36,6 +40,9 @@ type Runtime struct {
 
 func runtimePath(c settings.Config) string { return filepath.Join(c.RuntimeDir(), "daemon.json") }
 func ReadRuntime(c settings.Config) (Runtime, error) {
+	return readRuntime(c, true)
+}
+func readRuntime(c settings.Config, compatible bool) (Runtime, error) {
 	var r Runtime
 	b, err := os.ReadFile(runtimePath(c))
 	if err != nil {
@@ -45,7 +52,7 @@ func ReadRuntime(c settings.Config) (Runtime, error) {
 		return r, errors.New("invalid daemon runtime file")
 	}
 	err = json.Unmarshal(b, &r)
-	if err == nil && (r.Protocol != protocol || r.Token == "" || r.Endpoint == "") {
+	if err == nil && ((compatible && r.Protocol != protocol) || r.Token == "" || r.Endpoint == "") {
 		err = errors.New("incompatible daemon runtime; restart keepsess daemon")
 	}
 	if err == nil {
@@ -79,7 +86,12 @@ func Probe(ctx context.Context, r Runtime) (web.Info, error) {
 	return info, err
 }
 func Stop(ctx context.Context, c settings.Config) error {
-	r, err := ReadRuntime(c)
+	lock, err := gate(c)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	r, err := readRuntime(c, false)
 	if err != nil {
 		return err
 	}
@@ -97,6 +109,17 @@ func Stop(ctx context.Context, c settings.Config) error {
 // Concurrent starters may launch several short-lived contenders. The OS file
 // lock admits one daemon and is released automatically even after a crash.
 func Ensure(ctx context.Context, c settings.Config, launch func(settings.Config) error) (Runtime, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	lock, err := waitGate(waitCtx, c)
+	if err != nil {
+		return Runtime{}, err
+	}
+	if e := recoverUpgrade(waitCtx, c); e != nil {
+		lock.Close()
+		return Runtime{}, e
+	}
+	lock.Close()
 	if r, err := ReadRuntime(c); err == nil {
 		if info, e := Probe(ctx, r); e == nil {
 			r.Info = info
@@ -127,33 +150,42 @@ func Ensure(ctx context.Context, c settings.Config, launch func(settings.Config)
 	}
 }
 func Launch(c settings.Config) error {
-	if err := os.MkdirAll(c.RuntimeDir(), 0700); err != nil {
-		return err
-	}
-	exe, err := os.Executable()
+	exe, err := selectedBinary(c)
 	if err != nil {
 		return err
+	}
+	return launchBinary(c, exe, nil)
+}
+func launchBinary(c settings.Config, exe string, extra []string) error {
+	_, e := launchProcess(c, exe, extra)
+	return e
+}
+func launchProcess(c settings.Config, exe string, extra []string) (*os.Process, error) {
+	if err := os.MkdirAll(c.RuntimeDir(), 0700); err != nil {
+		return nil, err
 	}
 	log, err := os.OpenFile(filepath.Join(c.RuntimeDir(), "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer log.Close()
 	null, err := os.Open(os.DevNull)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer null.Close()
 	cmd := exec.Command(exe, "daemon", "run")
+	cmd.Env = append(os.Environ(), "KEEPSESS_UPGRADE_TOKEN=", "KEEPSESS_SETTINGS_HOME="+c.Home)
+	cmd.Env = append(cmd.Env, extra...)
 	cmd.Stdin = null
 	cmd.Stdout = log
 	cmd.Stderr = log
 	detachChild(cmd)
 	if err = cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 	go func() { _ = cmd.Wait() }()
-	return nil
+	return cmd.Process, nil
 }
 
 func isLocalIP(ip net.IP) bool {

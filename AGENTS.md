@@ -52,3 +52,5 @@
 - 实例首次 connect 成功提示 AI 用 sess_configure(instance_name=...) 命名，不新增命名工具。全部 30 个工具统一可发现，不分 standard/full，不提供 tool_profile 开关；旧配置 [tools].profile 兼容读取但忽略。
 
 - sess_send_escaped 和 sess_sendline_escaped 均可发现；前者精确解码一层且不追加行尾，后者解码后追加一次配置的行尾。
+
+- daemon v2 起固定 Protobuf wire 契约与既有能力语义，新增执行语义先协商能力；不得复用字段或破坏旧能力。用 Buf FILE 比较冻结基线与发布版本。daemon upgrade 使用当前二进制私有副本、生命周期锁与认证身份健康检查，不重放输入；v1 Agent 首次迁移需自行安排重启。

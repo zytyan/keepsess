@@ -35,7 +35,7 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess install [FILE] [--client X]  安装二进制、MCP 配置和 skill
   keepsess install-skill [--dir PATH]   安装 SKILL.md (默认 ./keepsess-skill)
   keepsess version                     查看版本
-  keepsess daemon status|stop|run      查询 / 停止 / 前台运行共享 daemon
+  keepsess daemon status|stop|run|upgrade      查询 / 停止 / 前台运行 / 从当前二进制升级共享 daemon
 
 全部 30 个工具统一可发现，提供完整参数说明，无需切换发现分组。
 完整接口：get_file/put_file、tunnel_open/list/close、help、connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
@@ -77,7 +77,7 @@ MCP 配置: {"command":"/path/to/keepsess","args":["serve"]}
 daemon 空闲不退出；SSH/Telnet 仍在原 Agent 进程内，daemon 重启仅恢复观察，不重放输入。
 [web] enabled/listen/base_path/public_url、[history] dir/max_bytes、audit_log 配置替代启动参数。
 IP/localhost 反代入口保留 Host（含端口），页面/API/WS 使用相对路径；DNS 名设置 web.public_url。
-修改 Web/history 配置后用 keepsess daemon stop 重启；活动 Agent 会重新注册。
+升级二进制后用 keepsess daemon upgrade 替换共享 daemon；兼容 Agent 会重新注册。
 Web 本机免登录，每次刷新/重连恢复只读，解锁仍受会话 read_only 保护；滚动历史默认 5000 行，可调整并记住。
 历史包含命令、原始输入和输出（可能包含密码）；连接认证参数/env 字段不写入。关闭会话仍保留 Web 历史。
 --log 写入 0600 JSONL 审计；认证字段脱敏，command/data 仍可能含敏感信息。
@@ -133,13 +133,32 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		return e
 	case "daemon":
 		if len(args) != 2 {
-			return errors.New("usage: keepsess daemon run|status|stop")
+			return errors.New("usage: keepsess daemon run|status|stop|upgrade")
 		}
-		cfg, err := settings.Load()
+		var cfg settings.Config
+		var err error
+		if home := os.Getenv("KEEPSESS_SETTINGS_HOME"); home != "" {
+			cfg, err = settings.LoadHome(home)
+		} else {
+			cfg, err = settings.Load()
+		}
 		if err != nil {
 			return err
 		}
 		switch args[1] {
+		case "check":
+			if !cfg.Web.Enabled {
+				return errors.New("web.enabled=false; daemon disabled")
+			}
+			return nil
+		case "upgrade":
+			r, e := daemon.Upgrade(ctx, cfg)
+			if e != nil {
+				return e
+			}
+			r.Token = ""
+			r.Endpoint = ""
+			return json.NewEncoder(out).Encode(r)
 		case "run":
 			return daemon.Run(ctx, cfg)
 		case "status":
@@ -147,7 +166,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 			if e != nil {
 				return e
 			}
-			info, e := daemon.Probe(ctx, r)
+			info, e := daemon.Status(ctx, r)
 			if e != nil {
 				return e
 			}
@@ -159,7 +178,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 			_, e := fmt.Fprintln(out, "daemon stop requested; active Agents may start it again and reconnect without replaying input")
 			return e
 		default:
-			return errors.New("usage: keepsess daemon run|status|stop")
+			return errors.New("usage: keepsess daemon run|status|stop|upgrade")
 		}
 	case "serve":
 		cfg, err := settings.Load()

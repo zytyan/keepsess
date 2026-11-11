@@ -12,4 +12,7 @@ require (
 	golang.org/x/text v0.22.0
 )
 
-require github.com/kr/fs v0.1.0 // indirect
+require (
+	github.com/kr/fs v0.1.0 // indirect
+	google.golang.org/protobuf v1.36.6
+)

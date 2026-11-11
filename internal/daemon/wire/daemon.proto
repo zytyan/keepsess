@@ -1,0 +1,116 @@
+syntax = "proto3";
+package keepsess.daemon.v2;
+
+option go_package = "github.com/zytyan/keepsess/internal/daemon/wire";
+message Request {
+  string name = 1;
+  optional bool login = 2;
+  string cwd = 3;
+  map<string, string> env = 4;
+  bool interactive = 5;
+  bool pty = 6;
+  string session = 7;
+  string handle = 8;
+  string signal = 9;
+  string data = 10;
+  string command = 11;
+  optional bool collect_output = 12;
+  map<string, bytes> config = 13;
+  int64 lines = 14;
+  optional int64 offset = 15;
+}
+message Result {
+  string name = 1;
+  string instance_id = 2;
+  string instance_name = 3;
+  optional string started_at = 4;
+  int64 task_elapsed_ms = 5;
+  optional int64 wait_elapsed_ms = 6;
+  string timeout_source = 7;
+  int64 filtered_bytes = 8;
+  int64 filtered_lines = 9;
+  int64 stripped_bytes = 10;
+  bool line_fragments = 11;
+  bool interactive = 12;
+  bool pty = 13;
+  optional bool stdin_open = 14;
+  PeerIdentity peer = 15;
+  string disconnect_reason = 16;
+  string session = 17;
+  string handle = 18;
+  string state = 19;
+  string comment = 20;
+  string exit_signal = 21;
+  SignalResult signal = 22;
+  string output = 23;
+  string reason = 24;
+  bool connected = 25;
+  bool running = 26;
+  string input_state = 27;
+  int64 input_bytes = 28;
+  int64 written_bytes = 29;
+  optional int64 exit_code = 30;
+  string warning = 31;
+  string error = 32;
+  string next_action = 33;
+  int64 start = 34;
+  int64 end = 35;
+  bool more = 36;
+  int64 dropped_bytes = 37;
+  int64 minimum_output_bytes = 38;
+  optional int64 queued_bytes = 39;
+}
+message PeerIdentity {
+  string server = 1;
+  string host_key = 2;
+  bool host_key_changed = 3;
+}
+message SignalResult {
+  string name = 1;
+  string request_state = 2;
+  string error = 3;
+}
+message Event {
+  string instance = 1;
+  uint64 seq = 2;
+  string time = 3;
+  string kind = 4;
+  string session = 5;
+  string handle = 6;
+  uint64 epoch = 7;
+  string name = 8;
+  string protocol = 9;
+  string mode = 10;
+  string encoding = 11;
+  bool read_only = 12;
+  bool disposed = 13;
+  bool ever_connected = 14;
+  bytes data = 15;
+  string command = 16;
+  string cwd = 17;
+  Result status = 18;
+  Result receipt = 19;
+}
+message History {
+  bool recording = 1;
+  string error = 2;
+  uint64 last_seq = 3;
+  uint64 written_seq = 4;
+  uint64 durable_seq = 5;
+  uint64 lost_events = 6;
+}
+message Envelope {
+  string type = 1;
+  uint32 protocol = 2;
+  string instance = 3;
+  int64 pid = 4;
+  uint64 id = 5;
+  string kind = 6;
+  Request request = 7;
+  Event event = 8;
+  History history = 9;
+  Result result = 10;
+  repeated Result tasks = 11;
+  string error = 12;
+  repeated string capabilities = 13;
+}

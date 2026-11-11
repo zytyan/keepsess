@@ -1,0 +1,40 @@
+name: daemon protocol compatibility
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: '1.47.2'
+      - run: sh scripts/check-protocol.sh
+      - name: Compare previous schema when present
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git cat-file -e "$BASE_SHA:buf.yaml" 2>/dev/null; then
+            sh scripts/check-protocol.sh ".git#ref=$BASE_SHA"
+          fi
+  integration:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.1'
+      - run: go test ./internal/daemon ./internal/cli
+        env:
+          CGO_ENABLED: '0'
+      - if: runner.os == 'Linux'
+        run: go test -race ./...

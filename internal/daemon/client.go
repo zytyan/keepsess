@@ -122,14 +122,14 @@ func (c *Client) attach(r Runtime, onReady func()) error {
 	c.mu.Unlock()
 	write := func(m message) error {
 		_ = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-		return conn.WriteJSON(m)
+		return writeMessage(conn, m)
 	}
-	if err = write(message{Type: "register", Protocol: protocol, Instance: c.manager.InstanceID(), PID: os.Getpid(), History: c.store.Status()}); err != nil {
+	if err = write(message{Type: "register", Protocol: protocol, Instance: c.manager.InstanceID(), PID: os.Getpid(), History: c.store.Status(), Capabilities: capabilities}); err != nil {
 		return err
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var ack message
-	if err = conn.ReadJSON(&ack); err != nil {
+	if err = readMessage(conn, &ack); err != nil {
 		return err
 	}
 	if ack.Type != "registered" || ack.Protocol != protocol {
@@ -150,14 +150,14 @@ func (c *Client) attach(r Runtime, onReady func()) error {
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 			var req message
-			if conn.ReadJSON(&req) != nil {
+			if readMessage(conn, &req) != nil {
 				return
 			}
 			if req.Type == "heartbeat" {
 				continue
 			}
 			if req.Type != "operation" {
-				return
+				continue
 			}
 			select {
 			case c.slots <- struct{}{}:
@@ -183,6 +183,7 @@ func (c *Client) attach(r Runtime, onReady func()) error {
 				case "exec", "send_text":
 					reply.Result, err = c.manager.Operate(callCtx, req.Kind, req.Request)
 				default:
+					reply.Result.InputState = "not_sent"
 					err = errors.New("unsupported daemon operation; nothing submitted")
 				}
 				if err != nil {
@@ -211,14 +212,7 @@ func (c *Client) attach(r Runtime, onReady func()) error {
 				return err
 			}
 		}
-		if e.Kind == "output" {
-			b, err := web.EncodeOutput(e)
-			if err != nil {
-				return err
-			}
-			_ = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-			return conn.WriteMessage(websocket.BinaryMessage, b)
-		}
+
 		return write(message{Type: "event", Event: &e})
 	}
 	for _, event := range pending {

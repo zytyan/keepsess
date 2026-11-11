@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/zytyan/keepsess/internal/buildinfo"
 	"github.com/zytyan/keepsess/internal/core"
 	"github.com/zytyan/keepsess/internal/history"
 	"github.com/zytyan/keepsess/internal/settings"
@@ -26,6 +27,7 @@ import (
 )
 
 type host struct {
+	runtime Runtime
 	ctx     context.Context
 	cancel  context.CancelFunc
 	cfg     settings.Config
@@ -45,13 +47,54 @@ func Run(ctx context.Context, c settings.Config) error {
 	if err := os.MkdirAll(c.RuntimeDir(), 0700); err != nil {
 		return err
 	}
+	configHash := c.Fingerprint()
+	var handoff *os.File
+	if os.Getenv("KEEPSESS_UPGRADE_TOKEN") != "" {
+		var e error
+		handoff, e = namedLock(c, "handoff.lock")
+		if e != nil {
+			return e
+		}
+		defer handoff.Close()
+	}
+	ticket, candidate := candidateTicket(c)
+	if handoff != nil && !candidate {
+		return errors.New("upgrade ticket expired or candidate digest mismatch")
+	}
+	var lifecycle *os.File
+	if !candidate {
+		var e error
+		lifecycle, e = gate(c)
+		if e != nil {
+			return nil
+		}
+		defer lifecycle.Close()
+		if e = recoverUpgrade(ctx, c); e != nil {
+			return e
+		}
+	} else {
+		if ticket.Listen != "" {
+			c.Web.Listen = ticket.Listen
+			c.Web.BasePath = ticket.BasePath
+		}
+	}
 	lock, err := os.OpenFile(filepath.Join(c.RuntimeDir(), "daemon.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
 	if err = acquireLock(lock); err != nil {
-		return nil
+		if !candidate {
+			return nil
+		}
+		waitCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		for err != nil {
+			if e := pause(waitCtx); e != nil {
+				return e
+			}
+			err = acquireLock(lock)
+		}
 	} // Another starter won.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -67,7 +110,7 @@ func Run(ctx context.Context, c settings.Config) error {
 	h := &host{ctx: ctx, cancel: cancel, cfg: c, token: hex.EncodeToString(tokenBytes), root: root, peers: make(map[string]*peer)}
 	m := core.NewManager()
 	defer m.CloseAll()
-	h.web, err = web.Start(ctx, m, root, web.Options{SettingsHome: c.Home, Listen: c.Web.Listen, BasePath: c.Web.BasePath, PublicURL: c.Web.PublicURL, Registry: h, Internal: http.HandlerFunc(h.internal)})
+	h.web, err = web.Start(ctx, m, root, web.Options{StrictListen: candidate && ticket.Listen != "", SettingsHome: c.Home, Listen: c.Web.Listen, BasePath: c.Web.BasePath, PublicURL: c.Web.PublicURL, Registry: h, Internal: http.HandlerFunc(h.internal)})
 	if err != nil {
 		return err
 	}
@@ -89,7 +132,15 @@ func Run(ctx context.Context, c settings.Config) error {
 			listenHost = "127.0.0.1"
 		}
 	}
-	runtime := Runtime{PID: os.Getpid(), Protocol: protocol, Token: h.token, Endpoint: "http://" + net.JoinHostPort(listenHost, port) + h.web.Info().BasePath + "internal/", HistoryDir: c.History.Dir, HistoryMaxBytes: c.History.MaxBytes, ConfigHash: c.Fingerprint(), Info: h.web.Info()}
+	runtime := Runtime{PID: os.Getpid(), Protocol: protocol, Token: h.token, Endpoint: "http://" + net.JoinHostPort(listenHost, port) + h.web.Info().BasePath + "internal/", HistoryDir: c.History.Dir, HistoryMaxBytes: c.History.MaxBytes, ConfigHash: configHash, Info: h.web.Info()}
+	runtime.StartID = h.web.Info().InstanceID
+	runtime.Version = buildinfo.String()
+	runtime.BinarySHA256, err = ownDigest()
+	if err != nil {
+		return err
+	}
+	runtime.Capabilities = capabilities
+	h.runtime = runtime
 	b, _ := json.Marshal(runtime)
 	tmp := runtimePath(c) + ".tmp"
 	_ = os.Remove(tmp)
@@ -108,6 +159,12 @@ func Run(ctx context.Context, c settings.Config) error {
 	if err = os.Rename(tmp, runtimePath(c)); err != nil {
 		return err
 	}
+	if lifecycle != nil {
+		lifecycle.Close()
+	}
+	if handoff != nil {
+		handoff.Close()
+	}
 	defer os.Remove(runtimePath(c))
 	<-ctx.Done()
 	return nil
@@ -121,6 +178,15 @@ func (h *host) internal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch filepath.Base(r.URL.Path) {
+	case "status":
+		if r.Method != "GET" {
+			http.Error(w, "GET required", 405)
+			return
+		}
+		v := h.runtime
+		v.Token = ""
+		v.Endpoint = ""
+		_ = json.NewEncoder(w).Encode(v)
 	case "info":
 		if r.Method != "GET" {
 			http.Error(w, "GET required", 405)
@@ -195,7 +261,7 @@ func (h *host) agent(w http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(2 << 20)
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var hello message
-	if err = c.ReadJSON(&hello); err != nil {
+	if err = readMessage(c, &hello); err != nil {
 		return
 	}
 	if hello.Type != "register" || hello.Protocol != protocol || hello.Instance == "" || hello.PID < 1 {
@@ -211,7 +277,7 @@ func (h *host) agent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(h.ctx)
-	p := &peer{id: hello.Instance, pid: hello.PID, c: c, store: view, ctx: ctx, cancel: cancel, pending: make(map[uint64]chan message), writer: make(chan struct{}, 1)}
+	p := &peer{id: hello.Instance, pid: hello.PID, c: c, store: view, ctx: ctx, cancel: cancel, pending: make(map[uint64]chan message), writer: make(chan struct{}, 1), capabilities: hello.Capabilities}
 	defer p.close()
 	view.Update(hello.History)
 	h.mu.Lock()
@@ -230,7 +296,7 @@ func (h *host) agent(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		h.wg.Done()
 	}()
-	if err = p.write(p.ctx, message{Type: "registered", Protocol: protocol}); err != nil {
+	if err = p.write(p.ctx, message{Type: "registered", Protocol: protocol, Capabilities: capabilities}); err != nil {
 		return
 	}
 	for {
@@ -239,19 +305,11 @@ func (h *host) agent(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if kind == websocket.BinaryMessage {
-			e, err := web.DecodeOutput(data)
-			if err != nil {
-				return
-			}
-			e.Instance = p.id
-			if view.Observe(e) != nil {
-				return
-			}
-			continue
+		if kind != websocket.BinaryMessage {
+			return
 		}
 		var msg message
-		if json.Unmarshal(data, &msg) != nil {
+		if decodeMessage(data, &msg) != nil {
 			return
 		}
 		switch msg.Type {
@@ -275,37 +333,39 @@ func (h *host) agent(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			return
+			continue
 		}
 	}
 }
 
 type message struct {
-	Type     string        `json:"type"`
-	Protocol int           `json:"protocol,omitempty"`
-	Instance string        `json:"instance,omitempty"`
-	PID      int           `json:"pid,omitempty"`
-	ID       uint64        `json:"id,omitempty"`
-	Kind     string        `json:"kind,omitempty"`
-	Request  core.Request  `json:"request,omitempty"`
-	Event    *core.Event   `json:"event,omitempty"`
-	History  history.State `json:"history,omitempty"`
-	Result   core.Result   `json:"result,omitempty"`
-	Tasks    []core.Result `json:"tasks,omitempty"`
-	Error    string        `json:"error,omitempty"`
+	Capabilities []string      `json:"capabilities,omitempty"`
+	Type         string        `json:"type"`
+	Protocol     int           `json:"protocol,omitempty"`
+	Instance     string        `json:"instance,omitempty"`
+	PID          int           `json:"pid,omitempty"`
+	ID           uint64        `json:"id,omitempty"`
+	Kind         string        `json:"kind,omitempty"`
+	Request      core.Request  `json:"request,omitempty"`
+	Event        *core.Event   `json:"event,omitempty"`
+	History      history.State `json:"history,omitempty"`
+	Result       core.Result   `json:"result,omitempty"`
+	Tasks        []core.Result `json:"tasks,omitempty"`
+	Error        string        `json:"error,omitempty"`
 }
 type peer struct {
-	id      string
-	pid     int
-	c       *websocket.Conn
-	store   *history.Store
-	ctx     context.Context
-	cancel  context.CancelFunc
-	once    sync.Once
-	writer  chan struct{}
-	mu      sync.Mutex
-	next    uint64
-	pending map[uint64]chan message
+	capabilities []string
+	id           string
+	pid          int
+	c            *websocket.Conn
+	store        *history.Store
+	ctx          context.Context
+	cancel       context.CancelFunc
+	once         sync.Once
+	writer       chan struct{}
+	mu           sync.Mutex
+	next         uint64
+	pending      map[uint64]chan message
 }
 
 func (p *peer) close()             { p.once.Do(func() { p.cancel(); _ = p.c.Close(); p.store.Close() }) }
@@ -334,13 +394,16 @@ func (p *peer) write(ctx context.Context, m message) error {
 		deadline = end
 	}
 	_ = p.c.SetWriteDeadline(deadline)
-	err := p.c.WriteJSON(m)
+	err := writeMessage(p.c, m)
 	if err != nil {
 		p.close()
 	}
 	return err
 }
 func (p *peer) call(ctx context.Context, kind string, r core.Request) (message, error) {
+	if !supports(p.capabilities, kind) {
+		return message{Result: core.Result{InputState: "not_sent"}}, errors.New("unsupported Agent capability; nothing submitted")
+	}
 	p.mu.Lock()
 	if len(p.pending) >= 64 {
 		p.mu.Unlock()
