@@ -34,6 +34,9 @@ func runBrowserAcceptance(t *testing.T, proxy bool) {
 	old.Emit(core.Event{Kind: "output", Session: "s1", Data: []byte("archive retained\r\n"), Encoding: "utf-8"})
 	old.Emit(core.Event{Kind: "output", Session: "s1", Data: []byte{0xd6}, Encoding: "gbk"})
 	old.Emit(core.Event{Kind: "output", Session: "s1", Data: []byte{0xd0, 0xce, 0xc4}, Encoding: "gbk"})
+	if err = old.RecordConnection(core.ConnectionRecord{Version: 1, Instance: "archived", Session: "s1", Name: "archived-console", Protocol: "ssh", Mode: "stream", FirstConnected: time.Now().UTC(), LastConnected: time.Now().UTC(), Target: core.ConnectionEndpoint{Host: "archive.example", Port: 22, Username: "archived-user", Password: "archived-secret"}}); err != nil {
+		t.Fatal(err)
+	}
 	old.Close()
 	m := core.NewManager()
 	st, err := history.Open(root, m.InstanceID(), 0)

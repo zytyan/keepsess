@@ -9,6 +9,7 @@ const verifyTypography = require('./typography.cjs');
   await context.addInitScript(()=>{window.sent=[];const orig=WebSocket.prototype.send;WebSocket.prototype.send=function(data){window.sent.push(JSON.parse(data));return orig.call(this,data)}});
   await page.goto(process.argv[2]);await page.waitForSelector('.session');await page.waitForFunction(()=>document.getElementById('connection').textContent.includes('实时连接')).catch(async e=>{console.error(await page.evaluate(()=>({connection:document.getElementById('connection').textContent,warning:document.getElementById('warning').textContent,status:document.getElementById('status').textContent,selected,instance,current,replaying,renderer:terminal?.keepsessRenderer})));throw e;});
   await verifyTypography(page);
+  await require('./connections.cjs')(page);
   await require('./context-menu.cjs')(page);
   await require('./theme-width.cjs')(page);
   await page.evaluate(()=>{

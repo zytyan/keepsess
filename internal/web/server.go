@@ -125,6 +125,10 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 	mux.HandleFunc(o.BasePath+"api/appearance", s.appearance)
 	mux.HandleFunc(o.BasePath+"api/instances", s.instances)
 	mux.HandleFunc(o.BasePath+"api/instance-name", s.instanceName)
+	mux.HandleFunc(o.BasePath+"api/connections", s.connections)
+	mux.HandleFunc(o.BasePath+"api/connection", s.connection)
+	mux.HandleFunc(o.BasePath+"api/connection-secrets", s.connectionSecrets)
+	mux.HandleFunc(o.BasePath+"api/connection-credentials", s.connectionCredentials)
 	mux.HandleFunc(o.BasePath+"api/catalog", s.catalog)
 	mux.HandleFunc(o.BasePath+"api/history", s.read)
 	mux.HandleFunc(o.BasePath+"api/replay", s.replay)
@@ -178,7 +182,7 @@ func (s *Server) Close() {
 }
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		jsonWrite := r.Method == "POST" && (r.URL.Path == s.info.BasePath+"api/appearance" || r.URL.Path == s.info.BasePath+"api/instance-name")
+		jsonWrite := r.Method == "POST" && (r.URL.Path == s.info.BasePath+"api/appearance" || r.URL.Path == s.info.BasePath+"api/instance-name" || r.URL.Path == s.info.BasePath+"api/connection-secrets" || r.URL.Path == s.info.BasePath+"api/connection-credentials")
 		if r.Method != "GET" && !jsonWrite {
 			http.Error(w, "GET required", 405)
 			return

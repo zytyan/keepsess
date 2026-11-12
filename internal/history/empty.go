@@ -53,7 +53,7 @@ func inspectSessions(dir string, meta Instance, strict bool) (has, known bool) {
 				return false, false
 			}
 			stateFound = true
-			if state.Error != "" || state.LostEvents != 0 {
+			if state.Error != "" || state.ConnectionError != "" || state.LostEvents != 0 {
 				return false, false
 			}
 		case strings.HasSuffix(name, ".jsonl"):

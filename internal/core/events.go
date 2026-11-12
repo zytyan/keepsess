@@ -35,7 +35,10 @@ type Event struct {
 // the sink before Connect/Serve; it is immutable for the lifetime of a manager.
 type EventSink interface{ Emit(Event) }
 
-func (m *Manager) SetEventSink(sink EventSink) { m.events = sink }
+func (m *Manager) SetEventSink(sink EventSink) {
+	m.events = sink
+	m.connections, _ = sink.(ConnectionSink)
+}
 
 func (s *Session) record(kind string, data []byte, command, cwd string, receipt *Result) {
 	if s.events == nil {

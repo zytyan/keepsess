@@ -172,7 +172,8 @@ type Session struct {
 	interactive, pty, stdinOpen             bool
 }
 type Manager struct {
-	events EventSink // Installed before serving; callbacks must never block.
+	events      EventSink      // Installed before serving; callbacks must never block.
+	connections ConnectionSink // Private metadata, never emitted as public events.
 
 	instanceID             string
 	instanceName           string
@@ -328,10 +329,12 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	promptName := !m.instanceNamingPrompted && m.instanceName == ""
 	m.instanceNamingPrompted = true
 	instanceName := m.instanceName
+	connectionWarning := m.recordConnectionLocked(s, o)
 	m.mu.Unlock()
 	s.record("session", nil, "", "", nil)
 	go m.watch(s)
 	v := s.status()
+	v.Warning = connectionWarning
 	s.mu.Lock()
 	v.Peer = s.peer
 	v.InstanceID = m.instanceID
@@ -942,11 +945,15 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	old.options = Options{}
 	old.buf = nil
 	old.mu.Unlock()
+	connectionWarning := ""
 	if valid {
 		next.mu.Lock()
 		next.lastUse = time.Now()
 		next.mu.Unlock()
 		m.sessions[id] = next
+		if err == nil {
+			connectionWarning = m.recordConnectionLocked(next, o)
+		}
 	}
 	m.mu.Unlock()
 	if !valid {
@@ -961,6 +968,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	next.record("session", nil, "", "", nil)
 	go m.watch(next)
 	v := next.status()
+	v.Warning = connectionWarning
 	next.mu.Lock()
 	v.Peer = next.peer
 	v.InstanceID = m.instanceID

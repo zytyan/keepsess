@@ -59,10 +59,19 @@ with no patch, or sess_get_config. Legacy [tools] profile settings are ignored.
 History defaults to `~/.keepsess/history` (an existing legacy default directory is
 reused), with private instance directories/files. Commands, raw terminal input
 (including passwords) and output are retained; structured connection credentials
-and env fields are excluded. Never publish history, `.keepsess.toml`, or the daemon
+and env fields are excluded from terminal history. Successful connections now save
+separate private records under `<history.dir>/<instance>/connections/`, including
+target and jump passwords in plaintext (directories 0700, files 0600), but no private
+keys or key passphrases. Browser “连接管理” lists live/archived records; passwords
+are masked until “显示密码” is checked and cleared from the page when hidden or closed.
+Telnet credentials can be entered manually for reference only, without sending
+input or changing reconnect options; never infer login success or passwords from
+terminal output. Password input left blank preserves its saved value; an explicit
+checkbox clears it. Old records are not reconstructed. Never publish connection records, history, `.keepsess.toml`, or the daemon
 runtime token. `[history] dir` changes location; `max_bytes` enables a capacity
 guard (0 means unlimited disk capacity; the guard never automatically deletes archives). Recording failures/gaps do not block remote
-connections. `[web] enabled=false` disables registration/history for this Agent.
+connections. `[web] enabled=false` disables registration/terminal history for this Agent; private successful-connection
+records are still saved, including when the Web daemon is unavailable.
 Web/history changes need `keepsess daemon stop`; live Agents may restart it and
 register again. Changing history.dir requires restarting existing Agents too.
 `keepsess daemon status` reports the URL without exposing the IPC token.

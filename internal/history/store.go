@@ -26,12 +26,13 @@ const queueBytes = 8 << 20
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type State struct {
-	Recording  bool   `json:"recording"`
-	Error      string `json:"error,omitempty"`
-	LastSeq    uint64 `json:"last_seq"`
-	WrittenSeq uint64 `json:"written_seq"`
-	DurableSeq uint64 `json:"durable_seq"`
-	LostEvents uint64 `json:"lost_events"`
+	Recording       bool   `json:"recording"`
+	ConnectionError string `json:"connection_error,omitempty"`
+	Error           string `json:"error,omitempty"`
+	LastSeq         uint64 `json:"last_seq"`
+	WrittenSeq      uint64 `json:"written_seq"`
+	DurableSeq      uint64 `json:"durable_seq"`
+	LostEvents      uint64 `json:"lost_events"`
 }
 type Instance struct {
 	ID          string    `json:"id"`
@@ -54,30 +55,32 @@ type Record struct {
 	Cwd     string     `json:"cwd,omitempty"`
 }
 type queued struct {
-	event core.Event
-	size  int
+	event      core.Event
+	size       int
+	connection *core.ConnectionRecord
 }
 type Store struct {
-	readCursorMu   sync.Mutex
-	readCursors    map[readCursorKey]readCursor
-	readCursorKeys []readCursorKey
-	readCursorNext int
-	root, instance string
-	view           bool
-	maxBytes       int64
-	mu             sync.Mutex
-	state          State
-	queuedBytes    int
-	queue          chan queued
-	done           chan struct{}
-	closed         bool
-	hasSessions    bool
-	owner          *os.File
-	once           sync.Once
-	pending        map[uint64]core.Event
-	subscribers    map[*Subscription]bool
-	recoveryMu     sync.Mutex
-	recoveries     map[string]*recovery
+	readCursorMu      sync.Mutex
+	readCursors       map[readCursorKey]readCursor
+	readCursorKeys    []readCursorKey
+	readCursorNext    int
+	root, instance    string
+	view              bool
+	maxBytes          int64
+	mu                sync.Mutex
+	state             State
+	queuedBytes       int
+	connectionPending int
+	queue             chan queued
+	done              chan struct{}
+	closed            bool
+	hasSessions       bool
+	owner             *os.File
+	once              sync.Once
+	pending           map[uint64]core.Event
+	subscribers       map[*Subscription]bool
+	recoveryMu        sync.Mutex
+	recoveries        map[string]*recovery
 	// File and projection mutations belong exclusively to the writer goroutine.
 	file              *os.File
 	segmentSize, used int64
@@ -195,7 +198,7 @@ func (s *Store) Emit(e core.Event) {
 		return
 	}
 	select {
-	case s.queue <- queued{e, size}:
+	case s.queue <- queued{event: e, size: size}:
 		s.queuedBytes += size
 		s.pending[e.Seq] = e
 	default:
@@ -235,6 +238,9 @@ func (s *Store) Close() {
 		case <-time.After(3 * time.Second):
 			s.mu.Lock()
 			s.failLocked("history shutdown drain timeout; archive may be incomplete")
+			if s.connectionPending > 0 {
+				s.state.ConnectionError = "Shutdown drain timed out; connection information may not have been saved."
+			}
 			s.mu.Unlock()
 		}
 	})
@@ -270,7 +276,7 @@ func (s *Store) run() {
 		}
 		_ = s.owner.Close()
 		s.mu.Lock()
-		empty := !s.hasSessions && s.state.Error == "" && s.state.LostEvents == 0
+		empty := !s.hasSessions && s.state.Error == "" && s.state.ConnectionError == "" && s.state.LostEvents == 0
 		s.mu.Unlock()
 		if empty {
 			if err := os.RemoveAll(filepath.Join(s.root, s.instance)); err != nil {
@@ -291,6 +297,16 @@ func (s *Store) run() {
 			s.mu.Lock()
 			s.queuedBytes -= q.size
 			s.mu.Unlock()
+			if q.connection != nil {
+				err := s.saveConnection(*q.connection)
+				s.mu.Lock()
+				s.connectionPending--
+				if err != nil {
+					s.state.ConnectionError = "Connection information could not be saved; check storage permissions, capacity and availability."
+				}
+				s.mu.Unlock()
+				continue
+			}
 			if writeFailed {
 				s.mu.Lock()
 				delete(s.pending, q.event.Seq)

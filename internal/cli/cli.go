@@ -198,6 +198,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		}
 		s := &mcp.Server{Manager: core.NewManager()}
 		defer s.Manager.CloseAll()
+		connectionRecording := false
 		if cfg.Web.Enabled {
 			info := web.Info{InstanceID: s.Manager.InstanceID()}
 			runtime, e := daemon.Ensure(ctx, cfg, launchDaemon)
@@ -215,11 +216,16 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 				} else {
 					defer func() {
 						store.Close()
-						if state := store.Status(); state.Error != "" {
+						state := store.Status()
+						if state.Error != "" {
 							fmt.Fprintln(errout, "keepsess history:", state.Error)
+						}
+						if state.ConnectionError != "" {
+							fmt.Fprintln(errout, "keepsess connection storage:", state.ConnectionError)
 						}
 					}()
 					s.Manager.SetEventSink(store)
+					connectionRecording = true
 					client := daemon.Connect(ctx, cfg, s.Manager, store, runtime, launchDaemon)
 					defer client.Close()
 					s.WebInfo = func() any { return client.Info() }
@@ -229,6 +235,22 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 			if s.WebInfo == nil {
 				s.WebInfo = func() any { return info }
 				fmt.Fprintln(errout, "keepsess Web unavailable:", info.Error)
+			}
+		}
+		// Private connection records remain available even when Web observation is
+		// disabled or the daemon cannot start. Do not enable terminal history here.
+		if !connectionRecording {
+			store, e := history.Open(cfg.History.Dir, s.Manager.InstanceID(), cfg.History.MaxBytes)
+			if e != nil {
+				fmt.Fprintln(errout, "keepsess connection storage unavailable:", e)
+			} else {
+				s.Manager.SetConnectionSink(store)
+				defer func() {
+					store.Close()
+					if state := store.Status(); state.ConnectionError != "" {
+						fmt.Fprintln(errout, "keepsess connection storage:", state.ConnectionError)
+					}
+				}()
 			}
 		}
 		if *auditPath != "" {
