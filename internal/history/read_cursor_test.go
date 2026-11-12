@@ -68,6 +68,24 @@ func TestReadContinuationAppendReplaceAndCapacity(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(a, b) {
 		t.Fatal("cursor changed history", err)
 	}
+	// An arbitrary observed cursor can resume from the nearest lower boundary.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := readCursorKey{instance: "continuation", segment: filepath.Base(path), after: 12}
+	observed := readCursorKey{instance: "continuation", segment: filepath.Base(path), after: 17}
+	if got := s.readPosition(observed, info); got == 0 || got != s.readCursors[boundary].offset {
+		t.Fatal("nearest cached boundary was not reused", got)
+	}
+	warm, err := s.Read("continuation", 17, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := cold.Read("continuation", 17, 12)
+	if err != nil || !reflect.DeepEqual(warm, fresh) {
+		t.Fatal("warm arbitrary cursor changed content", err)
+	}
 	// A truncated file must invalidate an offset past its new EOF.
 	write(1)
 	p, err = s.Read("continuation", 400, 1)

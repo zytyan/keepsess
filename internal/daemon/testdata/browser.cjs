@@ -15,7 +15,7 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#run,#command,#task-sidebar').count(),0);assert.equal(await page.evaluate(()=>terminal.options.disableStdin),true);
  await page.locator('#instance-selected').click();await page.locator('.instance-choice').filter({hasText:'网络诊断 B'}).click();await page.waitForFunction(id=>instance===id&&selected==='s1'&&!replaying,process.argv[4]);
  assert.equal(await page.evaluate(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('stdout')),false);
- assert.equal(await page.locator('#mode').innerText(),'READ ONLY');assert.deepEqual(errors,[]);
+ assert.equal(await page.locator('#mode').innerText(),'只读');assert.equal(await page.locator('#mode').getAttribute('aria-pressed'),'true');assert(await page.locator('#mode').isDisabled());assert.deepEqual(errors,[]);
  if(process.env.KEEPSESS_DAEMON_SCREENSHOT)await page.screenshot({path:process.env.KEEPSESS_DAEMON_SCREENSHOT,fullPage:true});
  console.log('shared daemon browser passed: two named active instances/PIDs, same s1 IDs isolated, correct replay, read-only on switch');
  }finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

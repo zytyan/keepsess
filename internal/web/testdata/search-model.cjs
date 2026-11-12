@@ -2,6 +2,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const elements=new Map();
 const ctx=vm.createContext({console,structuredClone,TextEncoder,TextDecoder,atob,performance,setTimeout,clearTimeout,requestAnimationFrame:cb=>setTimeout(cb,0),cancelAnimationFrame:clearTimeout,Event:class{},window:{addEventListener(){},dispatchEvent(){}},localStorage:{getItem(){return null},setItem(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,{textContent:'',classList:{toggle(){}},style:{}});return elements.get(id);}},tasks:new Map(),terminalQuery:null});
 for(const file of ['preferences.js','transcript.js','transport.js'])vm.runInContext(fs.readFileSync('assets/'+file,'utf8'),ctx);
+vm.runInContext(fs.readFileSync('assets/highlight-matcher.js','utf8'),ctx);
 vm.runInContext(fs.readFileSync('assets/search.js','utf8').split("searchElements('terminal-search').addEventListener")[0],ctx);
 vm.runInContext(`
  const off=()=>({dispose(){}}),term={buffer:{active:{type:'normal',baseY:0,cursorY:0}},onRender:off,onScroll:off,onResize:off,onWriteParsed:off,register(){}};
@@ -31,5 +32,7 @@ vm.runInContext(`
  vm.runInContext(`const decoderState={encoding:'utf-8'};trackDecoderTime(decoderState,new Uint8Array([228,184]),stamp);`,ctx);assert.equal(vm.runInContext('decoderState.pendingTime',ctx),'2026-11-12T00:00:00.001Z');vm.runInContext('trackDecoderTime(decoderState,new Uint8Array([173,10]),next)',ctx);assert.equal(vm.runInContext('decoderState.pendingTime',ctx),'');
  const parts=vm.runInContext(`outputEvents({event:{kind:'output',seq:2,data:new Uint8Array([228,184,173,10]),session:'s1'},segments:[{end:2,seq:1,time:'2026-11-12T00:00:00.001Z'},{end:4,seq:2,time:'2026-11-12T00:00:00.002Z'}]})`,ctx);assert.equal(parts.length,2);assert.deepEqual(Array.from(parts[0].data),[228,184]);assert.equal(parts[1].time,'2026-11-12T00:00:00.002Z');
  assert.throws(()=>vm.runInContext(`outputEvents({event:{kind:'output',seq:1,data:new Uint8Array([1])},segments:[{end:2,seq:1}]})`,ctx));
+ vm.runInContext(`const views=new TranscriptCache();for(let i=0;i<8;i++)views.put(String(i),{charge:20*1024*1024});`,ctx);assert.equal(vm.runInContext('views.entries.size',ctx),3);assert(vm.runInContext('views.bytes<=64*1024*1024',ctx));vm.runInContext(`views.put('oversized',{charge:65*1024*1024});`,ctx);assert.equal(vm.runInContext('views.entries.has("oversized")',ctx),false);assert(vm.runInContext('views.take("7")!==undefined',ctx));assert.equal(vm.runInContext('views.entries.size',ctx),2);
+ const dense=vm.runInContext(`new HighlightMatcher().match(['e'.repeat(16384)],[{name:'dense',pattern:'e',regex:false,enabled:true,case_sensitive:true}])`,ctx);assert.equal(dense.matches.length,16384);assert.equal(dense.matches.at(-1).start,16383);
  console.log('search model passed: task-local context, source retention, earliest time, literals, bounds, migration, time segments');
 })().catch(e=>{console.error(e);process.exitCode=1});

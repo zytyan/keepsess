@@ -167,6 +167,13 @@ class TerminalQuery {
    const content=document.createElement('span');content.className='search-result-text';let from=Math.max(0,result.first-50),to=Math.min(result.plain.length,from+190);if(/[\uDC00-\uDFFF]/.test(result.plain[from]||''))from--;if(/[\uD800-\uDBFF]/.test(result.plain[to-1]||''))to--;const fragment=result.plain.slice(from,to);let offset=0;if(from)content.append('…');for(const m of fragment.matchAll(literalRegex(preferences.search.query,preferences.search.caseSensitive))){content.append(fragment.slice(offset,m.index));const mark=document.createElement('mark');mark.textContent=m[0];content.append(mark);offset=m.index+m[0].length;}content.append(fragment.slice(offset)+(to<result.plain.length?'…':''));item.append(meta,content);item.title=result.plain.slice(0,512);item.onclick=()=>{if(this.results[i]!==result){this.notice('结果已更新，请重新选择。');return;}this.jump(i);};space.append(item);
   }
  }
+ clearHighlights(){
+  // Remove every decoration before disposing shared row markers. xterm indexes
+  // decorations by marker.line; disposing a live marker first invalidates it.
+  for(const d of this.decorations)d.decoration?.dispose();
+  for(const marker of new Set(this.decorations.map(d=>d.marker)))marker.dispose();
+  this.decorations=[];
+ }
  paintHighlights(){if(this.closed||this.highlightFrame)return;this.highlightFrame=requestAnimationFrame(()=>{this.highlightFrame=0;this.drawHighlights();});}
  drawHighlights(){
   if(this.closed)return;const b=this.term.buffer.active;
@@ -174,11 +181,15 @@ class TerminalQuery {
   // Decorations trigger onRender themselves. Reuse an unchanged projection so
   // a dense matching viewport cannot enter an endless dispose/render cycle.
   if(key===this.highlightKey)return;this.highlightKey=key;
-  for(const d of this.decorations){d.decoration?.dispose();d.marker.dispose();}this.decorations=[];if(!preferences.search.query||this.resultsVersion!==this.version)return;
-  const bottom=b.baseY+b.cursorY;let budget=1000;
-  for(const result of this.results){const pos=this.rowPosition(result.row);if(!pos||pos.end<b.viewportY||pos.start>=b.viewportY+this.term.rows)continue;const map=this.cells(result.row,pos);for(const m of result.plain.matchAll(literalRegex(preferences.search.query,preferences.search.caseSensitive))){let start=m.index,end=m.index+m[0].length;while(start<end){const a=map.positions[start];if(!a)break;let last=start;while(last+1<end&&map.positions[last+1]?.y===a.y)last++;const z=map.positions[last];if(a.y>=b.viewportY&&a.y<b.viewportY+this.term.rows){const marker=this.term.registerMarker(a.y-bottom);if(marker){const decoration=this.term.registerDecoration({marker,x:a.x,width:Math.max(1,z.x+z.width-a.x),backgroundColor:document.documentElement.dataset.theme==='light'?'#f5df9e':'#665124',layer:'bottom'});this.decorations.push({marker,decoration});if(--budget<=0)return;}}start=last+1;}}}
+  const removed=this.decorations.length>0;this.clearHighlights();if(!preferences.search.query||this.resultsVersion!==this.version){if(removed)this.term.refresh(0,this.term.rows-1);return;}
+  const bottom=b.baseY+b.cursorY,rows=new Map();
+  for(const result of this.results){const pos=this.rowPosition(result.row);if(!pos||pos.end<b.viewportY||pos.start>=b.viewportY+this.term.rows)continue;const map=this.cells(result.row,pos);for(const m of result.plain.matchAll(literalRegex(preferences.search.query,preferences.search.caseSensitive))){let start=m.index,end=m.index+m[0].length;while(start<end){const a=map.positions[start];if(!a)break;let last=start;while(last+1<end&&map.positions[last+1]?.y===a.y)last++;const z=map.positions[last];if(a.y>=b.viewportY&&a.y<b.viewportY+this.term.rows){let spans=rows.get(a.y);if(!spans){spans=[];rows.set(a.y,spans);}spans.push({x:a.x,end:z.x+z.width});}start=last+1;}}}
+  for(const [y,spans] of rows){spans.sort((a,b)=>a.x-b.x);const merged=[];for(const span of spans){const last=merged.at(-1);if(last&&span.x<=last.end)last.end=Math.max(last.end,span.end);else merged.push({...span});}
+   const marker=this.term.registerMarker(y-bottom);if(!marker)continue;for(const span of merged){const decoration=this.term.registerDecoration({marker,x:span.x,width:span.end-span.x,backgroundColor:document.documentElement.dataset.theme==='light'?'#f5df9e':'#665124',layer:'bottom'});this.decorations.push({marker,decoration});}
+  }
+  if(removed||this.decorations.length)this.term.refresh(0,this.term.rows-1);
  }
- dispose(){if(this.closed)return;this.closed=true;this.version++;clearTimeout(this.timer);cancelAnimationFrame(this.highlightFrame);for(const l of this.listeners)l.dispose();for(const d of this.decorations){d.decoration?.dispose();d.marker.dispose();}this.anchor?.marker?.dispose();this.results=[];if(typeof terminalQuery!=='undefined'&&terminalQuery===this){searchElements('search-results-space').replaceChildren();searchElements('search-results-space').style.height='0px';searchElements('search-status').textContent='选择一个终端后查找';searchElements('search-range').textContent='暂无终端内容';}}
+ dispose(){if(this.closed)return;this.closed=true;this.version++;clearTimeout(this.timer);cancelAnimationFrame(this.highlightFrame);for(const l of this.listeners)l.dispose();this.clearHighlights();this.anchor?.marker?.dispose();this.results=[];if(typeof terminalQuery!=='undefined'&&terminalQuery===this){searchElements('search-results-space').replaceChildren();searchElements('search-results-space').style.height='0px';searchElements('search-status').textContent='选择一个终端后查找';searchElements('search-range').textContent='暂无终端内容';}}
 }
 searchElements('terminal-search').addEventListener('submit',event=>{event.preventDefault();clearTimeout(searchInputTimer);applySearchForm();terminalQuery?.navigate(1);});
 searchElements('search-text').addEventListener('input',()=>{searchDraft=searchElements('search-text').value;clearTimeout(searchInputTimer);searchInputTimer=setTimeout(applySearchForm,180);});

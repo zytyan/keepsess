@@ -345,7 +345,15 @@ func (t *Task) start(ctx context.Context, command string, c Config) Result {
 				err = errors.New("exec channel does not support interactive stdin")
 			} else {
 				var stdin io.WriteCloser
-				stdin, err = input.prepareInput(t.out.pty)
+				prepare := input.prepareInput
+				if t.out.origin == "human" {
+					if human, ok := ch.(interface {
+						prepareHumanInput(bool) (io.WriteCloser, error)
+					}); ok {
+						prepare = human.prepareHumanInput
+					}
+				}
+				stdin, err = prepare(t.out.pty)
 				if err == nil {
 					t.out.mu.Lock()
 					t.stdin = stdin

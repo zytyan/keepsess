@@ -38,7 +38,8 @@ func TestBrowserAppearanceFallback(t *testing.T) {
 	t.Setenv("KEEPSESS_HIGHLIGHT_FALLBACK", "1")
 	runBrowserFixture(t, "appearance.cjs", "short-first")
 }
-func TestBrowserFollowing(t *testing.T) { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserFollowing(t *testing.T)   { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserWarmHistory(t *testing.T) { runBrowserFixture(t, "warm-history.cjs", "short-first") }
 func TestBrowserDenseHighlight(t *testing.T) {
 	runBrowserFixture(t, "dense-highlight.cjs", "short-first")
 }
@@ -183,6 +184,19 @@ func runBrowserFixture(t *testing.T, script, initial string) {
 		}
 		name := r.URL.Query().Get("name")
 		switch r.URL.Path {
+		case "/session":
+			result, err := m.Connect(context.Background(), core.Options{Host: host, Port: port, Protocol: "ssh", Mode: "exec", Username: "demo", Password: "simulator", Name: name})
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			no := false
+			command, err := m.Operate(context.Background(), "exec", core.Request{Session: result.Session, Command: "short-second", CollectOutput: &no})
+			if err != nil || command.Error != "" {
+				http.Error(w, fmt.Sprint(command, err), 400)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(result)
 		case "/create":
 			v, e := create(name, r.URL.Query().Get("pty") == "true")
 			if e != nil || v.Error != "" {

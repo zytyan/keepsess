@@ -128,7 +128,13 @@ func SSHWithExec(t *testing.T, exec func(string, ssh.Channel, <-chan *ssh.Reques
 func SSHWithGlobalRequests(t *testing.T, handler func(*ssh.Request)) (string, string) {
 	return sshServer(t, Switch, nil, handler)
 }
+func SSHWithExecPTY(t *testing.T, exec func(string, ssh.Channel, <-chan *ssh.Request), pty func(*ssh.Request)) (string, string) {
+	return sshServerWithPTY(t, Switch, exec, pty)
+}
 func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request), globals ...func(*ssh.Request)) (string, string) {
+	return sshServerWithPTY(t, shell, exec, nil, globals...)
+}
+func sshServerWithPTY(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request), pty func(*ssh.Request), globals ...func(*ssh.Request)) (string, string) {
 	t.Helper()
 	_, key, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
@@ -175,6 +181,9 @@ func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Ch
 				for req := range reqs {
 					switch req.Type {
 					case "pty-req":
+						if pty != nil {
+							pty(req)
+						}
 						_ = req.Reply(true, nil)
 					case "shell":
 						_ = req.Reply(true, nil)

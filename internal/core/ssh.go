@@ -218,12 +218,24 @@ func compactSSHVersion(raw []byte) string {
 
 // Input and PTY must be established before Start; default exec retains EOF semantics.
 func (sh *sshExecChannel) prepareInput(pty bool) (io.WriteCloser, error) {
+	return sh.prepareTerminalInput(pty, false)
+}
+
+func (sh *sshExecChannel) prepareHumanInput(pty bool) (io.WriteCloser, error) {
+	return sh.prepareTerminalInput(pty, true)
+}
+
+func (sh *sshExecChannel) prepareTerminalInput(pty, human bool) (io.WriteCloser, error) {
 	stdin, err := sh.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
 	if pty {
-		err = sh.RequestPty("vt100", 24, 80, ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 9600, ssh.TTY_OP_OSPEED: 9600})
+		terminal, echo, speed := "vt100", uint32(0), uint32(9600)
+		if human {
+			terminal, echo, speed = "xterm-256color", 1, 38400
+		}
+		err = sh.RequestPty(terminal, 24, 80, ssh.TerminalModes{ssh.ECHO: echo, ssh.TTY_OP_ISPEED: speed, ssh.TTY_OP_OSPEED: speed})
 	}
 	return stdin, err
 }

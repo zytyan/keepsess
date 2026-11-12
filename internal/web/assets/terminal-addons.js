@@ -25,14 +25,15 @@ class WebGLKeywordLayer{
  static supported(term){return term.keepsessRenderer==='webgl';}
  constructor(term){this.term=term;this.rules=[];this.items=[];this.last=null;}
  configure(rules){this.clear();this.rules=rules;}
- clear(){for(const d of this.items)d.dispose();this.items=[];this.last=null;}
+ clear(refresh=true){const changed=this.items.length>0;for(const d of this.items)d.dispose();this.items=[];this.last=null;if(changed&&refresh)this.term.refresh(0,this.term.rows-1);}
  paint(spans){
   if(this.last===spans)return;
-  this.clear();this.last=spans;
+  this.clear(false);this.last=spans;
   for(const span of spans){const r=this.rules[span.rule];if(!r)continue;
    const d=this.term.registerDecoration({marker:span.marker,x:span.options.x,width:span.options.width,foregroundColor:r.foreground||undefined,backgroundColor:r.background||undefined,layer:'bottom'});
    if(d)this.items.push(d);
   }
+  this.term.refresh(0,this.term.rows-1);
  }
  dispose(){this.clear();}
 }

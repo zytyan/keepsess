@@ -76,19 +76,19 @@ class TerminalHighlight {
  }
  invalidate(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.version++;this.clear();this.schedule();}
  configure(){this.viewportKey=this.viewKey();this.contentKey=this.contentViewKey();this.failed=false;this.version++;highlightEngine.cancel(this);this.clear();this.layer?.configure(appearance.rules);this.syncRules=appearance.rules.every(r=>!r.regex||appearanceDefaults.rules.some(d=>d.regex&&d.pattern===r.pattern));if(!appearance.enabled)this.resumeRender();this.schedule();}
- clearView(paint=true){if(this.layer){if(paint)this.layer.clear();}else for(const d of this.decorations)d.dispose();for(const m of this.markers)m.dispose();this.decorations=[];this.markers=[];this.projectedView=null;this.projectedCache=null;}
+ clearView(paint=true){if(this.layer){if(paint)this.layer.clear();else if(this.layer instanceof WebGLKeywordLayer)this.layer.clear(false);}else for(const d of this.decorations)d.dispose();for(const m of this.markers)m.dispose();this.decorations=[];this.markers=[];this.projectedView=null;this.projectedCache=null;}
  clear(){this.generation++;this.cache.clear();this.clearView();}
  resumeRender(){if(this.renderPending){this.renderPending=false;this.term.refresh(0,this.term.rows-1);}}
- readyView(){const b=this.term.buffer.active;for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows,b.viewportY+200);y++)if(!this.cache.has(y))return false;return true;}
+ readyView(){const b=this.term.buffer.active;for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows);y++)if(!this.cache.has(y))return false;return true;}
  prepareRender(){
   if(this.closed||!this.visible||this.failed||this.term.keepsessReplaying||!appearance.enabled||this.term.buffer.active.type!=='normal'){this.renderPending=false;return true;}
   this.viewportChanged();
-  if(this.readyView()){this.renderPending=false;return true;}
+  if(this.readyView()){this.renderPending=false;if(this.layer instanceof WebGLKeywordLayer)this.project();return true;}
   // Keep the last colored frame until this uncached viewport can be committed
   // with its colors. Never expose an uncolored intermediate page on a thumb jump.
   this.renderPending=true;this.dirty=true;
   if(!this.busy){if(this.timer){cancelAnimationFrame(this.timer);this.timer=null;}this.syncPreparing=true;try{this.scan();}finally{this.syncPreparing=false;}}
-  if(this.readyView()){this.renderPending=false;return true;}
+  if(this.readyView()){this.renderPending=false;if(this.layer instanceof WebGLKeywordLayer)this.project();return true;}
   return false;
  }
  project(){
@@ -99,13 +99,13 @@ class TerminalHighlight {
   for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows);y++){
    const spans=this.cache.get(y);if(!spans?.length)continue;
    const marker=term.registerMarker(y-(b.baseY+b.cursorY));if(!marker)continue;this.markers.push(marker);
-   for(const s of spans){if(this.decorations.length>=1024)break;this.decorations.push({marker,options:{x:s.x,width:s.width},rule:s.rule});}
+   for(const s of spans){this.decorations.push({marker,options:{x:s.x,width:s.width},rule:s.rule});}
   }
   this.projectedView=view;this.projectedCache=this.cache;
   }
   this.layer.paint(this.decorations);
  }
- schedule(){this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||this.term.keepsessReplaying||!appearance.enabled)return;if(this.term.keepsessRenderer==='webgl'&&this.syncRules){this.scan();return;}if(this.layer){this.timer=requestAnimationFrame(()=>{this.timer=null;this.scan();});return;}this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
+ schedule(){if(this.layer&&this.readyView()&&!this.closed){this.dirty=false;this.project();this.resumeRender();return;}this.dirty=true;if(this.closed||!this.visible||this.timer||this.busy||this.failed||this.term.keepsessReplaying||!appearance.enabled)return;if(this.term.keepsessRenderer==='webgl'&&this.syncRules){this.scan();return;}if(this.layer){this.timer=requestAnimationFrame(()=>{this.timer=null;this.scan();});return;}this.timer=setTimeout(()=>{this.timer=null;if(performance.now()<this.scrollUntil){this.schedule();return;}this.scan();},Math.max(80,this.scrollUntil-performance.now()));}
  scan(){
   if(this.closed||!this.visible||this.failed||this.term.keepsessReplaying||!appearance.enabled)return;this.dirty=false;
   const term=this.term,b=term.buffer.active;
@@ -118,19 +118,21 @@ class TerminalHighlight {
   for(const [priority,[startY,endY]] of bands.entries()){let first=true;
   for(let y=startY;y<endY&&scannedRows.size<200&&scanned<32768;y++){
    const line=b.getLine(y);if(!line)continue;
-   scannedRows.add(y);
-   let g=groups[groups.length-1];if(first||!line.isWrapped||!g||g.text.length>=8192){g={text:'',cells:[],rows:[],priority};groups.push(g);}first=false;g.rows.push(y);
+   if(this.layer&&this.cache.has(y)){first=true;continue;}
+   let g=groups[groups.length-1];if(first||!line.isWrapped||!g||g.text.length>=8192){g={text:line.isWrapped?(b.getLine(y-1)?.translateToString(false)||'').slice(-512):'',cells:[],rows:[],priority};scanned+=g.text.length;groups.push(g);}first=false;
    // Omit unwritten padding, retain spaces actually present in the terminal.
    let end=Math.min(term.cols,4096);
    while(end>0){const c=line.getCell(end-1);if(c&&(c.getChars()||!c.getWidth()))break;end--;}
-   for(let x=0;x<end&&g.text.length<8192&&scanned<32768;x++){
+   if(scannedRows.size&&scanned+end*2>32768){if(!g.rows.length)groups.pop();break;}
+   scannedRows.add(y);g.rows.push(y);
+   for(let x=0;x<end;x++){
     const c=line.getCell(x);if(!c||!c.getWidth())continue;
     const text=c.getChars()||' ',start=g.text.length;g.text+=text;scanned+=text.length;
     g.cells.push({y,x,width:c.getWidth(),start,end:g.text.length,ansi:!c.isFgDefault()||!c.isBgDefault()});
    }
   }
   }
-  if(!groups.length){this.clear();return;}
+  if(!groups.length){this.project();this.resumeRender();return;}
   if(this.layer){const distance=g=>Math.max(0,b.viewportY-(g.cells.at(-1)?.y??b.viewportY),(g.cells[0]?.y??viewEnd)-viewEnd+1);groups.sort((a,c)=>a.priority-c.priority||distance(a)-distance(c));}
   const version=this.version,view=this.viewKey(),generation=this.generation,content=this.contentViewKey(),rules=appearance.rules;this.busy=true;
   const apply=data=>{
@@ -138,14 +140,11 @@ class TerminalHighlight {
    if(data.error){this.failed=true;this.clear();this.resumeRender();highlightNotice('高亮规则无效：'+data.error);return;}
    if(this.layer?generation!==this.generation||content!==this.contentViewKey():version!==this.version||view!==this.viewKey()){this.dirty=true;return;}
    if(this.layer){
-    this.cache=new Map();for(let index=0;index<groups.length;index++)if(index<(data.completed_lines??groups.length)||groups[index].priority===0)for(const y of groups[index].rows)this.cache.set(y,[]);
-    // A visible scan may reach its intentional byte/row budget; do not wait
-    // forever for rows deliberately outside that bounded scan.
-    if(view===this.viewKey())for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows,b.viewportY+200);y++)if(!this.cache.has(y))this.cache.set(y,[]);
+    this.cache=new Map(this.cache);for(let index=0;index<groups.length;index++)if(index<(data.completed_lines??groups.length)||groups[index].priority===0)for(const y of groups[index].rows)this.cache.set(y,[]);
     if(view!==this.viewKey())this.dirty=true;
    }
    // Swap once, after matching; do not render an empty intermediate view.
-   if(!this.layer)this.clear();const rowMarkers=new Map();let cached=0;
+   if(!this.layer)this.clear();const rowMarkers=new Map();
    for(const hit of data.matches){
     const rule=rules[hit.rule],all=groups[hit.line].cells,cells=[];
     let lo=0,hi=all.length;while(lo<hi){const mid=(lo+hi)>>>1;if(all[mid].end<=hit.start)lo=mid+1;else hi=mid;}
@@ -157,21 +156,23 @@ class TerminalHighlight {
      else{span={y:c.y,x:c.x,width:c.width};spans.push(span);}
     }
     for(const s of spans){
-     if(this.layer){if(cached<1024){this.cache.get(s.y)?.push({...s,rule:hit.rule});cached++;}continue;}
-     if(this.decorations.length>=1024)break;
+     if(this.layer){if(scannedRows.has(s.y))this.cache.get(s.y)?.push({...s,rule:hit.rule});continue;}
      let marker=rowMarkers.get(s.y);
      if(!marker){marker=term.registerMarker(s.y-(b.baseY+b.cursorY));if(!marker)continue;rowMarkers.set(s.y,marker);this.markers.push(marker);}
      const d=term.registerDecoration({marker,x:s.x,width:s.width,foregroundColor:rule.foreground||undefined,backgroundColor:rule.background||undefined,layer:'bottom'});
      if(d)this.decorations.push(d);
     }
    }
+   if(this.layer)for(const y of scannedRows){const spans=this.cache.get(y);if(!spans?.length)continue;spans.sort((a,b)=>a.x-b.x);const merged=[];for(const s of spans){const last=merged.at(-1);if(last&&last.rule===s.rule&&last.x+last.width===s.x)last.width+=s.width;else merged.push({...s});}this.cache.set(y,merged);}
    if(this.layer){if(this.renderPending&&this.readyView()){if(!this.syncPreparing)term.refresh(0,term.rows-1);}else this.project();}
-   // Exhausting speculative rows must not show a per-view warning (or resize
-   // the terminal). The visible view gets the budget before prefetch work.
-   if(data.limited&&(!this.layer||this.decorations.length>=1024))highlightNotice('高亮已达到每视图 1024 个匹配上限；原文保留。');
+   if(this.layer){
+    let spans=0;for(const list of this.cache.values())spans+=list.length;
+    for(const [y,list] of this.cache){if(this.cache.size<=2000&&spans<=65536)break;if(y>=b.viewportY&&y<b.viewportY+term.rows)continue;this.cache.delete(y);spans-=list.length;}
+    if(!this.readyView())this.dirty=true;
+   }
   };
   const failed=error=>{if(this.closed)return;this.failed=true;this.clear();this.resumeRender();highlightNotice(error.message);};
-  const finished=()=>{this.busy=false;if(this.dirty)this.schedule();};
+  const finished=()=>{this.busy=false;if(this.dirty){if(this.layer&&!this.readyView()){this.timer=requestAnimationFrame(()=>{this.timer=null;this.scan();});}else this.schedule();}};
   const lines=groups.map(g=>g.text);
   // Literals and exact bundled default regex patterns have bounded matching.
   // Arbitrary custom regex must remain isolated in the Worker.

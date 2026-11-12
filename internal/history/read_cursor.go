@@ -22,7 +22,21 @@ func (s *Store) readPosition(key readCursorKey, file os.FileInfo) int64 {
 	if ok && cursor.offset <= file.Size() && os.SameFile(cursor.file, file) {
 		return cursor.offset
 	}
-	return 0
+	// A new observation cursor may lie between earlier page boundaries. Reuse
+	// the nearest lower position in the same append-only file, then let Read
+	// filter the remaining sequence numbers instead of decoding the segment again.
+	var best uint64
+	var offset int64
+	for candidate, cursor := range s.readCursors {
+		if candidate.instance != key.instance || candidate.segment != key.segment || candidate.after > key.after || candidate.after < best {
+			continue
+		}
+		if cursor.offset <= file.Size() && os.SameFile(cursor.file, file) {
+			best = candidate.after
+			offset = cursor.offset
+		}
+	}
+	return offset
 }
 func (s *Store) rememberReadPosition(key readCursorKey, offset int64, file os.FileInfo) {
 	s.readCursorMu.Lock()

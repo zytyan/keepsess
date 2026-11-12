@@ -22,13 +22,12 @@ match(lines,rules){
    for(const r of this.compiled){
     if(!r.enabled)continue;r.re.lastIndex=0;
     let examined=0,m;
-    while((m=r.re.exec(text))&&examined++<1025){
+    while((m=r.re.exec(text))&&examined++<=text.length){
      const start=m.index,end=start+m[0].length;
      if(start===end){r.re.lastIndex=start+(text.codePointAt(start)>0xffff?2:1);continue;}
      if(r.name==='错误'&&zeros.some(([a,b])=>start>=a&&end<=b))continue;
      if(occupied.subarray(start,end).some(Boolean))continue;
      occupied.fill(1,start,end);matches.push({line,start,end,rule:r.index});
-     if(matches.length>=1024){return {matches,limited:true,completed_lines:line};}
     }
    }
   }

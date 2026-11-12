@@ -20,6 +20,13 @@ function outputClock(time){if(!outputTime(time))return '未知';const d=new Date
 function taskColor(id){let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);const light=document.documentElement?.dataset.theme==='light';return (light?['#087e72','#4c5fc1','#a65c13','#8847a8','#176ea3','#507c19','#b13b57','#82700d']:['#82d9c8','#a8b9ff','#edba87','#d3a5eb','#8ac6e9','#b7d68d','#ec9ba7','#d8cd82'])[h>>>0&7];}
 function nextANSIStyle(style,text){for(const m of text.matchAll(/\x1b\[[\d;:]*m/g)){if(m[0]==='\x1b[m'||m[0]==='\x1b[0m')style='';else style=style.length+m[0].length>2048?m[0]:style+m[0];}return style;}
 
+// Display history stays in memory only; no output or credentials enter preferences.
+class TranscriptCache {
+ constructor(){this.entries=new Map();this.bytes=0;}
+ take(key){const entry=this.entries.get(key);if(entry){this.entries.delete(key);this.bytes-=entry.charge;}return entry;}
+ put(key,entry){this.take(key);if(entry.charge>64*1024*1024)return;this.entries.set(key,entry);this.bytes+=entry.charge;while(this.entries.size>4||this.bytes>64*1024*1024)this.take(this.entries.keys().next().value);}
+}
+
 class SourceTranscript {
  constructor(term,write){
   this.term=term;this.write=write;this.states=new Map();this.rows=[];this.bytes=0;this.nextID=1;this.evicted=0;
@@ -27,6 +34,15 @@ class SourceTranscript {
   this.events=[term.onRender(()=>this.paint()),term.onScroll(()=>this.paint()),term.onResize(()=>{this.reanchor();this.paint();})];
   term.register({dispose:()=>this.dispose()});
  }
+ snapshot(){
+  const rows=this.rows.slice(),states=new Map(this.states),commands=new Map(this.commands);
+  let charge=rows.reduce((n,r)=>n+256+2*(r.text.length+r.plain.length+r.style.length),0);
+  for(const command of new Set(rows.map(r=>r.command)))charge+=2*command.length;
+  for(const state of states.values())charge+=128+2*(state.ansi.escape.length+state.ansi.style.length);
+  return {rows,states,commands,bytes:this.bytes,nextID:this.nextID,evicted:this.evicted,active:this.active,charge};
+ }
+ restore(entry){this.rows=entry.rows;this.states=new Map(entry.states);this.commands=new Map(entry.commands);this.bytes=entry.bytes;this.nextID=entry.nextID;this.evicted=entry.evicted;this.active=entry.active;this.prune();}
+
  source(e){return e.source||((e.status?.pty||tasks.get(e.handle)?.status.pty)?'mixed':'unknown');}
  state(e){const key=(e.handle||e.session)+'/'+this.source(e);let state=this.states.get(key);if(!state){if(this.states.size>=256)this.states.delete(this.states.keys().next().value);state={ansi:new TranscriptANSI()};this.states.set(key,state);}return state;}
  append(text,e,kind='output'){

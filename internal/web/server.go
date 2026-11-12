@@ -142,7 +142,11 @@ func Start(parent context.Context, m *core.Manager, store *history.Store, o Opti
 		if m, ok := b.Manager.(interface{ WebCapabilities() []string }); ok {
 			caps = m.WebCapabilities()
 		}
-		respond(w, map[string]any{"capabilities": caps})
+		tail := uint64(0)
+		if b.Store != nil {
+			tail = b.Store.Status().LastSeq
+		}
+		respond(w, map[string]any{"capabilities": caps, "history_tail_seq": tail})
 	})
 	mux.HandleFunc(o.BasePath+"api/info", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Info()) })
 	mux.HandleFunc(o.BasePath+"ws", s.socket)
