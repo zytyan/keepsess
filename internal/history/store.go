@@ -60,6 +60,7 @@ type queued struct {
 	connection *core.ConnectionRecord
 }
 type Store struct {
+	connectionEditMu  sync.Mutex
 	readCursorMu      sync.Mutex
 	readCursors       map[readCursorKey]readCursor
 	readCursorKeys    []readCursorKey

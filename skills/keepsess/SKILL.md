@@ -62,8 +62,12 @@ reused), with private instance directories/files. Commands, raw terminal input
 and env fields are excluded from terminal history. Successful connections now save
 separate private records under `<history.dir>/<instance>/connections/`, including
 target and jump passwords in plaintext (directories 0700, files 0600), but no private
-keys or key passphrases. Browser “连接管理” lists live/archived records; passwords
-are masked until “显示密码” is checked and cleared from the page when hidden or closed.
+keys or key passphrases. Browser “连接管理” groups live/archived records by username, host, port and protocol,
+without displaying session IDs. New successful credentials update the current value;
+changed target/jump passwords retain private version history under `connections/versions/`.
+Unchanged passwords do not add duplicate changes. Current and historical passwords
+are fetched only by a same-origin POST after “显示密码” is checked, and cleared from
+the page when hidden, switched or closed. No credential values enter preferences.
 Telnet credentials can be entered manually for reference only, without sending
 input or changing reconnect options; never infer login success or passwords from
 terminal output. Password input left blank preserves its saved value; an explicit

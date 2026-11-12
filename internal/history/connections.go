@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/zytyan/keepsess/internal/core"
@@ -25,9 +27,10 @@ type ConnectionPage struct {
 	Warnings   []string                `json:"warnings,omitempty"`
 }
 type manualCredentials struct {
-	Version  int    `json:"version"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Updated  time.Time `json:"updated,omitempty"`
+	Version  int       `json:"version"`
+	Username string    `json:"username"`
+	Password string    `json:"password"`
 }
 
 // RecordConnection shares the journal's bounded writer, but not its public events,
@@ -137,12 +140,23 @@ func (s *Store) saveConnection(r core.ConnectionRecord) error {
 		return err
 	}
 	path := filepath.Join(dir, r.Session+".json")
+	r.CredentialsUpdated = r.LastConnected
 	var old core.ConnectionRecord
 	if err = privateConnectionRead(path, &old); err == nil {
 		if old.Version != 1 || old.Instance != r.Instance || old.Session != r.Session {
 			return errors.New("invalid existing connection")
 		}
 		r.FirstConnected = old.FirstConnected
+		if !reflect.DeepEqual(old.Target, r.Target) || !reflect.DeepEqual(old.SSHJumps, r.SSHJumps) {
+			if err = s.archiveConnection(old, true); err != nil {
+				return err
+			}
+		} else {
+			r.CredentialsUpdated = old.CredentialsUpdated
+			if r.CredentialsUpdated.IsZero() {
+				r.CredentialsUpdated = old.LastConnected
+			}
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -206,6 +220,7 @@ func (s *Store) Connection(instance, session string, secrets bool) (core.Connect
 				return core.ConnectionRecord{}, errors.New("unsupported saved credentials")
 			}
 			r.Target.Username, r.Target.Password, r.Manual = manual.Username, manual.Password, true
+			r.CredentialsUpdated = manual.Updated
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return core.ConnectionRecord{}, errors.New("saved credentials could not be read")
 		}
@@ -231,6 +246,8 @@ func (s *Store) Connection(instance, session string, secrets bool) (core.Connect
 
 // Browser edits have their own file: the owning agent never overwrites them on reconnect.
 func (s *Store) SaveConnectionCredentials(instance, session, username string, password *string) error {
+	s.connectionEditMu.Lock()
+	defer s.connectionEditMu.Unlock()
 	if !utf8.ValidString(username) || len(username) > 4096 || (password != nil && (!utf8.ValidString(*password) || len(*password) > 65536)) {
 		return errors.New("invalid credentials or credentials too long")
 	}
@@ -249,7 +266,16 @@ func (s *Store) SaveConnectionCredentials(instance, session, username string, pa
 	if password != nil {
 		savedPassword = *password
 	}
-	if err = privateConnectionWrite(dir, session+".credentials.json", manualCredentials{1, username, savedPassword}); err != nil {
+	if r.Target.Username != username || r.Target.Password != savedPassword {
+		if err = s.archiveConnection(r, false); err != nil {
+			return errors.New("previous credentials could not be preserved")
+		}
+	}
+	updated := r.CredentialsUpdated
+	if r.Target.Username != username || r.Target.Password != savedPassword {
+		updated = time.Now().UTC()
+	}
+	if err = privateConnectionWrite(dir, session+".credentials.json", manualCredentials{Updated: updated, Version: 1, Username: username, Password: savedPassword}); err != nil {
 		return errors.New("credentials could not be saved; check storage permissions and availability")
 	}
 	return nil

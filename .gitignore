@@ -36,3 +36,5 @@ __pycache__/
 # Private connection records, including manually entered Telnet credentials
 **/connections/s[0-9]*.json
 **/connections/.connection-*
+
+**/connections/versions/

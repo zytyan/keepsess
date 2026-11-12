@@ -37,6 +37,10 @@ func runBrowserAcceptance(t *testing.T, proxy bool) {
 	if err = old.RecordConnection(core.ConnectionRecord{Version: 1, Instance: "archived", Session: "s1", Name: "archived-console", Protocol: "ssh", Mode: "stream", FirstConnected: time.Now().UTC(), LastConnected: time.Now().UTC(), Target: core.ConnectionEndpoint{Host: "archive.example", Port: 22, Username: "archived-user", Password: "archived-secret"}}); err != nil {
 		t.Fatal(err)
 	}
+	// A second session for the same account/address must remain one browser entry.
+	if err = old.RecordConnection(core.ConnectionRecord{Version: 1, Instance: "archived", Session: "s2", Protocol: "ssh", Mode: "exec", FirstConnected: time.Now().UTC(), LastConnected: time.Now().UTC(), Target: core.ConnectionEndpoint{Host: "archive.example", Port: 22, Username: "archived-user", Password: "archived-current-secret"}}); err != nil {
+		t.Fatal(err)
+	}
 	old.Close()
 	m := core.NewManager()
 	st, err := history.Open(root, m.InstanceID(), 0)

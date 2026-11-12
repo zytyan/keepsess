@@ -18,17 +18,18 @@ type ConnectionEndpoint struct {
 
 // ConnectionRecord travels only to the private local persistence sink.
 type ConnectionRecord struct {
-	Version        int                  `json:"version"`
-	Instance       string               `json:"instance"`
-	Session        string               `json:"session"`
-	Name           string               `json:"name,omitempty"`
-	Protocol       string               `json:"protocol"`
-	Mode           string               `json:"mode"`
-	FirstConnected time.Time            `json:"first_connected"`
-	LastConnected  time.Time            `json:"last_connected"`
-	Target         ConnectionEndpoint   `json:"target"`
-	SSHJumps       []ConnectionEndpoint `json:"ssh_jumps,omitempty"`
-	Manual         bool                 `json:"manual"`
+	CredentialsUpdated time.Time            `json:"credentials_updated,omitempty"`
+	Version            int                  `json:"version"`
+	Instance           string               `json:"instance"`
+	Session            string               `json:"session"`
+	Name               string               `json:"name,omitempty"`
+	Protocol           string               `json:"protocol"`
+	Mode               string               `json:"mode"`
+	FirstConnected     time.Time            `json:"first_connected"`
+	LastConnected      time.Time            `json:"last_connected"`
+	Target             ConnectionEndpoint   `json:"target"`
+	SSHJumps           []ConnectionEndpoint `json:"ssh_jumps,omitempty"`
+	Manual             bool                 `json:"manual"`
 }
 
 // ConnectionSink must copy/own its input and return promptly without disk I/O.

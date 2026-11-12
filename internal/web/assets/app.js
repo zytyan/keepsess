@@ -13,10 +13,10 @@ function resetInputLockRequest(){inputLockPending=false;clearTimeout(inputLockTi
 const taskDecoders=new Map(),historyViews=new TranscriptCache();
 function historyViewKey(){return JSON.stringify([serverID,instance,selected]);}
 function stashHistoryView(){
- if(!transcript||!transcript.cacheReady||replaying||transcript.cacheKey!==historyViewKey())return;
+ if(!transcript||!transcript.cacheReady||transcript.cacheKey!==historyViewKey())return;
  const entry=transcript.snapshot(),b=terminal.buffer.active,top=transcript.spanAt(b.viewportY);
  entry.cursor=cursor;entry.decoders=new Map(taskDecoders);entry.charge+=entry.decoders.size*512;
- entry.viewport={follow:atTail(),id:top?.id,offset:top?b.viewportY-top.marker.line:0};
+ entry.viewport=transcript.pendingViewport||{follow:atTail(),id:top?.id,offset:top?b.viewportY-top.marker.line:0};
  historyViews.put(transcript.cacheKey,entry);
 }
 async function restoreHistoryViewport(view){
@@ -206,7 +206,7 @@ async function apply(e, gen, live=false) {
   }
  }
  if(gen!==generation)return;
- cursor=Math.max(cursor,e.seq); if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
+ cursor=Math.max(cursor,e.seq);if(transcript)transcript.cacheReady=true; if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
 }
 async function selectSession(id, task, startAfter=0) {
  stashHistoryView();resetInputLockRequest();
@@ -217,10 +217,18 @@ async function selectSession(id, task, startAfter=0) {
  if(humanPage){const u=new URL(location.href);u.searchParams.set('instance',instance);u.searchParams.set('session',id);if(handle)u.searchParams.set('handle',handle);else u.searchParams.delete('handle');history.replaceState(null,'',u);}
  $('empty').hidden=true;$('terminal').hidden=false;$('receipts').textContent='终端输入（包括密码）会原样保存在本机历史中。';$('echo').checked=preferences.echo;
  const cached=continuous()?historyViews.take(historyViewKey()):null;
- createTerminal();if(!cached&&humanPage&&handle&&Number.isSafeInteger(startAfter)&&startAfter>0)cursor=startAfter;if(cached){transcript.restore(cached);cursor=cached.cursor;for(const [key,entry]of cached.decoders)taskDecoders.set(key,entry);}
+ createTerminal();if(!cached&&humanPage&&handle&&Number.isSafeInteger(startAfter)&&startAfter>0)cursor=startAfter;if(cached){transcript.restore(cached);transcript.cacheReady=true;transcript.pendingViewport=cached.viewport;cursor=cached.cursor;for(const [key,entry]of cached.decoders)taskDecoders.set(key,entry);}
  renderSidebar();renderTasks();$('terminal-label').textContent=handle||id;
- replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').textContent=cached?'正在恢复已加载历史并补齐新增内容…':'正在读取历史…';$('loading').hidden=false;updateControls();
+ replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').textContent=cached?'正在显示内存历史…':'正在读取历史…';$('loading').hidden=false;updateControls();
  try {
+  if(cached){
+   await transcript.flush();if(gen!==generation)return;
+   await terminalQuery.refresh(true);if(gen!==generation)return;
+   await restoreHistoryViewport(cached.viewport);if(gen!==generation)return;
+   transcript.pendingViewport=null;transcript.cacheReady=true;
+   finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;
+   status('正在补齐新增内容…');updateControls();
+  }
   let emptyShell=false;webCaps=[];try{const capabilities=await api('web-capabilities',{instance});if(gen!==generation)return;webCaps=capabilities.capabilities||[];if(humanPage&&e?.mode==='exec'&&!handle&&Number.isSafeInteger(capabilities.history_tail_seq)&&capabilities.history_tail_seq>=0){cursor=capabilities.history_tail_seq;emptyShell=true;}}catch(_){if(gen!==generation)return;}updateControls();
   if(!emptyShell)do {
    const before=cursor,u=new URL('api/replay',root);u.searchParams.set('instance',instance);u.searchParams.set('session',id);u.searchParams.set('after',cursor);u.searchParams.set('format','binary-v2');
@@ -229,13 +237,13 @@ async function selectSession(id, task, startAfter=0) {
    const messages=replayMessages(await response.arrayBuffer());if(gen!==generation)return;
    const p=messages.pop();if(p.instance_id!==serverID)throw new Error('服务实例已变化，请刷新页面。');
    for(const message of messages){await applyTransport(message,gen);if(gen!==generation)return;}
-   transcript?.prune();cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
+   transcript?.prune();if(transcript)transcript.cacheReady=true;cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
   } while(gen===generation);
   if(gen!==generation)return;
   if(instance!==current||!liveSession()){for(const [key,entry]of taskDecoders){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,{session:id,handle:key.split('/')[0],source:key.split('/')[1]});else await termWrite(tail,gen);}if(transcript){for(const t of sessionTasks())await transcript.finish(t.handle);}}
   if(gen!==generation)return;
-  await flushReplay(gen);if(gen!==generation)return;if(transcript)await transcript.flush();finishReplay();await terminalQuery?.refresh(true);if(gen!==generation)return;await restoreHistoryViewport(cached?.viewport);if(gen!==generation)return;if(transcript)transcript.cacheReady=true;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
-  updateControls();if(instance===current)connect(gen);else{$('connection').textContent='历史归档 · 只读';status('归档只读。旧实例运行中任务的最终结果可能未知。');}
+  await flushReplay(gen);if(gen!==generation)return;if(transcript)await transcript.flush();finishReplay();await terminalQuery?.refresh(true);if(gen!==generation)return;if(transcript)transcript.cacheReady=true;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
+  updateControls();if(cached)status('新增内容已补齐。');if(instance===current)connect(gen);else{$('connection').textContent='历史归档 · 只读';status('归档只读。旧实例运行中任务的最终结果可能未知。');}
  } catch(err){if(gen===generation){finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;warn(err.message);updateControls();}}
 }
 function connect(gen) {

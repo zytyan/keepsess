@@ -92,3 +92,5 @@ footer,footer button,.bottom,#follow-tail,#receipt-details,.terminal-bar{font-si
 #search-task-scope[open] .search-task{margin:8px 0}
 .task-scope-hint,#task-scope-status{color:var(--muted);font-size:.9286rem}
 #search-task-scope #task-scope-clear{width:100%}
+
+.connection-password-history p{white-space:pre-wrap;overflow-wrap:anywhere}

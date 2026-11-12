@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zytyan/keepsess/internal/core"
+	"github.com/zytyan/keepsess/internal/history"
 	"github.com/zytyan/keepsess/internal/testutil"
 )
 
@@ -115,5 +116,110 @@ func TestConnectionManagementAPI(t *testing.T) {
 	code, body = request("POST", "connection-secrets", identity, origin)
 	if code != 200 || !json.Valid([]byte(body)) {
 		t.Fatal("closed record unavailable", code)
+	}
+}
+
+func TestGroupedConnectionManagementAPI(t *testing.T) {
+	s, m, st := setup(t, Options{Listen: "127.0.0.1:0", BasePath: "/nested/"})
+	now := time.Now().UTC()
+	r := core.ConnectionRecord{Version: 1, Instance: m.InstanceID(), Session: "s1", Protocol: "ssh", Mode: "exec", FirstConnected: now, LastConnected: now, Target: core.ConnectionEndpoint{Host: "group.example", Port: 22, Username: "operator", Password: "old-group-secret"}}
+	if err := st.RecordConnection(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Target.Password = "new-group-secret"
+	r.LastConnected = now.Add(time.Second)
+	if err := st.RecordConnection(r); err != nil {
+		t.Fatal(err)
+	}
+	st.Emit(core.Event{Kind: "session", Session: "s1"})
+	deadline := time.Now().Add(3 * time.Second)
+	for st.Status().WrittenSeq < st.Status().LastSeq && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	response, err := http.Get(s.Info().URL + "api/connections")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if strings.Contains(string(body), "group-secret") {
+		t.Fatal("secret leaked in grouped list")
+	}
+	var page struct {
+		Items []struct {
+			Key   string `json:"key"`
+			Count int    `json:"password_history_count"`
+		} `json:"items"`
+	}
+	if err = json.Unmarshal(body, &page); err != nil || len(page.Items) != 1 || page.Items[0].Count != 1 {
+		t.Fatal("invalid grouped list", err)
+	}
+	key := page.Items[0].Key
+	response, err = http.Get(s.Info().URL + "api/connection?key=" + key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 || strings.Contains(string(body), "group-secret") {
+		t.Fatal("metadata leak")
+	}
+	originURL, _ := url.Parse(s.Info().URL)
+	req, _ := http.NewRequest("POST", s.Info().URL+"api/connection-secrets", strings.NewReader(`{"key":"`+key+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", originURL.Scheme+"://"+originURL.Host)
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 || !strings.Contains(string(body), `"password":"new-group-secret"`) || !strings.Contains(string(body), `"password":"old-group-secret"`) || !strings.Contains(string(body), `"changed_at"`) {
+		t.Fatal("password history unavailable")
+	}
+	if response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("cacheable password history")
+	}
+}
+
+func TestGroupedManualSavePreservesDisplayedPassword(t *testing.T) {
+	s, m, st := setup(t, Options{Listen: "127.0.0.1:0", BasePath: "/nested/"})
+	now := time.Now().UTC().Add(-time.Minute)
+	r := core.ConnectionRecord{Version: 1, Instance: m.InstanceID(), Session: "s1", Protocol: "telnet", Mode: "stream", FirstConnected: now, LastConnected: now, Target: core.ConnectionEndpoint{Host: "manual.example", Port: 23, Username: "user", Password: "older-value"}}
+	if err := st.RecordConnection(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Session = "s2"
+	r.Target.Password = "displayed-value"
+	r.LastConnected = now.Add(time.Second)
+	if err := st.RecordConnection(r); err != nil {
+		t.Fatal(err)
+	}
+	st.Emit(core.Event{Kind: "session", Session: "s2"})
+	deadline := time.Now().Add(3 * time.Second)
+	for st.Status().WrittenSeq < st.Status().LastSeq && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	// Retire the newer record under another username, retaining its old account snapshot.
+	if err := st.SaveConnectionCredentials(m.InstanceID(), "s2", "renamed", nil); err != nil {
+		t.Fatal(err)
+	}
+	key := history.ConnectionKey(r)
+	origin, _ := url.Parse(s.Info().URL)
+	req, _ := http.NewRequest("POST", s.Info().URL+"api/connection-credentials", strings.NewReader(`{"key":"`+key+`","username":"user"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", origin.Scheme+"://"+origin.Host)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatal("save failed", response.StatusCode)
+	}
+	saved, err := st.Connection(m.InstanceID(), "s1", true)
+	if err != nil || saved.Target.Password != "displayed-value" {
+		t.Fatal("blank input reverted the displayed aggregate password", err)
 	}
 }
