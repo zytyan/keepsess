@@ -87,3 +87,8 @@ footer,footer button,.bottom,#follow-tail,#receipt-details,.terminal-bar{font-si
 #mode[aria-pressed=true]{background:var(--active);color:var(--accent);border-color:var(--accent);box-shadow:inset 0 2px 4px #0004}
 #mode[aria-pressed=false]{color:var(--danger);border-color:var(--danger)}
 #mode:disabled{opacity:1;cursor:default}
+
+#search-task-scope summary{cursor:pointer;color:var(--muted)}
+#search-task-scope[open] .search-task{margin:8px 0}
+.task-scope-hint,#task-scope-status{color:var(--muted);font-size:.9286rem}
+#search-task-scope #task-scope-clear{width:100%}

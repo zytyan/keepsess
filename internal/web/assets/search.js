@@ -21,6 +21,9 @@ function syncSearchForm(values=true){
  for(const id of ['search-before','search-after'])searchElements(id).disabled=!supports||!q.only;
  searchElements('search-advanced').hidden=!supports;searchElements('search-only').parentElement.title=supports?'':'仅显示匹配行适用于主 SSH exec 连续视图';
  searchElements('filter-sources').disabled=!supports;
+ searchElements('search-task-scope').hidden=!supports;
+ const selected=preferences.filter.sources.length;searchElements('task-scope-status').textContent=selected?' · 已选 '+selected+' 项':' · 全部任务';
+ searchElements('task-scope-clear').disabled=!supports||!selected;
 }
 function applySearchForm(){
  clearTimeout(searchInputTimer);searchInputTimer=null;
@@ -182,6 +185,7 @@ searchElements('search-text').addEventListener('input',()=>{searchDraft=searchEl
 for(const id of ['search-case','search-only','search-before','search-after','filter-sources'])searchElements(id).addEventListener('change',()=>applySearchForm());
 searchElements('search-prev').onclick=()=>{clearTimeout(searchInputTimer);applySearchForm();terminalQuery?.navigate(-1);};
 searchElements('search-clear').onclick=()=>{clearTimeout(searchInputTimer);searchDraft=null;persist({search:{...preferences.search,query:''}});terminalSearch?.clearDecorations();terminal?.clearSelection();};
+searchElements('task-scope-clear').onclick=()=>{for(const option of searchElements('filter-sources').options)option.selected=false;applySearchForm();};
 searchElements('search-close').onclick=()=>openSearch(false);
 searchElements('search-results').addEventListener('scroll',()=>terminalQuery?.renderResults());
 searchElements('search-results').addEventListener('keydown',event=>{if(!['ArrowDown','ArrowUp','Enter'].includes(event.key))return;event.preventDefault();event.stopPropagation();if(event.key==='Enter')terminalQuery?.jump(terminalQuery.active);else if(terminalQuery){const n=terminalQuery.results.length;terminalQuery.active=Math.max(0,Math.min(n-1,terminalQuery.active+(event.key==='ArrowDown'?1:-1)));searchElements('search-results').scrollTop=Math.max(0,terminalQuery.active*searchResultHeight()-100);terminalQuery.renderResults();}});
