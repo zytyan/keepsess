@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -348,4 +349,147 @@ func TestOutputSourcesSurviveBatchingAndFrames(t *testing.T) {
 	if err != nil || roundtrip.Source != "" || string(roundtrip.Data) != string(legacy.Data) {
 		t.Fatal(roundtrip, err)
 	}
+}
+
+func TestPreciseOutputTimestampSegments(t *testing.T) {
+	stamp := time.Date(2026, 11, 12, 0, 0, 0, 123456789, time.UTC)
+	var frames [][]byte
+	batch := outputBatch{precise: true, emit: func(b []byte) error { frames = append(frames, b); return nil }}
+	pieces := [][]byte{{0xe4, 0xb8}, {0xad, 10}, []byte("next\n")}
+	for i, data := range pieces {
+		if err := batch.add(core.Event{Kind: "output", Session: "s1", Handle: "task1", Seq: uint64(i + 1), Time: stamp.Add(time.Duration(i) * time.Millisecond), Encoding: "utf-8", Source: "stdout", Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 1 || frames[0][0] != 0 {
+		t.Fatal("expected negotiated JSON metadata frame")
+	}
+	var payload struct {
+		Type     string          `json:"type"`
+		Event    core.Event      `json:"event"`
+		Segments []outputSegment `json:"segments"`
+	}
+	if err := json.Unmarshal(frames[0][1:], &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Segments) != 3 || payload.Event.Seq != 3 || !payload.Event.Time.Equal(stamp) || !bytes.Equal(payload.Event.Data, bytes.Join(pieces, nil)) {
+		t.Fatal(payload)
+	}
+	offset := 0
+	for i, seg := range payload.Segments {
+		offset += len(pieces[i])
+		if seg.End != offset || seg.Seq != uint64(i+1) || seg.Time != stamp.Add(time.Duration(i)*time.Millisecond).Format(time.RFC3339Nano) {
+			t.Fatal(seg)
+		}
+	}
+	legacy, err := EncodeOutput(core.Event{Kind: "output", Session: "s1", Seq: 1, Time: stamp, Data: []byte("legacy")})
+	if err != nil || legacy[0] != 1 {
+		t.Fatal("legacy frame contract changed", err)
+	}
+	decoded, err := DecodeOutput(legacy)
+	if err != nil || !decoded.Time.IsZero() {
+		t.Fatal("legacy must not invent timestamps", decoded, err)
+	}
+}
+
+func TestPreciseOutputSegmentBudget(t *testing.T) {
+	counts := []int{}
+	batch := outputBatch{precise: true, emit: func(b []byte) error {
+		var payload struct {
+			Segments []outputSegment `json:"segments"`
+		}
+		err := json.Unmarshal(b[1:], &payload)
+		counts = append(counts, len(payload.Segments))
+		return err
+	}}
+	for i := 0; i < maxOutputSegments+1; i++ {
+		if err := batch.add(core.Event{Kind: "output", Session: "s1", Seq: uint64(i + 1), Data: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts[0] != maxOutputSegments || counts[1] != 1 {
+		t.Fatal(counts)
+	}
+	if err := batch.add(core.Event{Session: "s1", Data: make([]byte, outputBatchBytes+1)}); err == nil {
+		t.Fatal("oversized precise batch accepted")
+	}
+}
+
+func TestPreciseReplayAndLiveNegotiation(t *testing.T) {
+	s, m, st := setup(t, Options{Listen: "127.0.0.1:0"})
+	stamp := time.Date(2026, 11, 12, 0, 0, 0, 1, time.UTC)
+	st.Emit(core.Event{Kind: "session", Session: "s1", Mode: "exec", Protocol: "ssh"})
+	st.Emit(core.Event{Kind: "output", Session: "s1", Handle: "task1", Time: stamp, Encoding: "utf-8", Data: []byte("one\n")})
+	st.Emit(core.Event{Kind: "output", Session: "s1", Handle: "task1", Time: stamp.Add(time.Millisecond), Encoding: "utf-8", Data: []byte("two\n")})
+	waitRecorded(t, st)
+	check := func(frame []byte) bool {
+		if len(frame) == 0 || frame[0] != 0 {
+			return false
+		}
+		var p struct {
+			Event    core.Event      `json:"event"`
+			Segments []outputSegment `json:"segments"`
+		}
+		if err := json.Unmarshal(frame[1:], &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Event.Kind != "output" {
+			return false
+		}
+		if len(p.Segments) != 2 || p.Segments[0].Time != stamp.Format(time.RFC3339Nano) || p.Segments[1].Time != stamp.Add(time.Millisecond).Format(time.RFC3339Nano) || string(p.Event.Data) != "one\ntwo\n" {
+			t.Fatal(p)
+		}
+		return true
+	}
+	r, err := http.Get(s.Info().URL + "api/replay?instance=" + m.InstanceID() + "&session=s1&format=binary-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil || r.StatusCode != 200 {
+		t.Fatal(err, r.Status)
+	}
+	found := false
+	for i := 4; i < len(body); {
+		n := int(binary.BigEndian.Uint32(body[i:]))
+		i += 4
+		if check(body[i : i+n]) {
+			found = true
+		}
+		i += n
+	}
+	if !found {
+		t.Fatal("negotiated replay timestamps missing")
+	}
+	u, err := url.Parse(s.Info().URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := u.Scheme + "://" + u.Host
+	u.Scheme = "ws"
+	u.Path += "ws"
+	u.RawQuery = "session=s1&format=binary-v2"
+	ws, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Origin": []string{origin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for i := 0; i < 20; i++ {
+		kind, frame, err := ws.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind == websocket.BinaryMessage && check(frame) {
+			return
+		}
+	}
+	t.Fatal("negotiated live timestamps missing")
 }

@@ -51,16 +51,41 @@ func outputFrame(e core.Event) ([]byte, error) {
 	return b, nil
 }
 
+// Timestamp segments retain original observation boundaries inside a v2 batch.
+// The raw event and v1 frame contracts remain unchanged.
+type outputSegment struct {
+	End  int    `json:"end"`
+	Seq  uint64 `json:"seq"`
+	Time string `json:"time,omitempty"`
+}
+
+const maxOutputSegments = 256
+
 type outputBatch struct {
-	event core.Event
-	emit  func([]byte) error
+	precise  bool
+	segments []outputSegment
+	event    core.Event
+	emit     func([]byte) error
 }
 
 func (b *outputBatch) flush() error {
 	if b.event.Kind == "" {
 		return nil
 	}
-	frame, err := outputFrame(b.event)
+	var frame []byte
+	var err error
+	if b.precise {
+		var payload []byte
+		payload, err = json.Marshal(struct {
+			Type     string          `json:"type"`
+			Event    core.Event      `json:"event"`
+			Segments []outputSegment `json:"segments"`
+		}{"event", b.event, b.segments})
+		frame = append([]byte{0}, payload...)
+	} else {
+		frame, err = outputFrame(b.event)
+	}
+	b.segments = nil
 	b.event = core.Event{}
 	if err != nil {
 		return err
@@ -68,17 +93,27 @@ func (b *outputBatch) flush() error {
 	return b.emit(frame)
 }
 func (b *outputBatch) add(e core.Event) error {
+	if len(e.Session) > 255 || len(e.Handle) > 255 || len(e.Data) > outputBatchBytes {
+		return errors.New("invalid output frame size")
+	}
 	p := &b.event
-	if p.Kind != "" && (p.Session != e.Session || p.Handle != e.Handle || p.Epoch != e.Epoch || p.Encoding != e.Encoding || p.Source != e.Source || p.Origin != e.Origin || len(p.Data)+len(e.Data) > outputBatchBytes) {
+	if p.Kind != "" && (p.Session != e.Session || p.Handle != e.Handle || p.Epoch != e.Epoch || p.Encoding != e.Encoding || p.Source != e.Source || p.Origin != e.Origin || len(p.Data)+len(e.Data) > outputBatchBytes || b.precise && len(b.segments) >= maxOutputSegments) {
 		if err := b.flush(); err != nil {
 			return err
 		}
 	}
 	if b.event.Kind == "" {
-		b.event = core.Event{Kind: "output", Session: e.Session, Handle: e.Handle, Epoch: e.Epoch, Encoding: e.Encoding, Source: e.Source, Origin: e.Origin}
+		b.event = core.Event{Kind: "output", Session: e.Session, Handle: e.Handle, Epoch: e.Epoch, Encoding: e.Encoding, Source: e.Source, Origin: e.Origin, Time: e.Time}
 	}
 	b.event.Seq = e.Seq
 	b.event.Data = append(b.event.Data, e.Data...)
+	if b.precise {
+		stamp := ""
+		if !e.Time.IsZero() {
+			stamp = e.Time.UTC().Format(time.RFC3339Nano)
+		}
+		b.segments = append(b.segments, outputSegment{End: len(b.event.Data), Seq: e.Seq, Time: stamp})
+	}
 	return nil
 }
 
@@ -130,7 +165,7 @@ func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
 		body.Write(frame)
 		return nil
 	}
-	batch := outputBatch{emit: appendFrame}
+	batch := outputBatch{precise: q.Get("format") == "binary-v2", emit: appendFrame}
 	state := history.State{}
 	end := time.Now().Add(5 * time.Second)
 	more := false

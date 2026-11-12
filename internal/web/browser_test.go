@@ -63,6 +63,12 @@ func runBrowserAcceptance(t *testing.T, proxy bool) {
 	if _, err = m.Connect(context.Background(), core.Options{Host: failedHost, Port: failedN, Protocol: "ssh", Mode: "exec", Username: "user", Password: "secret", Name: "failed-connect"}); err == nil {
 		t.Fatal("fixture connection unexpectedly succeeded")
 	}
+	telnetAddr := testutil.TelnetSwitch(t)
+	telnetHost, telnetPort, _ := net.SplitHostPort(telnetAddr)
+	telnetN, _ := strconv.Atoi(telnetPort)
+	if _, err = m.Connect(context.Background(), core.Options{Host: telnetHost, Port: telnetN, Protocol: "telnet", Mode: "stream", Name: "telnet-console"}); err != nil {
+		t.Fatal(err)
+	}
 	until := time.Now().Add(3 * time.Second)
 	for st.Status().WrittenSeq < st.Status().LastSeq && time.Now().Before(until) {
 		time.Sleep(time.Millisecond)

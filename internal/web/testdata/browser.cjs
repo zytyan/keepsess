@@ -50,7 +50,7 @@ const verifyTypography = require('./typography.cjs');
   assert.equal(await page.locator('#instance-selected strong').textContent(),'未命名实例');
   assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input'||m.type==='exec').length),0);
 
-  assert.deepEqual(await page.locator('#session-list .session strong').allTextContents(),['s1 · production','s3 · console','s2 · closed-session']);
+  assert.deepEqual(await page.locator('#session-list .session strong').allTextContents(),['s1 · production','s3 · console','s5 · telnet-console','s2 · closed-session']);
   assert.equal(await page.locator('#failed-sessions .session').count(),1);assert.equal(await page.locator('#failed-sessions .session').isVisible(),false);
   await page.locator('#session-error-summary').click();assert.equal(await page.locator('#failed-sessions .session').isVisible(),true);
   await page.locator('#failed-sessions .session').click();await page.waitForFunction(()=>selected==='s4'&&!replaying);
@@ -105,13 +105,15 @@ const verifyTypography = require('./typography.cjs');
    unlocked=false;updateControls();check(text()==='','lock clears');
   });
   await page.screenshot({path:process.env.KEEPSESS_SCREENSHOT||require('node:path').join(require('node:os').tmpdir(),'keepsess-web.png'),fullPage:true});
-  await page.close();page=observer;
+  await page.close();page=observer;await page.bringToFront();
+  await page.locator('.session').filter({hasText:'s5 · telnet-console'}).click();await page.waitForFunction(()=>selected==='s5'&&!replaying);await page.keyboard.press('Control+f');await page.locator('#search-text').fill('serial');await page.waitForFunction(()=>terminalQuery.results.length===1);await page.locator('.search-result').click();assert((await page.evaluate(()=>terminal.getSelection())).includes('serial'));assert(await page.locator('#search-only').isDisabled());await page.locator('#search-clear').click();await page.locator('#search-close').click();
   await page.locator('#instance-selected').click();
   await page.getByRole('button',{name:/归档，只读/}).click();
   await page.waitForFunction(()=>document.getElementById('title').textContent==='s1 · archived-console');
   await page.waitForFunction(()=>terminal.buffer.active.getLine(0)?.translateToString().includes('archive retained'));
   await page.waitForFunction(()=>terminal.buffer.active.getLine(1)?.translateToString().includes('中文'));
   assert.equal(await page.locator('#unlock').isDisabled(),true);assert.match(await page.locator('#subtitle').innerText(),/已关闭/);
+  await page.keyboard.press('Control+f');await page.locator('#search-text').fill('中文');await page.waitForFunction(()=>terminalQuery.results.length===1);await page.locator('.search-result').click();assert((await page.evaluate(()=>terminal.getSelection())).includes('中文'));await page.locator('#search-clear').click();await page.locator('#search-close').click();
   assert.deepEqual(errors,[]);console.log('browser acceptance passed: compact observer, persistence, stream terminal tab, nested path, archive replay, no parser replies');
  } finally {await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

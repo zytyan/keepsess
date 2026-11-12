@@ -1,0 +1,34 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const elements=new Map();
+const ctx=vm.createContext({console,structuredClone,TextEncoder,TextDecoder,atob,performance,setTimeout,clearTimeout,requestAnimationFrame:cb=>setTimeout(cb,0),cancelAnimationFrame:clearTimeout,Event:class{},window:{addEventListener(){},dispatchEvent(){}},localStorage:{getItem(){return null},setItem(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,{textContent:'',classList:{toggle(){}},style:{}});return elements.get(id);}},tasks:new Map(),terminalQuery:null});
+for(const file of ['preferences.js','transcript.js','transport.js'])vm.runInContext(fs.readFileSync('assets/'+file,'utf8'),ctx);
+vm.runInContext(fs.readFileSync('assets/search.js','utf8').split("searchElements('terminal-search').addEventListener")[0],ctx);
+vm.runInContext(`
+ const off=()=>({dispose(){}}),term={buffer:{active:{type:'normal',baseY:0,cursorY:0}},onRender:off,onScroll:off,onResize:off,onWriteParsed:off,register(){}};
+ const model=new SourceTranscript(term,async()=>{});
+ const stamp='2026-11-12T00:00:00.001Z',next='2026-11-12T00:00:00.002Z';
+ const add=(task,stream,text,time=stamp)=>model.append(text,{session:'s1',handle:task,source:stream,time,seq:1});
+ add('taskA','stdout','before\\n');add('taskB','stdout','unrelated-before\\n');add('taskA','stderr','needle\\n');add('taskB','stdout','unrelated-after\\n');add('taskA','stdout','after\\n');
+ const controller=new TerminalQuery(term,{});controller.source=model;controller.notice=()=>{};controller.renderResults=()=>{};controller.paintHighlights=()=>{};model.renderModel=async rows=>{model.lastProjection=rows;};
+ preferences.search={...preferences.search,query:'needle',only:true,before:1,after:1};preferences.filter.sources=['taskA'];
+`,ctx);
+(async()=>{
+ await vm.runInContext('controller.scan()',ctx);
+ const projected=vm.runInContext('model.lastProjection.filter(r=>r.kind!=="gap").map(r=>r.plain)',ctx);assert.deepEqual(Array.from(projected),['before','needle','after']);assert.equal(vm.runInContext('controller.results.length',ctx),1);assert.equal(vm.runInContext('model.rows.length',ctx),5);
+ vm.runInContext(`preferences.search.query='e';`,ctx);await vm.runInContext('controller.scan()',ctx);assert.equal(vm.runInContext('model.lastProjection.filter(r=>r.kind!=="gap").length',ctx),3);vm.runInContext(`preferences.search.query='needle';preferences.filter.exclude='before';`,ctx);await vm.runInContext('controller.scan()',ctx);assert.deepEqual(Array.from(vm.runInContext('model.lastProjection.filter(r=>r.kind!=="gap").map(r=>r.plain)',ctx)),['needle','after']);vm.runInContext(`preferences.filter.exclude='';`,ctx);
+ vm.runInContext(`const expiredRow=model.rows[0];add('taskA','stdout','partial',stamp);add('taskA','stdout',' complete\\n',next);`,ctx);
+ assert.equal(vm.runInContext('model.rows.at(-1).time',ctx),'2026-11-12T00:00:00.001Z');assert.equal(vm.runInContext('model.rows.at(-1).plain',ctx),'partial complete');
+ assert.equal(vm.runInContext("matchSummary('a.b aXb','a.b',false).count",ctx),1);
+ assert.equal(vm.runInContext("matchSummary('ERROR error','error',false).count",ctx),2);
+ assert.equal(vm.runInContext("matchSummary('ERROR error','error',true).count",ctx),1);
+ vm.runInContext(`preferences.scrollback=100;for(let i=0;i<150;i++)add('taskA','stdout','line '+i+'\\n');model.prune();`,ctx);assert.equal(vm.runInContext('model.rows.length',ctx),100);assert(vm.runInContext('model.evicted>0',ctx));assert.equal(await vm.runInContext('model.jump(expiredRow)',ctx),false);
+ vm.runInContext(`const old=structuredClone(preferenceDefaults);delete old.search;delete old.gutterExpanded;old.filter.include='ERROR';const migrated=validatePreferences(old);`,ctx);assert(vm.runInContext('migrated.search.only&&migrated.search.caseSensitive&&migrated.search.query==="ERROR"',ctx));
+ assert.throws(()=>vm.runInContext('validatePreferences({...preferenceDefaults,search:{...preferenceDefaults.search,before:51}})',ctx));
+ vm.runInContext(`preferences.scrollback=50000;const full='x'.repeat(16384);for(let i=0;i<2100;i++)add('taskA','stdout',full);model.prune();`,ctx);assert(vm.runInContext('model.bytes<=32*1024*1024&&model.rows.length<=2048',ctx));
+ assert.equal(vm.runInContext("outputClock('')",ctx),'未知');
+ const app=fs.readFileSync('assets/app.js','utf8');vm.runInContext(app.slice(app.indexOf('function trackDecoderTime('),app.indexOf('async function applyTransport(')),ctx);
+ vm.runInContext(`const decoderState={encoding:'utf-8'};trackDecoderTime(decoderState,new Uint8Array([228,184]),stamp);`,ctx);assert.equal(vm.runInContext('decoderState.pendingTime',ctx),'2026-11-12T00:00:00.001Z');vm.runInContext('trackDecoderTime(decoderState,new Uint8Array([173,10]),next)',ctx);assert.equal(vm.runInContext('decoderState.pendingTime',ctx),'');
+ const parts=vm.runInContext(`outputEvents({event:{kind:'output',seq:2,data:new Uint8Array([228,184,173,10]),session:'s1'},segments:[{end:2,seq:1,time:'2026-11-12T00:00:00.001Z'},{end:4,seq:2,time:'2026-11-12T00:00:00.002Z'}]})`,ctx);assert.equal(parts.length,2);assert.deepEqual(Array.from(parts[0].data),[228,184]);assert.equal(parts[1].time,'2026-11-12T00:00:00.002Z');
+ assert.throws(()=>vm.runInContext(`outputEvents({event:{kind:'output',seq:1,data:new Uint8Array([1])},segments:[{end:2,seq:1}]})`,ctx));
+ console.log('search model passed: task-local context, source retention, earliest time, literals, bounds, migration, time segments');
+})().catch(e=>{console.error(e);process.exitCode=1});

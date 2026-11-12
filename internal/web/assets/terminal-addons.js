@@ -36,24 +36,6 @@ class WebGLKeywordLayer{
  }
  dispose(){this.clear();}
 }
-let terminalSearch=null;
-function attachTerminalSearch(term){
- terminalSearch=new SearchAddon.SearchAddon({highlightLimit:1000});term.loadAddon(terminalSearch);
- const owned=terminalSearch;
- owned.onDidChangeResults(({resultIndex,resultCount})=>{if(terminalSearch===owned)document.getElementById('search-status').textContent=resultCount?`${resultIndex+1} / ${resultCount}`:'无匹配';});
- term.register({dispose:()=>{if(terminalSearch===owned){terminalSearch=null;document.getElementById('search-status').textContent='';}}});
-}
-function searchTerminal(backwards=false){
- if(!terminalSearch)return;
- const text=document.getElementById('search-text').value;
- if(!text){terminalSearch.clearDecorations();terminal?.clearSelection();document.getElementById('search-status').textContent='';return;}
- const light=document.documentElement.dataset.theme==='light';
- const options={caseSensitive:document.getElementById('search-case').checked,decorations:{matchBackground:light?'#f5df9e':'#665124',activeMatchBackground:light?'#efbd55':'#8c5f1c',matchOverviewRuler:'#c69435',activeMatchColorOverviewRuler:'#e7a51c'}};
- const found=backwards?terminalSearch.findPrevious(text,options):terminalSearch.findNext(text,options);
- if(!found)document.getElementById('search-status').textContent='无匹配';
-}
-document.getElementById('terminal-search').addEventListener('submit',event=>{event.preventDefault();searchTerminal();});
-document.getElementById('search-prev').onclick=()=>searchTerminal(true);
-document.getElementById('search-clear').onclick=()=>{document.getElementById('search-text').value='';searchTerminal();};
-document.getElementById('search-text').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.shiftKey){event.preventDefault();searchTerminal(true);}if(event.key==='Escape'){document.getElementById('search-clear').click();document.getElementById('terminal-search').hidden=true;terminal?.focus();}});
-document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&!document.querySelector('dialog[open]')){event.preventDefault();document.getElementById('terminal-search').hidden=false;document.getElementById('search-text').focus();document.getElementById('search-text').select();}});
+let terminalSearch=null,terminalQuery=null;
+function attachTerminalSearch(term){terminalSearch=new SearchAddon.SearchAddon({highlightLimit:1000});term.loadAddon(terminalSearch);terminalQuery=new TerminalQuery(term,terminalSearch);term.register({dispose:()=>terminalQuery?.term===term&&terminalQuery.dispose()});}
+function searchTerminal(backwards=false){terminalQuery?.navigate(backwards?-1:1);}

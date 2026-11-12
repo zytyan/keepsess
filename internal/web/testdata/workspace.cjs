@@ -15,7 +15,7 @@ const path=require('node:path');
   const control=async(p,q)=>{const u=new URL(p,process.argv[3]);for(const[k,v]of Object.entries(q))u.searchParams.set(k,v);const r=await fetch(u,{method:'POST'});assert(r.ok,await r.text());};
   await page.goto(process.argv[2]);await ready(page);await contains(page,'SSH transport healthy');await contains(page,'WARNING');
   assert.equal(await page.locator('#exec,#command,#task-sidebar').count(),0);assert.equal(await page.evaluate(()=>terminal.options.disableStdin),true);
-  await page.waitForSelector('#source-gutter button[data-stream=stdout]');await page.waitForSelector('#source-gutter button[data-stream=stderr]');
+  await page.waitForSelector('#source-gutter .source-row[data-stream=stdout]');await page.waitForSelector('#source-gutter .source-row[data-stream=stderr]');
   assert.equal(await page.locator('#history-drawer').isVisible(),false);
   await page.evaluate(()=>{
    const ansi=new TranscriptANSI();if(ansi.feed('\x1b[31')!=='')throw Error('split CSI');
@@ -33,13 +33,13 @@ const path=require('node:path');
   const screenshotDir=process.env.KEEPSESS_SCREENSHOT_DIR;
   if(screenshotDir){await fs.mkdir(screenshotDir,{recursive:true});await page.screenshot({path:path.join(screenshotDir,'workspace.png')});}
   console.log('workspace: sources and history ready');
-  await page.locator('#filter-toggle').click();await page.locator('#filter-streams input[value=stdout]').uncheck();await page.locator('#filter-apply').click();await ready(page);await contains(page,'WARNING');assert(!(await text(page)).includes('SSH transport healthy'));
+  await page.locator('#search-toggle').click();await page.locator('#search-advanced summary').click();await page.locator('#filter-streams input[value=stdout]').uncheck();await page.locator('#filter-apply').click();await ready(page);await contains(page,'WARNING');await page.waitForFunction(()=>!Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('SSH transport healthy'));assert(!(await text(page)).includes('SSH transport healthy'));
   await page.locator('#filter-reset').click();await ready(page);await contains(page,'SSH transport healthy');
   // Per-source complete-line text matching survives packet splits.
-  await page.locator('#filter-include').fill('split-needle');await page.locator('#filter-apply').click();await ready(page);
+  await page.locator('#search-text').fill('split-needle');await page.locator('#search-only').check();await page.locator('#filter-apply').click();await ready(page);
   await control('/create',{name:'short-split'});
   await control('/bytes',{name:'short-split',hex:Buffer.from('split-nee').toString('hex')});await control('/bytes',{name:'short-split',hex:Buffer.from('dle found\n').toString('hex')});await contains(page,'split-needle found');
-  await page.locator('#filter-reset').click();await ready(page);await page.locator('#filter-toggle').click();
+  await page.locator('#filter-reset').click();await ready(page);await page.locator('#search-clear').click();await page.locator('#search-close').click();
   console.log('workspace: filters passed');
   // Import validates atomically; export includes only whitelisted browser preferences.
   await page.locator('#appearance-open').click();await page.locator('#font-size').fill('17');await page.locator('#font-size').dispatchEvent('input');assert.equal(await page.evaluate(()=>terminal.options.fontSize),17);

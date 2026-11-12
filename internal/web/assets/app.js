@@ -54,9 +54,9 @@ function updateControls() {
  if (terminal) terminal.options.disableStdin = !humanPage || !unlocked || !writable || replaying || !stdinAvailable;
  if(!unlocked||!writable||replaying||!stdinAvailable)localEcho?.clear();
  $('source-gutter').hidden=!continuous();
- $('filter-toggle').disabled=!continuous();$('filter-toggle').title=continuous()?'按命令、输出流和文本过滤':'过滤适用于 SSH exec 连续输出';
+ $('gutter-toggle').hidden=!continuous();syncSearchForm(false);
  $('history-toggle').disabled=meta?.mode!=='exec';
- if(!continuous())$('filter-panel').hidden=true;
+
  if(humanPage&&meta?.mode==='exec'&&!webCaps.includes('web_shell.v1'))status('该 Agent 不支持独立人类终端；需在会话可关闭时升级 Agent。');
 }
 function renderSidebar() {
@@ -84,7 +84,7 @@ function renderTasks() {
   const title=document.createElement('strong');title.textContent=t.handle+(t.origin==='human'?' · 人类终端':'')+(t.name?' · '+t.name:'');
   const state=document.createElement('small');state.textContent=taskState(t)+(t.status.exit_code!==undefined?' · '+t.status.exit_code:'');
   const command=document.createElement('span');command.className='task-command';command.textContent=t.command||'';b.title=t.command||t.handle;b.append(title,state,command);
-  b.onclick=()=>{if(transcript?.locate(t.handle)){try{savePreferences({history:false});}catch(e){status(e.message);}}else status('该命令不在当前显示范围；可调整过滤或滚动历史后重新载入。');};$('tasks').append(b);
+  b.onclick=async()=>{if(await transcript?.locate(t.handle)){try{savePreferences({history:false});}catch(e){status(e.message);}}else status('该命令不在当前显示范围；可调整过滤或滚动历史后重新载入。');};$('tasks').append(b);
  }
  $('tasks').scrollTop=position;
  const existing=$('shell-existing'),old=existing.value;existing.replaceChildren(new Option('恢复已有终端…',''));
@@ -125,7 +125,7 @@ function createTerminal() {
  terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:preferences.fontSize,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
  terminal.keepsessReplaying=true;
  terminal.open($('terminal')); attachTerminalRenderer(terminal); attachTerminalSearch(terminal); attachTerminalContextMenu(terminal); attachTerminalAppearance(terminal); fit();localEcho=new LocalEchoPreview(terminal);
- const owned=terminal,ownedGeneration=generation;transcript=continuous()?new SourceTranscript(owned,text=>writeTerminalNow(text,ownedGeneration)):null;
+ const owned=terminal,ownedGeneration=generation;transcript=continuous()?new SourceTranscript(owned,text=>writeTerminalNow(text,ownedGeneration)):null;terminalQuery.source=transcript;
  owned.onResize(()=>{if(humanPage&&handle&&unlocked){clearTimeout(resizeTimer);resizeTimer=setTimeout(sendResize,150);}});
  owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
  for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
@@ -148,6 +148,24 @@ function termWrite(text,gen){
 async function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];replaySize=0;await writeTerminalNow(text,gen);if(gen===generation){replayProcessed+=text.length;$('loading').textContent='正在回放历史… 已回放约 '+(replayProcessed/10000).toFixed(1)+' 万字符';}}
 function finishReplay(){replaying=false;terminal.keepsessReplaying=false;for(const h of terminalHighlights)if(h.term===terminal)h.invalidate();if(replayNotes){note(replayNotes);replayNotes='';}}
 function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);owned.write(text,()=>finish(true));});}
+function trackDecoderTime(entry,raw,time){
+ let pending=entry.pendingBytes||0;
+ const encoding=entry.encoding||'utf-8';
+ for(const b of raw){
+  const trail=encoding==='utf-8'?(b>=0x80&&b<=0xbf):encoding==='gbk'?(b>=0x40&&b<=0xfe&&b!==0x7f):((b>=0x40&&b<=0x7e)||(b>=0x80&&b<=0xfc));
+  if(pending&&trail){pending--;if(!pending)entry.pendingTime='';continue;}
+  if(pending){pending=0;entry.pendingTime='';}
+  if(encoding==='utf-8')pending=b>=0xc2&&b<=0xdf?1:b>=0xe0&&b<=0xef?2:b>=0xf0&&b<=0xf4?3:0;
+  else if(encoding==='gbk')pending=b>=0x81&&b<=0xfe?1:0;
+  else pending=(b>=0x81&&b<=0x9f)||(b>=0xe0&&b<=0xfc)?1:0;
+  if(pending)entry.pendingTime=time;
+ }
+ entry.pendingBytes=pending;
+}
+async function applyTransport(message,gen,live=false){
+ for(const event of outputEvents(message)){if(gen!==generation)return;if(event.seq>cursor)await apply(event,gen,live);}
+ if(gen===generation&&transcript)await transcript.flush();
+}
 async function apply(e, gen, live=false) {
  if (gen !== generation) return;
  if(e.kind==='instance'){cursor=Math.max(cursor,e.seq);if(live)await refreshInstances();return;}
@@ -163,8 +181,8 @@ async function apply(e, gen, live=false) {
     let d;try{d=new TextDecoder(e.encoding==='shift-jis'?'shift_jis':e.encoding||'utf-8');}catch(_){d=new TextDecoder();}
     entry={decoder:d,epoch:e.epoch,encoding:e.encoding};taskDecoders.set(key,entry);
    }
-   const decoded=entry.decoder.decode(raw,{stream:true});
-   if(transcript)await transcript.append(decoded,e);else await termWrite(decoded,gen);
+   const firstTime=entry.pendingTime||e.time;trackDecoderTime(entry,raw,e.time);const decoded=entry.decoder.decode(raw,{stream:true});
+   if(transcript)transcript.append(decoded,{...e,first_time:firstTime});else await termWrite(decoded,gen);
   } else if (e.kind === 'command') { if(transcript)await transcript.append(`$ ${e.command}\r\n`,e,'command');else await termWrite(`\r\n$ ${e.command}\r\n`,gen); }
   else if (e.kind === 'input' && e.data) { const raw=outputBytes(e.data); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
   if (e.disposed || e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown')) {
@@ -190,31 +208,31 @@ async function selectSession(id, task) {
  try {
   webCaps=[];try{const capabilities=await api('web-capabilities',{instance});if(gen!==generation)return;webCaps=capabilities.capabilities||[];}catch(_){if(gen!==generation)return;}updateControls();
   do {
-   const before=cursor,u=new URL('api/replay',root);u.searchParams.set('instance',instance);u.searchParams.set('session',id);u.searchParams.set('after',cursor);
+   const before=cursor,u=new URL('api/replay',root);u.searchParams.set('instance',instance);u.searchParams.set('session',id);u.searchParams.set('after',cursor);u.searchParams.set('format','binary-v2');
    if(!continuous())u.searchParams.set('handle',handle);
    const response=await fetch(u,{signal:replayRequest.signal});if(!response.ok)throw new Error(await response.text());
    const messages=replayMessages(await response.arrayBuffer());if(gen!==generation)return;
    const p=messages.pop();if(p.instance_id!==serverID)throw new Error('服务实例已变化，请刷新页面。');
-   for(const message of messages){await apply(message.event,gen);if(gen!==generation)return;}
+   for(const message of messages){await applyTransport(message,gen);if(gen!==generation)return;}
    cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
   } while(gen===generation);
   if(gen!==generation)return;
   if(instance!==current||!liveSession()){for(const [key,entry]of taskDecoders){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,{session:id,handle:key.split('/')[0],source:key.split('/')[1]});else await termWrite(tail,gen);}if(transcript){for(const t of sessionTasks())await transcript.finish(t.handle);}}
   if(gen!==generation)return;
-  await flushReplay(gen);if(gen!==generation)return;finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
+  await flushReplay(gen);if(gen!==generation)return;if(transcript)await transcript.flush();finishReplay();await terminalQuery?.refresh(true);if(gen!==generation)return;document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;renderSidebar();renderTasks();
   updateControls();if(instance===current)connect(gen);else{$('connection').textContent='历史归档 · 只读';status('归档只读。旧实例运行中任务的最终结果可能未知。');}
  } catch(err){if(gen===generation){finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;warn(err.message);updateControls();}}
 }
 function connect(gen) {
  if(gen!==generation)return;
- const u=new URL('ws',root);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.searchParams.set('instance',instance);u.searchParams.set('session',selected);u.searchParams.set('after',cursor);u.searchParams.set('format','binary-v1');if(!continuous())u.searchParams.set('handle',handle);
+ const u=new URL('ws',root);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.searchParams.set('instance',instance);u.searchParams.set('session',selected);u.searchParams.set('after',cursor);u.searchParams.set('format','binary-v2');if(!continuous())u.searchParams.set('handle',handle);
  const ws=new WebSocket(u);ws.binaryType='arraybuffer';socket=ws;unlocked=false;buffered=0;pipeline=Promise.resolve();updateControls();
  ws.onopen=()=>{if(gen!==generation)return;$('connection').textContent='● 实时连接';updateControls();};
  ws.onmessage=event=>{
   if(gen!==generation||socket!==ws)return;let msg;try{msg=typeof event.data==='string'?JSON.parse(event.data):outputMessage(event.data)}catch(_){ws.close();return}
   const size=typeof event.data==='string'?event.data.length*2:event.data.byteLength;buffered+=size;if(buffered>4*1024*1024){ws.close();status('显示较慢，正在通过历史补齐；不会重发输入。');return;}
   pipeline=pipeline.then(async()=>{if(gen!==generation||socket!==ws)return;
-   if(msg.type==='event'){if(msg.event.seq>cursor)await apply(msg.event,gen,true);}
+   if(msg.type==='event'){await applyTransport(msg,gen,true);}
    else if(msg.type==='checkpoint'){cursor=Math.max(cursor,msg.seq);}
    else if(msg.type==='lock'){unlocked=!!msg.unlocked;updateControls();status(unlocked?'已解锁，输入将发送到当前终端。':'只读。');if(unlocked)setTimeout(sendResize,0);}
    else if(msg.type==='receipt')await receiveReceipt(msg,gen,ws);

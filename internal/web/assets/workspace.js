@@ -1,7 +1,8 @@
 'use strict';
-let previousFilter=JSON.stringify(preferences.filter);
+
 function renderSourceOptions(){
- const select=$('filter-sources'),value=preferences.filter.sources;select.replaceChildren();
+ const select=$('filter-sources'),value=preferences.filter.sources;select.replaceChildren();select.disabled=!continuous();
+ if(!continuous()){select.add(new Option(humanPage&&handle?handle+' · 当前交互任务':'当前会话',handle||'',false,true));return;}
  for(const t of sessionTasks())select.add(new Option(t.handle+' · '+(t.origin==='human'?'人类终端':t.command||t.name||'命令'),t.handle,false,value.includes(t.handle)));
  // Preserve portable filters for sources outside the current session.
  for(const id of value)if(![...select.options].some(o=>o.value===id))select.add(new Option(id+' · 当前未加载',id,false,true));
@@ -18,22 +19,20 @@ function syncWorkspace(){
  fit();themeMode=preferences.theme;applyTheme();
  if(preferences.appearance&&JSON.stringify(appearance)!==JSON.stringify(preferences.appearance)){applyAppearance(preferences.appearance);if($('appearance-dialog').open){appearanceOriginal=cloneAppearance(appearance);renderAppearanceForm(appearance);}}
  renderSourceOptions();for(const el of $('filter-streams').querySelectorAll('input'))el.checked=preferences.filter.streams.includes(el.value);
- $('filter-include').value=preferences.filter.include;$('filter-exclude').value=preferences.filter.exclude;$('filter-human').checked=preferences.filter.human;
- $('filter-toggle').classList.toggle('filter-active',JSON.stringify(preferences.filter)!==JSON.stringify(preferenceDefaults.filter));
- const next=JSON.stringify(preferences.filter);if(previousFilter!==next){previousFilter=next;if(continuous()&&selected)selectSession(selected).catch(e=>warn(e.message));}
+ $('filter-exclude').value=preferences.filter.exclude;$('filter-human').checked=preferences.filter.human;
+ syncSearchForm();transcript?.prune();terminalQuery?.changed(true);transcript?.paint();
 }
-function persist(patch){try{savePreferences(patch);}catch(e){status(e.message);$('highlight-status').textContent=e.message;}}
+function persist(patch){try{savePreferences(patch);return true;}catch(e){status(e.message);$('highlight-status').textContent=e.message;return false;}}
 window.addEventListener('preferenceschange',syncWorkspace);
 syncWorkspace();if(preferenceError)status(preferenceError);
 $('sidebar-toggle').onclick=()=>persist({sidebar:!preferences.sidebar});
 $('history-toggle').onclick=()=>persist({history:!preferences.history});$('history-close').onclick=()=>persist({history:false});
-$('search-toggle').onclick=()=>{$('terminal-search').hidden=!$('terminal-search').hidden;if(!$('terminal-search').hidden)$('search-text').focus();};
-$('filter-toggle').onclick=()=>{$('filter-panel').hidden=!$('filter-panel').hidden;};
-$('filter-apply').onclick=()=>persist({filter:{sources:[...$('filter-sources').selectedOptions].map(o=>o.value),streams:[...$('filter-streams').querySelectorAll('input:checked')].map(o=>o.value),include:$('filter-include').value,exclude:$('filter-exclude').value,human:$('filter-human').checked}});
-$('filter-reset').onclick=()=>persist({filter:structuredClone(preferenceDefaults.filter)});
+$('search-toggle').onclick=()=>openSearch(!preferences.search.open);
+$('filter-apply').onclick=()=>applySearchForm();
+$('filter-reset').onclick=()=>{persist({filter:structuredClone(preferenceDefaults.filter),search:{...preferences.search,only:false,before:0,after:0}});};
 $('font-size').oninput=()=>persist({fontSize:Number($('font-size').value)});
 $('echo-preference').onchange=()=>persist({echo:$('echo-preference').checked});
-$('follow-tail').onclick=()=>terminal?.scrollToBottom();
+$('follow-tail').onclick=()=>{if(transcript)transcript.latest();else terminal?.scrollToBottom();};
 for(const tab of document.querySelectorAll('[data-settings]'))tab.onclick=()=>{for(const t of document.querySelectorAll('[data-settings]')){const active=t===tab;t.classList.toggle('active',active);t.setAttribute('aria-current',String(active));}for(const section of document.querySelectorAll('[data-settings-page]'))section.hidden=section.dataset.settingsPage!==tab.dataset.settings;};
 $('preferences-export').onclick=()=>{
  try{const blob=new Blob([JSON.stringify(preferences,null,2)+'\n'],{type:'application/json'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='keepsess-preferences.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);$('highlight-status').textContent='设置已导出。';}catch(e){$('highlight-status').textContent=e.message;}

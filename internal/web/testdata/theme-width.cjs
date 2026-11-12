@@ -43,8 +43,8 @@ module.exports=async function(page){
  assert(result.probe,'cell measurement must use the DOM path');
  const renderer=await page.evaluate(()=>terminal.keepsessRenderer);
  assert(['webgl','dom'].includes(renderer));
- await page.evaluate(()=>{document.getElementById('search-text').value='out';searchTerminal();});
- assert(await page.evaluate(()=>terminal.getSelection().includes('out')),'official search addon must select a retained match');
+ await page.evaluate(async()=>{document.getElementById('search-text').value='out';await terminalQuery.navigate(1);});
+ assert(await page.evaluate(()=>terminal.getSelection().includes('out')),'unified search must select a retained match');
  await page.locator('#search-toggle').click();await page.locator('#search-clear').click();await page.locator('#search-toggle').click();
  assert.equal(await page.evaluate(()=>terminal.getSelection()),'');
  if(renderer==='webgl'){

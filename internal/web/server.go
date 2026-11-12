@@ -399,7 +399,8 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sub.Close()
-	binaryMode := r.URL.Query().Get("format") == "binary-v1"
+	format := r.URL.Query().Get("format")
+	binaryMode := format == "binary-v1" || format == "binary-v2"
 	up := websocket.Upgrader{EnableCompression: binaryMode, ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(r *http.Request) bool { return s.originOK(r, r.Header.Get("Origin")) }}
 	c, err := up.Upgrade(w, r, nil)
 	if err != nil {
@@ -481,7 +482,7 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request) {
 	if write(map[string]any{"type": "hello", "unlocked": false, "info": s.Info()}) != nil {
 		return
 	}
-	batch := outputBatch{emit: func(data []byte) error {
+	batch := outputBatch{precise: format == "binary-v2", emit: func(data []byte) error {
 		_ = c.SetWriteDeadline(time.Now().Add(3 * time.Second))
 		return c.WriteMessage(websocket.BinaryMessage, data)
 	}}
