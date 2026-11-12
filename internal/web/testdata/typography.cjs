@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 // Check the browser's actual rendered fonts, not just a CSS family string.
 module.exports=async function verifyTypography(page){
  assert.equal(await page.evaluate(()=>terminalFontsLoaded),true,'bundled fonts did not load');
- const families=await page.evaluate(()=>['body','#title','#unlock'].map(selector=>getComputedStyle(document.querySelector(selector)).fontFamily));
+ const families=await page.evaluate(()=>['body','#title','#mode'].map(selector=>getComputedStyle(document.querySelector(selector)).fontFamily));
  for(const family of families){assert.match(family,/Noto Sans SC/);assert.match(family,/sans-serif$/);}
  assert.equal(await page.evaluate(()=>terminal.options.fontFamily===WEB_FONT_FAMILY),true);
  await page.evaluate(()=>{const probe=document.createElement('div');probe.id='font-probe';probe.style.cssText='position:fixed;left:0;top:0;opacity:0;pointer-events:none;font-family:'+WEB_FONT_FAMILY;for(const[id,text]of [['latin','Keepsess English 0123456789'],['cjk','中文终端会话历史']]){const span=document.createElement('span');span.id='font-probe-'+id;span.textContent=text;probe.append(span);}document.body.append(probe);});

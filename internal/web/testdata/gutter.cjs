@@ -13,8 +13,8 @@ const fs=require('node:fs/promises'),path=require('node:path');
   // Force a genuine wrapped command and inspect both edges of every physical row.
   await page.setViewportSize({width:800,height:900});await page.waitForFunction(()=>terminal.cols<58);
   await page.locator('#gutter-toggle').click();await page.waitForFunction(()=>document.querySelectorAll('.source-row[data-kind=command]').length>=3);
-  const command=await page.evaluate(id=>{const r=transcript.rows.find(r=>r.handle===id&&r.kind==='command'),b=terminal.buffer.active,h=document.querySelector('.xterm-screen').getBoundingClientRect().height/terminal.rows,dpr=window.devicePixelRatio||1,ctx=document.querySelector('.source-canvas').getContext('2d'),alphas=[];for(let y=r.marker.line+1;y<=r.end.line;y++)for(const delta of [-1,0,1])alphas.push(ctx.getImageData(Math.floor(3*dpr),Math.floor(((y-b.viewportY)*h+delta)*dpr),1,1).data[3]);return {lines:r.end.line-r.marker.line+1,alphas};},task.handle);
-  assert(command.lines>1);assert(command.alphas.length>=3);assert(command.alphas.every(a=>a===255),'wrapped command must have no transparent gaps');
+  const command=await page.evaluate(id=>{const r=transcript.rows.find(r=>r.handle===id&&r.kind==='command'),b=terminal.buffer.active,h=document.querySelector('.xterm-screen').getBoundingClientRect().height/terminal.rows,dpr=window.devicePixelRatio||1,ctx=document.querySelector('.source-canvas').getContext('2d'),alphas=[];for(let y=r.marker.line+1;y<=r.end.line+1;y++)for(const delta of [-1,0,1])alphas.push(ctx.getImageData(Math.floor(3*dpr),Math.floor(((y-b.viewportY)*h+delta)*dpr),1,1).data[3]);return {lines:r.end.line-r.marker.line+1,alphas};},task.handle);
+  assert(command.lines>1);assert(command.alphas.length>=3);assert(command.alphas.every(a=>a===255),'wrapped command and its output must have no transparent gaps');
   // Add enough real SSH history to scroll away from the tail, then toggle repeatedly.
   for(let i=0;i<15;i++)await control('/append',{name,lines:200,tag:'batch-'+i+' '+ 'content '.repeat(16)});
   await page.waitForFunction(()=>transcript.rows.some(r=>r.plain.includes('batch-14')&&r.plain.includes('199')));

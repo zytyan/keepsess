@@ -22,7 +22,8 @@ vm.runInContext(`
  assert.equal(vm.runInContext("matchSummary('ERROR error','error',false).count",ctx),2);
  assert.equal(vm.runInContext("matchSummary('ERROR error','error',true).count",ctx),1);
  vm.runInContext(`preferences.scrollback=100;for(let i=0;i<150;i++)add('taskA','stdout','line '+i+'\\n');model.prune();`,ctx);assert.equal(vm.runInContext('model.rows.length',ctx),100);assert(vm.runInContext('model.evicted>0',ctx));assert.equal(await vm.runInContext('model.jump(expiredRow)',ctx),false);
- vm.runInContext(`const old=structuredClone(preferenceDefaults);delete old.search;delete old.gutterExpanded;old.filter.include='ERROR';const migrated=validatePreferences(old);`,ctx);assert(vm.runInContext('migrated.search.only&&migrated.search.caseSensitive&&migrated.search.query==="ERROR"',ctx));
+ vm.runInContext(`const old=structuredClone(preferenceDefaults);delete old.search;delete old.gutterExpanded;delete old.uiFontSize;old.filter.include='ERROR';const migrated=validatePreferences(old);`,ctx);assert(vm.runInContext('migrated.search.only&&migrated.search.caseSensitive&&migrated.search.query==="ERROR"',ctx));
+ assert.equal(vm.runInContext('migrated.uiFontSize',ctx),13);assert.throws(()=>vm.runInContext('validatePreferences({...preferenceDefaults,uiFontSize:25})',ctx));
  assert.throws(()=>vm.runInContext('validatePreferences({...preferenceDefaults,search:{...preferenceDefaults.search,before:51}})',ctx));
  vm.runInContext(`preferences.scrollback=50000;const full='x'.repeat(16384);for(let i=0;i<2100;i++)add('taskA','stdout',full);model.prune();`,ctx);assert(vm.runInContext('model.bytes<=32*1024*1024&&model.rows.length<=2048',ctx));
  assert.equal(vm.runInContext("outputClock('')",ctx),'未知');

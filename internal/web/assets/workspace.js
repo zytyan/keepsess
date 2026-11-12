@@ -15,6 +15,8 @@ function syncWorkspace(){
  $('history-drawer').hidden=humanPage||!preferences.history;
  $('sidebar-toggle').setAttribute('aria-expanded',String(preferences.sidebar));
  $('history-toggle').setAttribute('aria-expanded',String(preferences.history));
+ document.documentElement.style.setProperty('--ui-size',preferences.uiFontSize+'px');
+ $('ui-font-size').value=preferences.uiFontSize;$('ui-font-size-value').value=preferences.uiFontSize+'px';
  $('scrollback').value=preferences.scrollback;scrollback=preferences.scrollback;
  $('font-size').value=preferences.fontSize;$('font-size-value').value=preferences.fontSize+'px';
  $('echo-preference').checked=$('echo').checked=preferences.echo;if(!preferences.echo)localEcho?.clear();
@@ -24,7 +26,7 @@ function syncWorkspace(){
  if(preferences.appearance&&JSON.stringify(appearance)!==JSON.stringify(preferences.appearance)){applyAppearance(preferences.appearance);if($('appearance-dialog').open){appearanceOriginal=cloneAppearance(appearance);renderAppearanceForm(appearance);}}
  renderSourceOptions();for(const el of $('filter-streams').querySelectorAll('input'))el.checked=preferences.filter.streams.includes(el.value);
  $('filter-exclude').value=preferences.filter.exclude;$('filter-human').checked=preferences.filter.human;
- syncSearchForm();transcript?.prune();if(!previous||['search','filter','scrollback'].some(k=>JSON.stringify(previous[k])!==JSON.stringify(preferences[k])))terminalQuery?.changed();transcript?.paint();
+ syncSearchForm();if(previous?.uiFontSize!==preferences.uiFontSize)terminalQuery?.renderResults();transcript?.prune();if(!previous||['search','filter','scrollback'].some(k=>JSON.stringify(previous[k])!==JSON.stringify(preferences[k])))terminalQuery?.changed();transcript?.paint();
 }
 function persist(patch){try{savePreferences(patch);return true;}catch(e){status(e.message);$('highlight-status').textContent=e.message;return false;}}
 window.addEventListener('preferenceschange',syncWorkspace);
@@ -37,6 +39,9 @@ $('filter-reset').onclick=()=>{persist({filter:structuredClone(preferenceDefault
 let fontSizeTimer=null;
 $('font-size').oninput=()=>{const value=Number($('font-size').value);$('font-size-value').value=value+'px';clearTimeout(fontSizeTimer);fontSizeTimer=setTimeout(()=>persist({fontSize:value}),120);};
 $('font-size').onchange=()=>{clearTimeout(fontSizeTimer);persist({fontSize:Number($('font-size').value)});};
+let uiFontSizeTimer=null;
+$('ui-font-size').oninput=()=>{const value=Number($('ui-font-size').value);$('ui-font-size-value').value=value+'px';clearTimeout(uiFontSizeTimer);uiFontSizeTimer=setTimeout(()=>persist({uiFontSize:value}),120);};
+$('ui-font-size').onchange=()=>{clearTimeout(uiFontSizeTimer);persist({uiFontSize:Number($('ui-font-size').value)});};
 $('echo-preference').onchange=()=>persist({echo:$('echo-preference').checked});
 $('follow-tail').onclick=()=>{if(transcript)transcript.latest();else terminal?.scrollToBottom();};
 for(const tab of document.querySelectorAll('[data-settings]'))tab.onclick=()=>{for(const t of document.querySelectorAll('[data-settings]')){const active=t===tab;t.classList.toggle('active',active);t.setAttribute('aria-current',String(active));}for(const section of document.querySelectorAll('[data-settings-page]'))section.hidden=section.dataset.settingsPage!==tab.dataset.settings;};

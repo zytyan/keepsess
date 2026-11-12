@@ -110,7 +110,7 @@ class SourceTranscript {
   if(this.closed)return;const host=document.getElementById('source-gutter'),expanded=preferences.gutterExpanded;
   host.classList.toggle('expanded',expanded);host.setAttribute('aria-expanded',String(expanded));host.setAttribute('aria-label',expanded?'收起输出来源与时间':'展开输出来源与时间');document.getElementById('gutter-toggle').setAttribute('aria-expanded',String(expanded));
   const b=this.term.buffer.active,screen=this.term.element?.querySelector('.xterm-screen');if(!screen)return;const h=screen.getBoundingClientRect().height/this.term.rows;
-  const visible=[],cont=(row,other)=>row&&other&&(row.id===other.id||row.kind==='output'&&other.kind==='output'&&row.handle&&row.handle===other.handle&&Math.abs(other.id-row.id)===1);
+  const visible=[],cont=(row,other)=>row&&other&&(row.id===other.id||['command','output'].includes(row.kind)&&['command','output'].includes(other.kind)&&row.handle&&row.handle===other.handle&&Math.abs(other.id-row.id)===1);
   for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows);y++){const row=this.spanAt(y);if(row)visible.push({row,y,start:!cont(row,this.spanAt(y-1)),end:!cont(row,this.spanAt(y+1))});}
   const key=JSON.stringify([b.viewportY,this.term.rows,h,expanded,document.documentElement.dataset.theme,window.devicePixelRatio,visible.map(v=>[v.row.id,v.row.time,v.start,v.end])]);if(key===this.paintKey)return;this.paintKey=key;
   const fragment=document.createDocumentFragment(),canvas=document.createElement('canvas'),dpr=window.devicePixelRatio||1,height=h*this.term.rows;canvas.className='source-canvas';canvas.width=Math.ceil(8*dpr);canvas.height=Math.ceil(height*dpr);canvas.style.height=height+'px';fragment.append(canvas);const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
