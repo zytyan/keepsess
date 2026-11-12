@@ -1,7 +1,7 @@
 /* Browser-only preferences. Never contains connection credentials or terminal data. */
 'use strict';
 const preferenceKey='keepsess.preferences.v1';
-const preferenceDefaults={version:1,theme:'dark',fontSize:14,scrollback:5000,sidebar:true,history:false,echo:true,filter:{sources:[],streams:['stdout','stderr','mixed','unknown'],include:'',exclude:'',human:true},appearance:null,search:{open:false,width:400,query:'',caseSensitive:false,only:false,before:0,after:0},gutterExpanded:false};
+const preferenceDefaults={version:1,theme:'dark',fontSize:16,scrollback:5000,sidebar:true,history:false,echo:true,filter:{sources:[],streams:['stdout','stderr','mixed','unknown'],include:'',exclude:'',human:true},appearance:null,search:{open:false,width:400,query:'',caseSensitive:false,only:false,before:0,after:0},gutterExpanded:false};
 function validatePreferences(input){
  if(!input||input.version!==1)throw Error('不支持的设置版本');
  const d=structuredClone(preferenceDefaults),v=input;

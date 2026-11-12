@@ -7,7 +7,10 @@ function renderSourceOptions(){
  // Preserve portable filters for sources outside the current session.
  for(const id of value)if(![...select.options].some(o=>o.value===id))select.add(new Option(id+' · 当前未加载',id,false,true));
 }
+let workspaceSnapshot=null;
 function syncWorkspace(){
+ const previous=workspaceSnapshot;workspaceSnapshot=structuredClone(preferences);
+ if(previous&&Object.keys(preferences).every(k=>k==='gutterExpanded'||JSON.stringify(previous[k])===JSON.stringify(preferences[k]))){transcript?.paintNow();return;}
  document.body.classList.toggle('sidebar-collapsed',!preferences.sidebar);
  $('history-drawer').hidden=humanPage||!preferences.history;
  $('sidebar-toggle').setAttribute('aria-expanded',String(preferences.sidebar));
@@ -15,12 +18,13 @@ function syncWorkspace(){
  $('scrollback').value=preferences.scrollback;scrollback=preferences.scrollback;
  $('font-size').value=preferences.fontSize;$('font-size-value').value=preferences.fontSize+'px';
  $('echo-preference').checked=$('echo').checked=preferences.echo;if(!preferences.echo)localEcho?.clear();
- for(const h of terminalHighlights){if(h.term.options.scrollback!==preferences.scrollback)h.term.options.scrollback=preferences.scrollback;if(h.term.options.fontSize!==preferences.fontSize){h.term.options.fontSize=preferences.fontSize;remeasureTerminalFonts(h.term);}}
+ for(const h of terminalHighlights){if(h.term.options.scrollback!==preferences.scrollback)h.term.options.scrollback=preferences.scrollback;if(h.term.options.fontSize!==preferences.fontSize){h.term.options.fontSize=preferences.fontSize;}}
+ if(previous&&previous.scrollback!==preferences.scrollback)transcript?.reanchor();
  fit();themeMode=preferences.theme;applyTheme();
  if(preferences.appearance&&JSON.stringify(appearance)!==JSON.stringify(preferences.appearance)){applyAppearance(preferences.appearance);if($('appearance-dialog').open){appearanceOriginal=cloneAppearance(appearance);renderAppearanceForm(appearance);}}
  renderSourceOptions();for(const el of $('filter-streams').querySelectorAll('input'))el.checked=preferences.filter.streams.includes(el.value);
  $('filter-exclude').value=preferences.filter.exclude;$('filter-human').checked=preferences.filter.human;
- syncSearchForm();transcript?.prune();terminalQuery?.changed(true);transcript?.paint();
+ syncSearchForm();transcript?.prune();if(!previous||['search','filter','scrollback'].some(k=>JSON.stringify(previous[k])!==JSON.stringify(preferences[k])))terminalQuery?.changed();transcript?.paint();
 }
 function persist(patch){try{savePreferences(patch);return true;}catch(e){status(e.message);$('highlight-status').textContent=e.message;return false;}}
 window.addEventListener('preferenceschange',syncWorkspace);
@@ -30,7 +34,9 @@ $('history-toggle').onclick=()=>persist({history:!preferences.history});$('histo
 $('search-toggle').onclick=()=>openSearch(!preferences.search.open);
 $('filter-apply').onclick=()=>applySearchForm();
 $('filter-reset').onclick=()=>{persist({filter:structuredClone(preferenceDefaults.filter),search:{...preferences.search,only:false,before:0,after:0}});};
-$('font-size').oninput=()=>persist({fontSize:Number($('font-size').value)});
+let fontSizeTimer=null;
+$('font-size').oninput=()=>{const value=Number($('font-size').value);$('font-size-value').value=value+'px';clearTimeout(fontSizeTimer);fontSizeTimer=setTimeout(()=>persist({fontSize:value}),120);};
+$('font-size').onchange=()=>{clearTimeout(fontSizeTimer);persist({fontSize:Number($('font-size').value)});};
 $('echo-preference').onchange=()=>persist({echo:$('echo-preference').checked});
 $('follow-tail').onclick=()=>{if(transcript)transcript.latest();else terminal?.scrollToBottom();};
 for(const tab of document.querySelectorAll('[data-settings]'))tab.onclick=()=>{for(const t of document.querySelectorAll('[data-settings]')){const active=t===tab;t.classList.toggle('active',active);t.setAttribute('aria-current',String(active));}for(const section of document.querySelectorAll('[data-settings-page]'))section.hidden=section.dataset.settingsPage!==tab.dataset.settings;};

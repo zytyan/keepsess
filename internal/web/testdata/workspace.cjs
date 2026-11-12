@@ -15,7 +15,7 @@ const path=require('node:path');
   const control=async(p,q)=>{const u=new URL(p,process.argv[3]);for(const[k,v]of Object.entries(q))u.searchParams.set(k,v);const r=await fetch(u,{method:'POST'});assert(r.ok,await r.text());};
   await page.goto(process.argv[2]);await ready(page);await contains(page,'SSH transport healthy');await contains(page,'WARNING');
   assert.equal(await page.locator('#exec,#command,#task-sidebar').count(),0);assert.equal(await page.evaluate(()=>terminal.options.disableStdin),true);
-  await page.waitForSelector('#source-gutter .source-row[data-stream=stdout]');await page.waitForSelector('#source-gutter .source-row[data-stream=stderr]');
+  await page.locator('#gutter-toggle').click();await page.waitForSelector('#source-gutter .source-row[data-stream=stdout]');await page.waitForSelector('#source-gutter .source-row[data-stream=stderr]');
   assert.equal(await page.locator('#history-drawer').isVisible(),false);
   await page.evaluate(()=>{
    const ansi=new TranscriptANSI();if(ansi.feed('\x1b[31')!=='')throw Error('split CSI');
@@ -42,7 +42,7 @@ const path=require('node:path');
   await page.locator('#filter-reset').click();await ready(page);await page.locator('#search-clear').click();await page.locator('#search-close').click();
   console.log('workspace: filters passed');
   // Import validates atomically; export includes only whitelisted browser preferences.
-  await page.locator('#appearance-open').click();await page.locator('#font-size').fill('17');await page.locator('#font-size').dispatchEvent('input');assert.equal(await page.evaluate(()=>terminal.options.fontSize),17);
+  await page.locator('#appearance-open').click();await page.locator('#font-size').fill('17');await page.locator('#font-size').dispatchEvent('input');await page.waitForFunction(()=>terminal.options.fontSize===17);
   await page.locator('#scrollback').fill('7500');await page.locator('#apply').click();
   if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,'settings.png')});
   await page.locator('[data-settings=config]').click();const download=page.waitForEvent('download');await page.locator('#preferences-export').click();const file=await download,exported=JSON.parse(await fs.readFile(await file.path(),'utf8'));

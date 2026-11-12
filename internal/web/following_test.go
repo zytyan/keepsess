@@ -39,6 +39,7 @@ func TestBrowserAppearanceFallback(t *testing.T) {
 	runBrowserFixture(t, "appearance.cjs", "short-first")
 }
 func TestBrowserFollowing(t *testing.T) { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserGutter(t *testing.T)    { runBrowserFixture(t, "gutter.cjs", "demo-health") }
 func TestBrowserSearch(t *testing.T)    { runBrowserFixture(t, "search.cjs", "demo-health") }
 func TestBrowserWorkspace(t *testing.T) { runBrowserFixture(t, "workspace.cjs", "demo-health") }
 func TestBrowserOverview(t *testing.T)  { runBrowserFixture(t, "overview.cjs", "short-first") }

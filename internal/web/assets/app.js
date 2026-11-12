@@ -117,7 +117,7 @@ function fit() {
  const height = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
  const screen=terminal.element?.querySelector('.xterm-screen'),box=screen?.getBoundingClientRect();
  const cellWidth=box?.width/terminal.cols||8.5,cellHeight=box?.height/terminal.rows||18;
- if (width>0 && height>0) terminal.resize(Math.max(10,Math.floor(width/cellWidth)),Math.max(3,Math.floor(height/cellHeight)));
+ if(width>0&&height>0){const cols=Math.max(10,Math.floor(width/cellWidth)),rows=Math.max(3,Math.floor(height/cellHeight));if(cols!==terminal.cols||rows!==terminal.rows){const b=terminal.buffer.active,follow=b.viewportY>=b.baseY,anchor=transcript?.spanAt(b.viewportY),offset=anchor?b.viewportY-anchor.marker.line:0;terminal.resize(cols,rows);if(!follow&&anchor?.marker&&!anchor.marker.isDisposed)terminal.scrollToLine(anchor.marker.line+Math.min(offset,anchor.end.line-anchor.marker.line));}}
 }
 function createTerminal() {
  localEcho?.dispose();localEcho=null;terminalEvents.abort();terminalEvents=new AbortController();
@@ -164,7 +164,7 @@ function trackDecoderTime(entry,raw,time){
 }
 async function applyTransport(message,gen,live=false){
  for(const event of outputEvents(message)){if(gen!==generation)return;if(event.seq>cursor)await apply(event,gen,live);}
- if(gen===generation&&transcript)await transcript.flush();
+ if(gen===generation&&transcript&&!replaying)await transcript.flush();
 }
 async function apply(e, gen, live=false) {
  if (gen !== generation) return;
@@ -214,7 +214,7 @@ async function selectSession(id, task) {
    const messages=replayMessages(await response.arrayBuffer());if(gen!==generation)return;
    const p=messages.pop();if(p.instance_id!==serverID)throw new Error('服务实例已变化，请刷新页面。');
    for(const message of messages){await applyTransport(message,gen);if(gen!==generation)return;}
-   cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
+   transcript?.prune();cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
   } while(gen===generation);
   if(gen!==generation)return;
   if(instance!==current||!liveSession()){for(const [key,entry]of taskDecoders){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,{session:id,handle:key.split('/')[0],source:key.split('/')[1]});else await termWrite(tail,gen);}if(transcript){for(const t of sessionTasks())await transcript.finish(t.handle);}}

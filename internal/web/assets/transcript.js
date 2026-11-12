@@ -17,14 +17,14 @@ function transcriptBoundary(text,end,limit=16384){let bytes=0,last=0;for(let i=0
 const transcriptEncoder=new TextEncoder();
 function outputTime(time){return typeof time==='string'&&!time.startsWith('0001-')&&Number.isFinite(Date.parse(time))?time:'';}
 function outputClock(time){if(!outputTime(time))return '未知';const d=new Date(time),pad=(n,w=2)=>String(n).padStart(w,'0');return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(),3)}`;}
-function taskColor(id){let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);return ['#82d9c8','#a8b9ff','#edba87','#d3a5eb','#8ac6e9','#b7d68d','#ec9ba7','#d8cd82'][h>>>0&7];}
+function taskColor(id){let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);const light=document.documentElement?.dataset.theme==='light';return (light?['#087e72','#4c5fc1','#a65c13','#8847a8','#176ea3','#507c19','#b13b57','#82700d']:['#82d9c8','#a8b9ff','#edba87','#d3a5eb','#8ac6e9','#b7d68d','#ec9ba7','#d8cd82'])[h>>>0&7];}
 function nextANSIStyle(style,text){for(const m of text.matchAll(/\x1b\[[\d;:]*m/g)){if(m[0]==='\x1b[m'||m[0]==='\x1b[0m')style='';else style=style.length+m[0].length>2048?m[0]:style+m[0];}return style;}
 
 class SourceTranscript {
  constructor(term,write){
   this.term=term;this.write=write;this.states=new Map();this.rows=[];this.bytes=0;this.nextID=1;this.evicted=0;
   this.rendered=[];this.commands=new Map();this.closed=false;this.frame=0;this.queue=Promise.resolve();this.active=null;
-  this.events=[term.onRender(()=>this.paint()),term.onScroll(()=>this.paint()),term.onResize(()=>{this.reanchor(0);this.paint();if(terminalQuery?.term===term)terminalQuery.changed();})];
+  this.events=[term.onRender(()=>this.paint()),term.onScroll(()=>this.paint()),term.onResize(()=>{this.reanchor();this.paint();})];
   term.register({dispose:()=>this.dispose()});
  }
  source(e){return e.source||((e.status?.pty||tasks.get(e.handle)?.status.pty)?'mixed':'unknown');}
@@ -92,30 +92,39 @@ class SourceTranscript {
   if(chunk)await this.write(chunk);
   if(this.closed)return;
   this.rendered=next;this.renderKey=options.key;
-  this.reanchor(rebuild?0:common);
+  this.reanchor();
   if(!follow){const anchor=next.find(e=>e.id===topID)?.row;if(anchor?.marker&&!anchor.marker.isDisposed)this.term.scrollToLine(anchor.marker.line);else this.term.scrollToLine(Math.min(oldY,this.term.buffer.active.baseY));}
   this.paint();
  }
- reanchor(from=0){
+ reanchor(){
   if(this.closed)return;const buffer=this.term.buffer.active,bottom=buffer.baseY+buffer.cursorY;let end=bottom-(this.rendered.at(-1)?.lf?1:0);
-  for(let i=this.rendered.length-1;i>=from;i--){const row=this.rendered[i].row;row.marker?.dispose();row.end?.dispose();let first=end;while(first>0&&buffer.getLine(first)?.isWrapped)first--;row.marker=first>=0?this.term.registerMarker(first-bottom):null;row.end=end>=0?this.term.registerMarker(end-bottom):null;end=first-1;}
+  // The read-only projection needs positions, not thousands of xterm listeners.
+  // Recompute in one reverse buffer walk after writes/reflow, bounded by history.
+  const position=(current,line)=>{if(line<0){current?.dispose();return null;}if(current){current.line=line;current.isDisposed=false;return current;}return {line,isDisposed:false,dispose(){this.isDisposed=true;}};};
+  for(let i=this.rendered.length-1;i>=0;i--){const row=this.rendered[i].row;let first=end;while(first>0&&buffer.getLine(first)?.isWrapped)first--;row.marker=position(row.marker,first);row.end=position(row.end,end);end=first-1;}
  }
 
  spanAt(y){let low=0,high=this.rendered.length;while(low<high){const mid=(low+high)>>1,r=this.rendered[mid].row,start=r.marker?.isDisposed||!r.marker?0:r.marker.line;if(start<=y)low=mid+1;else high=mid;}const r=this.rendered[low-1]?.row;return r?.end&&!r.end.isDisposed&&y<=r.end.line?r:null;}
  paint(){if(this.closed||this.frame)return;this.frame=requestAnimationFrame(()=>{this.frame=0;this.paintNow();});}
  paintNow(){
-  if(this.closed)return;const host=document.getElementById('source-gutter');host.replaceChildren();host.classList.toggle('expanded',preferences.gutterExpanded);host.setAttribute('aria-expanded',String(preferences.gutterExpanded));host.setAttribute('aria-label',preferences.gutterExpanded?'收起输出来源与时间':'展开输出来源与时间');document.getElementById('gutter-toggle').setAttribute('aria-expanded',String(preferences.gutterExpanded));
+  if(this.closed)return;const host=document.getElementById('source-gutter'),expanded=preferences.gutterExpanded;
+  host.classList.toggle('expanded',expanded);host.setAttribute('aria-expanded',String(expanded));host.setAttribute('aria-label',expanded?'收起输出来源与时间':'展开输出来源与时间');document.getElementById('gutter-toggle').setAttribute('aria-expanded',String(expanded));
   const b=this.term.buffer.active,screen=this.term.element?.querySelector('.xterm-screen');if(!screen)return;const h=screen.getBoundingClientRect().height/this.term.rows;
-  const group=row=>row?.kind==='output'&&row.handle?row.handle:null;
-  for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows);y++){
-   const row=this.spanAt(y);if(!row)continue;const prev=this.spanAt(y-1),next=this.spanAt(y+1),key=group(row),cont=(other)=>key&&group(other)===key&&(other.id===row.id||Math.abs(other.id-row.id)===1);
+  const visible=[],cont=(row,other)=>row&&other&&(row.id===other.id||row.kind==='output'&&other.kind==='output'&&row.handle&&row.handle===other.handle&&Math.abs(other.id-row.id)===1);
+  for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+this.term.rows);y++){const row=this.spanAt(y);if(row)visible.push({row,y,start:!cont(row,this.spanAt(y-1)),end:!cont(row,this.spanAt(y+1))});}
+  const key=JSON.stringify([b.viewportY,this.term.rows,h,expanded,document.documentElement.dataset.theme,window.devicePixelRatio,visible.map(v=>[v.row.id,v.row.time,v.start,v.end])]);if(key===this.paintKey)return;this.paintKey=key;
+  const fragment=document.createDocumentFragment(),canvas=document.createElement('canvas'),dpr=window.devicePixelRatio||1,height=h*this.term.rows;canvas.className='source-canvas';canvas.width=Math.ceil(8*dpr);canvas.height=Math.ceil(height*dpr);canvas.style.height=height+'px';fragment.append(canvas);const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
+  // Draw whole connected runs on the same pixel grid as xterm, including wraps.
+  for(let i=0;i<visible.length;){const first=visible[i];let last=first,j=i+1;while(j<visible.length&&!last.end&&!visible[j].start&&visible[j].y===last.y+1)last=visible[j++];const top=(first.y-b.viewportY)*h+(first.start?2:0),bottom=(last.y-b.viewportY+1)*h-(last.end?2:0);ctx.fillStyle=first.row.kind==='gap'?getComputedStyle(host).color:taskColor(first.row.handle||'unknown');ctx.beginPath();ctx.roundRect(1,top,5,Math.max(0,bottom-top),[first.start?2.5:0,first.start?2.5:0,last.end?2.5:0,last.end?2.5:0]);ctx.fill();i=j;}
+  if(expanded)for(const {row,y} of visible){
    const item=document.createElement('div');item.className='source-row';item.style.top=((y-b.viewportY)*h)+'px';item.style.height=h+'px';item.dataset.row=String(row.id);item.dataset.stream=row.source;item.dataset.kind=row.kind;
-   const strip=document.createElement('span');strip.className='source-strip';strip.style.background=row.kind==='gap'?'var(--muted)':taskColor(row.handle||'unknown');strip.classList.toggle('start',!cont(prev));strip.classList.toggle('end',!cont(next));item.append(strip);
    const clock=document.createElement('span');clock.className='source-time';clock.textContent=row.kind==='gap'?'—':outputClock(row.time);
    const source=document.createElement('span');source.className='source-label';source.textContent=row.kind==='gap'?'省略':(row.origin==='human'?'人类 '+row.handle:row.handle)+' · '+({stdout:'out',stderr:'err',mixed:'混合',unknown:'未知'}[row.source]||row.kind);
-   item.append(clock,source);item.title=(row.time?new Date(row.time).toString()+'\n':'时间未知\n')+(row.handle||'')+' / '+row.source+'\n'+row.command+'\n时间为 keepsess 接收时间';host.append(item);
+   item.append(clock,source);item.title=(row.time?new Date(row.time).toString()+'\n':'时间未知\n')+(row.handle||'')+' / '+row.source+'\n'+row.command+'\n时间为 keepsess 接收时间';fragment.append(item);
   }
+  host.replaceChildren(fragment);
  }
+
  selectionWithSources(){const p=this.term.getSelectionPosition();if(!p)return '';const b=this.term.buffer.active,out=[];for(let y=p.start.y;y<=p.end.y;y++){const text=b.getLine(y)?.translateToString(true,y===p.start.y?p.start.x:0,y===p.end.y?p.end.x:undefined)||'';if(y===p.end.y&&!text)continue;const r=this.spanAt(y);out.push((r?'['+outputClock(r.time)+' '+r.handle+' / '+r.source+'] ':'')+text);}return out.join('\n');}
  async jump(row){
   if(!this.rows.some(r=>r.id===row.id))return false;

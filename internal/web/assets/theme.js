@@ -4,10 +4,11 @@ const systemTheme=window.matchMedia('(prefers-color-scheme: light)');
 let themeMode=preferences.theme;
 function applyTheme(){
  const light=themeMode==='light'||themeMode==='system'&&systemTheme.matches;
+ const changed=document.documentElement.dataset.theme!==(light?'light':'dark');
  document.documentElement.dataset.theme=light?'light':'dark';
  const theme=light?LIGHT_TERMINAL_THEME:DARK_TERMINAL_THEME;
  TERMINAL_APPEARANCE.theme=theme;
- for(const h of terminalHighlights){h.term.options.theme=theme;h.invalidate();}
+ if(changed)for(const h of terminalHighlights){h.term.options.theme=theme;h.invalidate();}
  document.getElementById('theme-mode').value=themeMode;
 }
 document.getElementById('theme-mode').addEventListener('change',event=>{

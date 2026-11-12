@@ -30,7 +30,7 @@ function applySearchForm(){
 class TerminalQuery {
  constructor(term,addon){
   this.term=term;this.addon=addon;this.source=null;this.results=[];this.visibleRows=[];this.active=-1;this.resultsVersion=-1;this.closed=false;this.version=0;this.revision=0;this.geometry=0;this.timer=null;this.busy=false;this.pending=false;this.decorations=[];this.highlightFrame=0;this.optionsKey='';
-  this.listeners=[term.onWriteParsed(()=>{if(!this.source){this.revision++;this.changed();}this.paintHighlights();}),term.onScroll(()=>this.paintHighlights()),term.onRender(()=>this.paintHighlights()),term.onResize(()=>{this.geometry++;this.revision++;this.changed();})];
+  this.listeners=[term.onWriteParsed(()=>{if(!this.source){this.revision++;this.changed();}this.paintHighlights();}),term.onScroll(()=>this.paintHighlights()),term.onRender(()=>this.paintHighlights()),term.onResize(()=>{this.geometry++;this.revision++;if(this.source)this.paintHighlights();else this.changed();})];
  }
  changed(criteria=false){
   if(this.closed||this.term.keepsessReplaying)return;
