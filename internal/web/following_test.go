@@ -38,7 +38,11 @@ func TestBrowserAppearanceFallback(t *testing.T) {
 	t.Setenv("KEEPSESS_HIGHLIGHT_FALLBACK", "1")
 	runBrowserFixture(t, "appearance.cjs", "short-first")
 }
-func TestBrowserFollowing(t *testing.T)   { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserFollowing(t *testing.T) { runBrowserFixture(t, "following.cjs", "first") }
+func TestBrowserFollowingDOM(t *testing.T) {
+	t.Setenv("KEEPSESS_FOLLOWING_DOM", "1")
+	runBrowserFixture(t, "following.cjs", "first")
+}
 func TestBrowserWarmHistory(t *testing.T) { runBrowserFixture(t, "warm-history.cjs", "short-first") }
 func TestBrowserDenseHighlight(t *testing.T) {
 	runBrowserFixture(t, "dense-highlight.cjs", "short-first")
@@ -164,16 +168,19 @@ func runBrowserFixture(t *testing.T, script, initial string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	create := func(name string, pty bool) (core.Result, error) {
+	create := func(name string, pty bool, commandOverride string) (core.Result, error) {
 		stream(name)
 		no := false
 		command := name
 		if name == "demo-health" {
 			command = "systemctl status keepsess"
 		}
+		if commandOverride != "" {
+			command = commandOverride
+		}
 		return m.Operate(context.Background(), "exec", core.Request{Session: session.Session, Name: name, Command: command, Cwd: "/srv/keepsess", Interactive: pty, PTY: pty, CollectOutput: &no})
 	}
-	first, err := create(initial, false)
+	first, err := create(initial, false, "")
 	if err != nil || first.Handle == "" {
 		t.Fatal(first, err)
 	}
@@ -198,7 +205,7 @@ func runBrowserFixture(t *testing.T, script, initial string) {
 			}
 			_ = json.NewEncoder(w).Encode(result)
 		case "/create":
-			v, e := create(name, r.URL.Query().Get("pty") == "true")
+			v, e := create(name, r.URL.Query().Get("pty") == "true", r.URL.Query().Get("command"))
 			if e != nil || v.Error != "" {
 				http.Error(w, fmt.Sprint(v, e), 400)
 				return

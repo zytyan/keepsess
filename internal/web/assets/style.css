@@ -94,3 +94,10 @@ footer,footer button,.bottom,#follow-tail,#receipt-details,.terminal-bar{font-si
 #search-task-scope #task-scope-clear{width:100%}
 
 .connection-password-history p{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* DevTools-style navigation cue, separate from the terminal buffer and selection. */
+.command-jump-flash{position:absolute;inset:0;overflow:hidden;pointer-events:none;user-select:none;z-index:7;animation:command-jump-fade 1.4s ease-out forwards}
+.command-jump-flash span{position:absolute;left:0;background:rgba(177,119,255,.40);box-shadow:inset 0 0 0 1px rgba(193,151,255,.35);border-radius:2px}
+[data-theme="light"] .command-jump-flash span{background:rgba(146,91,220,.28);box-shadow:inset 0 0 0 1px rgba(125,75,195,.30)}
+@keyframes command-jump-fade{0%,15%{opacity:1}100%{opacity:0}}
+@media(prefers-reduced-motion:reduce){.command-jump-flash{animation:none}}
