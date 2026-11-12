@@ -7,7 +7,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
   const page=await browser.newPage({viewport:{width:1366,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(15000);
   const ready=()=>page.waitForFunction(()=>typeof terminal!=='undefined'&&terminal&&!replaying&&socket?.readyState===1);
   const control=async(p,q)=>{const u=new URL(p,process.argv[3]);for(const[k,v]of Object.entries(q))u.searchParams.set(k,v);const r=await fetch(u,{method:'POST'});if(!r.ok)throw Error(await r.text());return r.json();};
-  await page.goto(process.argv[2]);await ready();assert.equal(await page.evaluate(()=>terminal.options.fontSize),16);
+  await page.goto(process.argv[2]);await ready();assert.equal(await page.evaluate(()=>terminal.options.fontSize),14);await page.evaluate(()=>persist({fontSize:16}));
   const name='short-'+ 'long-command-'.repeat(4),task=await control('/create',{name});
   await page.waitForFunction(id=>transcript.rows.some(r=>r.handle===id),task.handle);
   // Force a genuine wrapped command and inspect both edges of every physical row.

@@ -50,13 +50,30 @@ dialog{width:min(1000px,94vw);height:min(720px,90vh);padding:0;overflow:hidden;b
 .source-row{font-size:11px}
 #source-gutter.expanded .source-time{min-width:96px}
 #source-gutter.expanded .source-label{font-size:11px}
-:root{font-size:14px}.session strong,.instance-picker strong{font-size:13px}
-.session small,.instance-picker small,#subtitle,.bottom,.terminal-bar{font-size:12px}
-.sidebar-heading,.field,.drawer-heading,.tasks .task-command{font-size:12px}
-.search-heading,.setting-row,.search-panel #search-text{font-size:14px}
-.search-panel #terminal-search,.search-panel #search-status,.search-result-text{font-size:13px}
-.search-result-meta,.search-panel #search-range,.appearance-body p{font-size:12px}
-#gutter-toggle{font-size:11px}
+/* UI typography is independent of the terminal's configurable font size. */
+:root{font-size:14px}
+button,.file-button,.controls button,.settings-nav button{font-size:14px}
+.session strong,.instance-picker strong{font-size:14px}
+.session small,.instance-picker small,.instance-picker .instance-ai-name,#subtitle{font-size:13px}
+h1{font-size:17px}.sidebar-heading,.field,.drawer-heading{font-size:14px}
+.brand small{font-size:10px;letter-spacing:1px}
+footer,footer button,.bottom,#follow-tail,#receipt-details,.terminal-bar{font-size:13px}
+#receipt-details pre,#warning,#highlight-notice,#loading{font-size:13px}
+.controls .icon-button,.search-heading .icon-button,.drawer-heading .icon-button,.appearance-heading .icon-button{width:34px;height:34px;min-width:34px}
+#human-toolbar,#human-toolbar button,#shell-existing{font-size:14px}
+.tasks strong,.tasks small{font-size:13px}.tasks .task-command{font-size:14px}
+.search-heading{font-size:15px}.search-panel #search-text{font-size:14px}
+.search-panel #terminal-search,.search-panel #terminal-search button,.search-panel #filter-sources,.search-panel #filter-panel{font-size:14px}
+.search-panel #filter-sources{height:72px}
+.search-panel #search-status,.search-panel #search-range,.search-result-meta{font-size:13px}
+.search-result-text{font-size:14px}.search-result{gap:5px}
+.setting-row{font-size:15px}.setting-row output{font-size:14px;width:44px}
+.appearance-body h3{font-size:16px}
+.appearance-body p,.appearance-heading small,.settings-nav small,.highlight-rule label,.highlight-rule button,#instance-name-dialog p{font-size:13px}
+.highlight-rule input{font-size:14px}.terminal-context-menu button{font-size:14px}
+#gutter-toggle{font-size:13px}
+.source-row,#source-gutter.expanded .source-label{font-size:12px}
+#source-gutter.expanded .source-time{min-width:104px}
 /* Keep line beginnings visible beside details without changing buffer columns. */
 #source-gutter.expanded:not([hidden])+#terminal .xterm{margin-left:244px}
 @media(max-width:950px){#source-gutter.expanded:not([hidden])+#terminal .xterm{margin-left:198px}}
