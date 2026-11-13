@@ -38,5 +38,5 @@ class WebGLKeywordLayer{
  dispose(){this.clear();}
 }
 let terminalSearch=null,terminalQuery=null;
-function attachTerminalSearch(term){terminalSearch=new SearchAddon.SearchAddon({highlightLimit:1000});term.loadAddon(terminalSearch);terminalQuery=new TerminalQuery(term,terminalSearch);term.register({dispose:()=>terminalQuery?.term===term&&terminalQuery.dispose()});}
+function attachTerminalSearch(term){terminalSearch=new SearchAddon.SearchAddon({highlightLimit:1000});term.loadAddon(terminalSearch);terminalQuery=new TerminalQuery(term,terminalSearch);term.keepsessQuery=terminalQuery;term.register({dispose:()=>term.keepsessQuery?.dispose()});}
 function searchTerminal(backwards=false){terminalQuery?.navigate(backwards?-1:1);}

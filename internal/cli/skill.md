@@ -55,7 +55,12 @@ Browser input is read-only until explicitly unlocked and returns to read-only on
 refresh/reconnection/switch. SSH stream and Telnet can be unlocked directly on the
 main page or in a terminal tab; both operate the existing shared session. SSH exec
 keeps its main page read-only and uses a separate terminal tab for input. Unlocking
-never overrides session `read_only`. Human writes
+never overrides session `read_only`. Within one page, stream/Telnet and exec history
+share a bounded memory cache
+(32 entries, estimated 512MiB). Stream/Telnet switches retain the terminal, UTF-8/ANSI
+parser state and viewport, show cached content first, then fetch only newer events.
+Input stays locked while catching up and on return. Refresh/eviction/daemon identity
+changes require disk replay; raw history never enters localStorage. Human writes
 share core write limits and receipts, and are never automatically retried.
 Terminal scrollback defaults to 5000 lines, adjustable and saved in that browser;
 this does not limit persistent disk history or change MCP output cursors. SSH exec opens a continuous session view by default, showing commands, output and

@@ -3,7 +3,7 @@
 const $ = id => document.getElementById(id);
 const root = new URL('./', location.href);
 const pageQuery=new URLSearchParams(location.search),humanPage=pageQuery.get('view')==='terminal';
-let transcript=null,webCaps=[],resizeTimer=null;
+let transcript=null,streamView=null,webCaps=[],resizeTimer=null;
 if(humanPage)document.body.classList.add('human-page');
 let serverID='',activeInstances=new Set(),instanceRefresh=null,instanceItems=[];
 let instance = '', current = '', selected = '', handle = '', socket = null;
@@ -12,7 +12,26 @@ let localEcho=null,inputLockPending=false,inputLockTimer=null,pendingShellStart=
 function resetInputLockRequest(){inputLockPending=false;clearTimeout(inputLockTimer);inputLockTimer=null;}
 const taskDecoders=new Map(),historyViews=new TranscriptCache();
 function historyViewKey(){return JSON.stringify([serverID,instance,selected]);}
+function advanceCursor(seq){cursor=Math.max(cursor,seq);if(streamView)streamView.cursor=Math.max(streamView.cursor,cursor);}
+function writeStreamChunk(view,text){view.pending=new Promise(resolve=>view.term.write(text,resolve));return view.pending;}
+function stashStreamView(){
+ const view=streamView;if(!view||view.key!==historyViewKey())return;
+ // Decoded bytes may still be buffered by a cold replay. Queue them on the
+ // retained parser before recording its cursor, even when switching mid-write.
+ if(replayChunks.length){writeStreamChunk(view,replayChunks.join(''));replayChunks=[];replaySize=0;}
+ view.cursor=Math.max(view.cursor,cursor);view.decoders=new Map(taskDecoders);
+ view.viewport={follow:atTail(),line:terminal.buffer.active.viewportY};
+ unlocked=false;inputQueue='';clearTimeout(inputTimer);
+ view.echo.clear();terminal.options.disableStdin=true;terminal.keepsessResetInput?.();terminal.blur();terminal.keepsessReplaying=true;
+ terminalQuery?.dispose();terminalQuery=null;terminalEvents.abort();
+ view.nodes=document.createDocumentFragment();while($('terminal').firstChild)view.nodes.append($('terminal').firstChild);
+ // Include normal/alternate cells and a conservative renderer allowance.
+ view.charge=16*1024*1024+32*terminal.cols*(terminal.buffer.normal.length+terminal.buffer.alternate.length);
+ view.dispose=()=>{view.echo.dispose();view.term.dispose();};
+ terminal=null;localEcho=null;streamView=null;historyViews.put(view.key,view);
+}
 function stashHistoryView(){
+ if(streamView){stashStreamView();return;}
  if(!transcript||!transcript.cacheReady||transcript.cacheKey!==historyViewKey())return;
  const entry=transcript.snapshot(),b=terminal.buffer.active,top=transcript.spanAt(b.viewportY);
  entry.cursor=cursor;entry.decoders=new Map(taskDecoders);entry.charge+=entry.decoders.size*512;
@@ -133,18 +152,30 @@ function fit() {
  const cellWidth=box?.width/terminal.cols||8.5,cellHeight=box?.height/terminal.rows||18;
  if(width>0&&height>0){const cols=Math.max(10,Math.floor(width/cellWidth)),rows=Math.max(3,Math.floor(height/cellHeight));if(cols!==terminal.cols||rows!==terminal.rows){const b=terminal.buffer.active,follow=b.viewportY>=b.baseY,anchor=transcript?.spanAt(b.viewportY),offset=anchor?b.viewportY-anchor.marker.line:0;terminal.resize(cols,rows);if(!follow&&anchor?.marker&&!anchor.marker.isDisposed)terminal.scrollToLine(anchor.marker.line+Math.min(offset,anchor.end.line-anchor.marker.line));}}
 }
+function bindTerminalScrollEvents(owned){
+ terminalEvents.abort();terminalEvents=new AbortController();
+ for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
+}
+function restoreStreamView(view){
+ localEcho?.dispose();terminal?.dispose();terminalEvents.abort();
+ terminal=view.term;localEcho=view.echo;streamView=view;transcript=null;
+ $('terminal').replaceChildren(view.nodes);taskDecoders.clear();for(const [key,entry]of view.decoders)taskDecoders.set(key,entry);
+ terminalSearch=view.search;terminalQuery=new TerminalQuery(terminal,terminalSearch);terminal.keepsessQuery=terminalQuery;
+ cursor=view.cursor;terminal.options.disableStdin=true;terminal.keepsessReplaying=true;
+ bindTerminalScrollEvents(terminal);
+}
 function createTerminal() {
- localEcho?.dispose();localEcho=null;terminalEvents.abort();terminalEvents=new AbortController();
- if (terminal) terminal.dispose(); $('terminal').replaceChildren(); taskDecoders.clear();
+ localEcho?.dispose();localEcho=null;terminalEvents.abort();
+ if (terminal) terminal.dispose(); streamView=null; $('terminal').replaceChildren(); taskDecoders.clear();
  terminal = new Terminal({scrollback,disableStdin:true,fontFamily:WEB_FONT_FAMILY,fontSize:preferences.fontSize,lineHeight:1.25,convertEol:sessions.get(selected)?.mode==='exec'&&!tasks.get(handle)?.status.pty,...TERMINAL_APPEARANCE});
  terminal.keepsessReplaying=true;
  terminal.open($('terminal')); attachTerminalRenderer(terminal); attachTerminalSearch(terminal); attachTerminalContextMenu(terminal); attachTerminalAppearance(terminal); fit();localEcho=new LocalEchoPreview(terminal);
  const owned=terminal,ownedGeneration=generation;transcript=continuous()?new SourceTranscript(owned,text=>writeTerminalNow(text,ownedGeneration)):null;terminalQuery.source=transcript;if(transcript)transcript.cacheKey=historyViewKey();
- owned.onResize(()=>{if(humanPage&&handle&&unlocked){clearTimeout(resizeTimer);resizeTimer=setTimeout(sendResize,150);}});
+ owned.onResize(()=>{if(owned===terminal&&humanPage&&handle&&unlocked){clearTimeout(resizeTimer);resizeTimer=setTimeout(sendResize,150);}});
  owned.onScroll(()=>{if(owned===terminal&&!atTail(owned))scrollVersion++;});
- for(const event of ['wheel','touchmove','pointerdown','keydown'])$('terminal').addEventListener(event,()=>{if(owned===terminal)scrollVersion++;},{capture:true,passive:true,signal:terminalEvents.signal});
+ bindTerminalScrollEvents(owned);
  const queueInput = data => {
-  if (!inputPage() || replaying || !unlocked || !liveSession() || sessions.get(selected)?.read_only || !data) return;
+  if (owned!==terminal || !inputPage() || replaying || !unlocked || !liveSession() || sessions.get(selected)?.read_only || !data) return;
   if (sessions.get(selected)?.mode === 'exec' && !handle) return;
   if (new TextEncoder().encode(inputQueue + data).length > 65536) { status('输入缓冲已满；本次输入未发送。'); return; }
   inputQueue += data;
@@ -152,6 +183,7 @@ function createTerminal() {
   clearTimeout(inputTimer); inputTimer=setTimeout(flushInput,10);
  };
  attachTerminalInput(terminal,queueInput);
+ if(sessions.get(selected)?.mode==='stream')streamView={kind:'stream',key:historyViewKey(),term:terminal,echo:localEcho,search:terminalSearch,cursor:0,pending:Promise.resolve()};
 
  updateControls();
 }
@@ -161,7 +193,7 @@ function termWrite(text,gen){
 }
 async function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];replaySize=0;await writeTerminalNow(text,gen);if(gen===generation){replayProcessed+=text.length;$('loading').textContent='正在回放历史… 已回放约 '+(replayProcessed/10000).toFixed(1)+' 万字符';}}
 function finishReplay(){replaying=false;terminal.keepsessReplaying=false;for(const h of terminalHighlights)if(h.term===terminal)h.invalidate();if(replayNotes){note(replayNotes);replayNotes='';}}
-function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);owned.write(text,()=>finish(true));});}
+function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);if(streamView?.term===owned)writeStreamChunk(streamView,text).then(()=>finish(true));else owned.write(text,()=>finish(true));});}
 function trackDecoderTime(entry,raw,time){
  let pending=entry.pendingBytes||0;
  const encoding=entry.encoding||'utf-8';
@@ -182,21 +214,21 @@ async function applyTransport(message,gen,live=false){
 }
 async function apply(e, gen, live=false) {
  if (gen !== generation) return;
- if(e.kind==='instance'){cursor=Math.max(cursor,e.seq);if(live)await refreshInstances();return;}
+ if(e.kind==='instance'){advanceCursor(e.seq);if(live)await refreshInstances();return;}
  remember(e);
  if (e.session === selected && (continuous() || (e.handle || '') === handle)) {
   if (e.kind === 'output' && e.data) {
    // Any remote bytes invalidate the whole preview, before decoding (even partial UTF-8).
    const raw=outputBytes(e.data);if(raw.length)localEcho?.clear();
-   const key=(e.handle||'')+'/'+(e.source||'unknown'),old=taskDecoders.get(key);let entry=old;
+   const key=(e.handle||'')+'/'+(e.source||'unknown'),old=taskDecoders.get(key);let entry=old,prefix='';
    if(!entry||entry.epoch!==e.epoch||entry.encoding!==e.encoding){
-    if(entry){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,e);else await termWrite(tail,gen);}
+    if(entry){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,e);else prefix=tail;}
     if(gen!==generation)return;
     let d;try{d=new TextDecoder(e.encoding==='shift-jis'?'shift_jis':e.encoding||'utf-8');}catch(_){d=new TextDecoder();}
     entry={decoder:d,epoch:e.epoch,encoding:e.encoding};taskDecoders.set(key,entry);
    }
    const firstTime=entry.pendingTime||e.time;trackDecoderTime(entry,raw,e.time);const decoded=entry.decoder.decode(raw,{stream:true});
-   if(transcript)transcript.append(decoded,{...e,first_time:firstTime});else await termWrite(decoded,gen);
+   if(transcript)transcript.append(decoded,{...e,first_time:firstTime});else {if(streamView)advanceCursor(e.seq);await termWrite(prefix+decoded,gen);}
   } else if (e.kind === 'command') { if(transcript)await transcript.append(`$ ${e.command}\r\n`,e,'command');else await termWrite(`\r\n$ ${e.command}\r\n`,gen); }
   else if (e.kind === 'input' && e.data) { const raw=outputBytes(e.data); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
   if (e.disposed || e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown')) {
@@ -207,7 +239,7 @@ async function apply(e, gen, live=false) {
   }
  }
  if(gen!==generation)return;
- cursor=Math.max(cursor,e.seq);if(transcript)transcript.cacheReady=true; if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
+ advanceCursor(e.seq);if(transcript)transcript.cacheReady=true; if (!replaying&&e.kind!=='output' && e.kind!=='input'){renderSidebar();renderTasks();}
 }
 async function selectSession(id, task, startAfter=0) {
  stashHistoryView();resetInputLockRequest();
@@ -217,16 +249,22 @@ async function selectSession(id, task, startAfter=0) {
  handle=humanPage?task||'':'';
  if(humanPage){const u=new URL(location.href);u.searchParams.set('instance',instance);u.searchParams.set('session',id);if(handle)u.searchParams.set('handle',handle);else u.searchParams.delete('handle');history.replaceState(null,'',u);}
  $('empty').hidden=true;$('terminal').hidden=false;$('receipts').textContent='终端输入（包括密码）会原样保存在本机历史中。';$('echo').checked=preferences.echo;
- const cached=continuous()?historyViews.take(historyViewKey()):null;
- createTerminal();if(!cached&&humanPage&&handle&&Number.isSafeInteger(startAfter)&&startAfter>0)cursor=startAfter;if(cached){transcript.restore(cached);transcript.cacheReady=true;transcript.pendingViewport=cached.viewport;cursor=cached.cursor;for(const [key,entry]of cached.decoders)taskDecoders.set(key,entry);}
+ const cached=continuous()||e?.mode==='stream'?historyViews.take(historyViewKey()):null;
+ if(cached?.kind==='stream')restoreStreamView(cached);else createTerminal();if(!cached&&humanPage&&handle&&Number.isSafeInteger(startAfter)&&startAfter>0)cursor=startAfter;if(cached&&cached.kind!=='stream'){transcript.restore(cached);transcript.cacheReady=true;transcript.pendingViewport=cached.viewport;cursor=cached.cursor;for(const [key,entry]of cached.decoders)taskDecoders.set(key,entry);}
  renderSidebar();renderTasks();$('terminal-label').textContent=handle||id;
  replaying=true;document.querySelector('.terminal-panel').classList.add('replaying');$('loading').textContent=cached?'正在显示内存历史…':'正在读取历史…';$('loading').hidden=false;updateControls();
  try {
   if(cached){
-   await transcript.flush();if(gen!==generation)return;
-   await terminalQuery.refresh(true);if(gen!==generation)return;
-   await restoreHistoryViewport(cached.viewport);if(gen!==generation)return;
-   transcript.pendingViewport=null;transcript.cacheReady=true;
+   if(cached.kind==='stream'){
+    await cached.pending;if(gen!==generation)return;
+    fit();if(cached.viewport.follow)terminal.scrollToBottom();else terminal.scrollToLine(cached.viewport.line);
+   }else{
+    await transcript.flush();if(gen!==generation)return;
+    await terminalQuery.refresh(true);if(gen!==generation)return;
+    await restoreHistoryViewport(cached.viewport);if(gen!==generation)return;
+    transcript.pendingViewport=null;transcript.cacheReady=true;
+   }
+   if(cached.kind==='stream'){await terminalQuery.refresh(true);if(gen!==generation)return;}
    finishReplay();document.querySelector('.terminal-panel').classList.remove('replaying');$('loading').hidden=true;
    status('正在补齐新增内容…');updateControls();
   }
@@ -238,7 +276,7 @@ async function selectSession(id, task, startAfter=0) {
    const messages=replayMessages(await response.arrayBuffer());if(gen!==generation)return;
    const p=messages.pop();if(p.instance_id!==serverID)throw new Error('服务实例已变化，请刷新页面。');
    for(const message of messages){await applyTransport(message,gen);if(gen!==generation)return;}
-   transcript?.prune();if(transcript)transcript.cacheReady=true;cursor=Math.max(cursor,p.next);historyState(p.history);if(!p.more||p.next<=before)break;
+   transcript?.prune();if(transcript)transcript.cacheReady=true;advanceCursor(p.next);historyState(p.history);if(!p.more||p.next<=before)break;
   } while(gen===generation);
   if(gen!==generation)return;
   if(instance!==current||!liveSession()){for(const [key,entry]of taskDecoders){const tail=entry.decoder.decode();if(transcript)await transcript.append(tail,{session:id,handle:key.split('/')[0],source:key.split('/')[1]});else await termWrite(tail,gen);}if(transcript){for(const t of sessionTasks())await transcript.finish(t.handle);}}
@@ -257,7 +295,7 @@ function connect(gen) {
   const size=typeof event.data==='string'?event.data.length*2:event.data.byteLength;buffered+=size;if(buffered>4*1024*1024){ws.close();status('显示较慢，正在通过历史补齐；不会重发输入。');return;}
   pipeline=pipeline.then(async()=>{if(gen!==generation||socket!==ws)return;
    if(msg.type==='event'){await applyTransport(msg,gen,true);}
-   else if(msg.type==='checkpoint'){cursor=Math.max(cursor,msg.seq);}
+   else if(msg.type==='checkpoint'){advanceCursor(msg.seq);}
    else if(msg.type==='lock'){resetInputLockRequest();unlocked=!!msg.unlocked;updateControls();status(unlocked?'已解锁，输入将发送到当前终端。':'只读。');if(unlocked)setTimeout(sendResize,0);}
    else if(msg.type==='receipt')await receiveReceipt(msg,gen,ws);
    else if(msg.type==='hello'||msg.type==='status'){historyState(msg.info);}

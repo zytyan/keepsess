@@ -53,5 +53,7 @@ function attachTerminalInput(term,send){
   event.preventDefault();event.stopImmediatePropagation();committed=null;
   send(event.clipboardData.getData('text/plain'));
  },options);
- term.register({dispose:()=>{events.abort();key.dispose();}});
+ const reset=()=>{composing=false;candidate='';hasCandidate=false;keyText='';committed=null;textarea.value='';};
+ term.keepsessResetInput=reset;
+ term.register({dispose:()=>{events.abort();key.dispose();if(term.keepsessResetInput===reset)delete term.keepsessResetInput;}});
 }

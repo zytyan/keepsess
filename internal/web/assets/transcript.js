@@ -24,7 +24,7 @@ function nextANSIStyle(style,text){for(const m of text.matchAll(/\x1b\[[\d;:]*m/
 class TranscriptCache {
  constructor(){this.entries=new Map();this.bytes=0;}
  take(key){const entry=this.entries.get(key);if(entry){this.entries.delete(key);this.bytes-=entry.charge;}return entry;}
- put(key,entry){this.take(key);if(entry.charge>512*1024*1024)return;this.entries.set(key,entry);this.bytes+=entry.charge;while(this.entries.size>32||this.bytes>512*1024*1024)this.take(this.entries.keys().next().value);}
+ put(key,entry){this.take(key)?.dispose?.();if(entry.charge>512*1024*1024){entry.dispose?.();return;}this.entries.set(key,entry);this.bytes+=entry.charge;while(this.entries.size>32||this.bytes>512*1024*1024)this.take(this.entries.keys().next().value)?.dispose?.();}
 }
 
 class SourceTranscript {
