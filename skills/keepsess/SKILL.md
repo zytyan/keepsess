@@ -52,7 +52,10 @@ Web/history; the old Web command-line flags are removed. Never start another Age
 The browser lists stable session IDs plus model-assigned aliases, retains closed
 sessions and offers older instance archives. Archives do not restore connections.
 Browser input is read-only until explicitly unlocked and returns to read-only on
-refresh/reconnection. Unlocking never overrides session `read_only`. Human writes
+refresh/reconnection/switch. SSH stream and Telnet can be unlocked directly on the
+main page or in a terminal tab; both operate the existing shared session. SSH exec
+keeps its main page read-only and uses a separate terminal tab for input. Unlocking
+never overrides session `read_only`. Human writes
 share core write limits and receipts, and are never automatically retried.
 Terminal scrollback defaults to 5000 lines, adjustable and saved in that browser;
 this does not limit persistent disk history or change MCP output cursors. SSH exec opens a continuous session view by default, showing commands, output and
@@ -62,8 +65,8 @@ Task details are collapsed by default; open one task for independent ANSI/PTY st
 and interactive input, or return to the continuous session view. Output follows
 only while at the bottom; scrolling up preserves position. In an individual task
 view, automatic switching follows new tasks only from the latest task at its tail,
-with no pending input/receipts. Switching restores read-only. Observation never
-sends terminal input. WebGL rendering is preferred, with DOM fallback on failure;
+with no pending input/receipts. Switching restores read-only. Locked views never
+send terminal input. WebGL rendering is preferred, with DOM fallback on failure;
 Ctrl+F searches currently loaded scrollback, not the full disk archive. Desktop
 Chromium-based browsers are supported. Dark/light/system theme is browser-local.
 

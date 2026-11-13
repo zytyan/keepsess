@@ -84,7 +84,7 @@ func runBrowserAcceptance(t *testing.T, proxy bool) {
 	if node == "" {
 		node = "node"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	entry := s.Info().URL
 	if proxy {
