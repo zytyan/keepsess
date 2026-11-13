@@ -135,6 +135,15 @@ func sshServer(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Ch
 	return sshServerWithPTY(t, shell, exec, nil, globals...)
 }
 func sshServerWithPTY(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request), pty func(*ssh.Request), globals ...func(*ssh.Request)) (string, string) {
+	return sshServerWithExecGate(t, shell, exec, pty, nil, globals...)
+}
+
+// SSHWithExecGate allows a real protocol-level exec rejection without closing transport.
+func SSHWithExecGate(t *testing.T, accept func(string) bool) (string, string) {
+	return sshServerWithExecGate(t, Switch, nil, nil, accept)
+}
+
+func sshServerWithExecGate(t *testing.T, shell func(io.ReadWriter), exec func(string, ssh.Channel, <-chan *ssh.Request), pty func(*ssh.Request), accept func(string) bool, globals ...func(*ssh.Request)) (string, string) {
 	t.Helper()
 	_, key, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
@@ -192,6 +201,10 @@ func sshServerWithPTY(t *testing.T, shell func(io.ReadWriter), exec func(string,
 					case "exec":
 						var p struct{ Command string }
 						if ssh.Unmarshal(req.Payload, &p) != nil {
+							return
+						}
+						if accept != nil && !accept(p.Command) {
+							_ = req.Reply(false, nil)
 							return
 						}
 						_ = req.Reply(true, nil)

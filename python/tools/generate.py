@@ -13,13 +13,13 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 RETURNS = {
-    "sess_connect": "ConnectResult", "sess_reconnect": "ConnectResult",
-    "sess_exec": "ExecResult", "sess_task_wait": "ExecResult", "sess_task_status": "ExecResult",
-    "sess_list": "SessionList", "sess_task_list": "TaskList",
-    "sess_configure": "ConfigResult", "sess_get_config": "ConfigResult",
-    "sess_get_file": "FileResult", "sess_put_file": "FileResult",
-    "sess_tunnel_open": "TunnelResult", "sess_tunnel_close": "TunnelResult",
-    "sess_tunnel_list": "list[TunnelResult]", "sess_help": "HelpResult",
+    "connect": "ConnectResult", "reconnect": "ConnectResult",
+    "exec": "ExecResult", "task_wait": "ExecResult", "task_status": "ExecResult",
+    "list": "SessionList", "task_list": "TaskList",
+    "configure": "ConfigResult", "get_config": "ConfigResult",
+    "get_file": "FileResult", "put_file": "FileResult",
+    "tunnel_open": "TunnelResult", "tunnel_close": "TunnelResult",
+    "tunnel_list": "list[TunnelResult]", "help": "HelpResult",
 }
 
 
@@ -55,8 +55,8 @@ def generate(tools):
             props = tool['inputSchema']['properties']
             required = tool['inputSchema'].get('required', [])
             ordered = sorted(props, key=lambda key: (key not in required, key))
-            ret = RETURNS.get(name, "ReadResult" if name.startswith('sess_read_') else
-                              "SendResult" if name.startswith('sess_send') else "Result")
+            ret = RETURNS.get(name, "ReadResult" if name.startswith('read_') else
+                              "SendResult" if name.startswith('send') else "Result")
             text.append(f'    {"async " if asynchronous else ""}def {name}(')
             text.append('        self,' + (' *,' if ordered else ''))
             for key in ordered:

@@ -201,7 +201,7 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 	r, cancel, done := start(t, c)
 	defer func() { cancel(); <-done }()
 	empty := newAgent(t, c)
-	emptyInfo := empty.call(t, "sess_configure", map[string]any{"instance_name": "empty agent"})
+	emptyInfo := empty.call(t, "configure", map[string]any{"instance_name": "empty agent"})
 	emptyID := emptyInfo["instance_id"].(string)
 	// b is older: it must still sort ahead of the newer a after a exits.
 	b, a := newAgent(t, c), newAgent(t, c)
@@ -209,14 +209,14 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 	host, port, _ := net.SplitHostPort(addr)
 	n, _ := strconv.Atoi(port)
 	opts := map[string]any{"protocol": "ssh", "mode": "exec", "host": host, "port": n, "username": "user", "password": "secret"}
-	one := a.call(t, "sess_connect", opts)
-	two := b.call(t, "sess_connect", opts)
+	one := a.call(t, "connect", opts)
+	two := b.call(t, "connect", opts)
 	id1, id2 := one["instance_id"].(string), two["instance_id"].(string)
 	if id1 == id2 || one["session"] != "s1" || two["session"] != "s1" || !strings.Contains(one["comment"].(string), "instance_name") {
 		t.Fatal(one, two)
 	}
-	a.call(t, "sess_configure", map[string]any{"instance_name": "部署检查 A"})
-	b.call(t, "sess_configure", map[string]any{"instance_name": "网络诊断 B"})
+	a.call(t, "configure", map[string]any{"instance_name": "部署检查 A"})
+	b.call(t, "configure", map[string]any{"instance_name": "网络诊断 B"})
 	var instances []history.Instance
 	eventually(t, func() bool {
 		fetch(t, r.Info.URL, "api/instances", &instances)
@@ -275,8 +275,8 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 	if receipt["error"] != nil || receipt["result"].(map[string]any)["input_state"] != "sent" {
 		t.Fatal(receipt)
 	}
-	first := a.call(t, "sess_task_list", map[string]any{})
-	second := b.call(t, "sess_task_list", map[string]any{})
+	first := a.call(t, "task_list", map[string]any{})
+	second := b.call(t, "task_list", map[string]any{})
 	if len(first["tasks"].([]any)) != 1 || len(second["tasks"].([]any)) != 0 {
 		t.Fatal("operation crossed instance", first, second)
 	}
@@ -312,7 +312,7 @@ func TestSharedDaemonMultipleAgentsRestartRoutingAndArchive(t *testing.T) {
 		}
 		return false
 	})
-	continued := a.call(t, "sess_exec", map[string]any{"session": "s1", "command": "both"})
+	continued := a.call(t, "exec", map[string]any{"session": "s1", "command": "both"})
 	if continued["exit_code"] != float64(0) {
 		t.Fatal(continued)
 	}

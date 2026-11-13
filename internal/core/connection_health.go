@@ -23,15 +23,15 @@ type SessionLookupError struct{ Session, Reason, NextAction, InstanceID string }
 type TaskLookupError struct{ Handle, InstanceID string }
 
 func (e *TaskLookupError) Error() string {
-	return fmt.Sprintf("unknown or expired task handle %q; instance_id=%s; records may have closed/expired or the service instance changed; use sess_task_list; do not replay the command", e.Handle, e.InstanceID)
+	return fmt.Sprintf("unknown or expired task handle %q; instance_id=%s; records may have closed/expired or the service instance changed; use task_list; do not replay the command", e.Handle, e.InstanceID)
 }
 
 func (e *SessionLookupError) Error() string {
 	detail := "parameters no longer retained"
 	if e.Reason == "unknown_handle" {
-		detail = "not retained in this process; may have been closed, expired, or the global sessions/service instance changed; inspect sess_list before connecting; never replay prior input"
+		detail = "not retained in this process; may have been closed, expired, or the global sessions/service instance changed; inspect list before connecting; never replay prior input"
 	}
-	return fmt.Sprintf("session %s unavailable: %s; instance_id=%s; use sess_list/sess_connect (%s); do not replay prior input", e.Session, e.Reason, e.InstanceID, detail)
+	return fmt.Sprintf("session %s unavailable: %s; instance_id=%s; use list/connect (%s); do not replay prior input", e.Session, e.Reason, e.InstanceID, detail)
 }
 
 // Both helpers require Manager.mu.
@@ -69,9 +69,9 @@ func (m *Manager) sessionErrorLocked(id string) error {
 			delete(m.retired, id)
 		}
 	}
-	next := "sess_connect"
+	next := "connect"
 	if reason == "unknown_handle" {
-		next = "sess_list"
+		next = "list"
 	}
 	return &SessionLookupError{Session: id, Reason: reason, NextAction: next, InstanceID: m.instanceID}
 }
@@ -147,7 +147,7 @@ func (s *Session) sshKeepalive(send func() error) {
 				return
 			}
 		case <-deadline.C:
-			s.disconnectWith("keepalive_timeout", "SSH keepalive response timeout; transport closed; unfinished task outcomes unknown; use sess_reconnect")
+			s.disconnectWith("keepalive_timeout", "SSH keepalive response timeout; transport closed; unfinished task outcomes unknown; use reconnect")
 			return
 		}
 	}

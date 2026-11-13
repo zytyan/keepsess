@@ -36,17 +36,17 @@ import os
 from keepsess import Keepsess
 
 with Keepsess() as ks:
-    ks.sess_configure(instance_name="Python 巡检")
-    conn = ks.sess_connect(
+    ks.configure(instance_name="Python 巡检")
+    conn = ks.connect(
         protocol="ssh", host=os.environ["SSH_HOST"], port=22,
         username=os.environ["SSH_USER"], password=os.environ["SSH_PASSWORD"],
     )
-    result = ks.sess_exec(session=conn.session, command="uname -a")
+    result = ks.exec(session=conn.session, command="uname -a")
     print(result.output)
     print(result.exit_code, result.warning)
 ```
 
-异步程序使用 `async with AsyncKeepsess() as ks`，并 `await ks.sess_*()`。同步客户端支持跨线程调用；异步客户端应在同一事件循环中使用。
+异步程序使用 `async with AsyncKeepsess() as ks`，并 `await ks.*()`。同步客户端支持跨线程调用；异步客户端应在同一事件循环中使用。
 
 ## 关键约定
 
@@ -54,16 +54,16 @@ with Keepsess() as ks:
 - 参数名、毫秒单位、执行语义和 MCP 一致，配置保持顶层。`None` 表示省略；`False`、`0`、空字符串原样发送。connect/configure 修改默认值，操作参数只影响本次。
 - 返回值支持 `conn.session`、`result.peer.server`、`config.config.read_only` 等点语法；`to_dict()` 保留服务端实际字段，未知字段存入 `extra`。
 - `ToolError.result` 保留完整类型化结果；远端非零退出码本身不抛出工具异常。`exit_code=None` 不代表成功，空输出不代表没有执行。
-- Python 优先用 `sess_send_text` / `sess_sendline_text`。普通字符串 `"\r"`、`"\x03"` 已包含实际控制字符；原始字符串 `r"\x03"` 保留字面反斜杠。只有明确需要再解码一层时使用 `*_escaped`。`line_end` 仍是工具解释的可见转义，如 `r"\r"`。
+- Python 优先用 `send_text` / `sendline_text`。普通字符串 `"\r"`、`"\x03"` 已包含实际控制字符；原始字符串 `r"\x03"` 保留字面反斜杠。只有明确需要再解码一层时使用 `*_escaped`。`line_end` 仍是工具解释的可见转义，如 `r"\r"`。
 - Python 本地响应等待默认 `rpc_timeout=125` 秒，启动握手默认 `startup_timeout=15` 秒；构造时可修改，只接受有限正数。服务端单 RPC 仍为 115 秒，exec 默认等待 120 秒；配置的完成等待超时默认尝试 TERM，RPC 预算到期不发 TERM。
-- 长命令可用 `collect_output=False` 启动，再通过 handle 调用 `sess_task_wait` / read；需要自行设置总预算。`term_on_timeout=False` 只结束等待。客户端不自动重连、重启或重放输入。
-- 全部 30 个工具固定可发现，无 tool_profile 开关。sess_exec 仅在恰好保留一个会话时可省略 session；建议脚本显式传入 conn.session。会话默认空闲 2h 回收，运行中任务不因静默回收。
-- 文件传输和 SSH 隧道可用 sess_get_file/sess_put_file、sess_tunnel_open/list/close；文件的本机路径及本地监听均相对 Go 引擎所在主机，隧道 handle 与 task handle 不混用。详见[文件传输与隧道](../docs/usage.md#文件传输与-ssh-隧道)。
+- 长命令可用 `collect_output=False` 启动，再通过 handle 调用 `task_wait` / read；需要自行设置总预算。`term_on_timeout=False` 只结束等待。客户端不自动重连、重启或重放输入。
+- 全部 30 个工具固定可发现，无 tool_profile 开关。exec 仅在恰好保留一个会话时可省略 session；建议脚本显式传入 conn.session。会话默认空闲 2h 回收，运行中任务不因静默回收。
+- 文件传输和 SSH 隧道可用 get_file/put_file、tunnel_open/list/close；文件的本机路径及本地监听均相对 Go 引擎所在主机，隧道 handle 与 task handle 不混用。详见[文件传输与隧道](../docs/usage.md#文件传输与-ssh-隧道)。
 - 输出默认每页 64KiB，应处理 `more`、截断和历史丢失。并发、队列、输入输出均有界；本地超时或取消不保证远端任务终止。
 
 ## 人类观察与详细用法
 
-沿用 `~/.keepsess.toml`，Web 默认开启，Python 实例加入现有共享界面。`ks.meta.web` 或 `ks.sess_list().web` 提供入口；使用 `instance_name` 命名。观察不消耗脚本读取游标，退出后保留归档。人工输入可能与脚本竞争；历史可能保存终端输入中的密码。
+沿用 `~/.keepsess.toml`，Web 默认开启，Python 实例加入现有共享界面。`ks.meta.web` 或 `ks.list().web` 提供入口；使用 `instance_name` 命名。观察不消耗脚本读取游标，退出后保留归档。人工输入可能与脚本竞争；历史可能保存终端输入中的密码。
 
 [完整指南与长任务示例](guide.md) · [SSH 示例](examples/ssh_exec.py) · [项目说明](../README.md)
 
@@ -73,3 +73,7 @@ with Keepsess() as ks:
 PYTHONPATH=python python3 -m unittest discover -s python/tests -v
 python3 python/tools/generate.py --check
 ```
+
+工具 API 契约 2 删除 `sess_` 前缀：使用 `client.connect()` / `client.exec()` 等同名方法，旧方法不再提供。命名连接可用 `client.connect(profile="server")`；配置和生命周期见 [使用文档](../docs/usage.md#命名连接-profile)。引擎应同时升级，`client.meta.api_contract` 可检查契约。
+
+`client.close(session="s1")` 调用工具关闭一个会话，保留 SDK 客户端进程；`client.close()` 无参数时关闭客户端及其全部连接。异步客户端规则相同，使用 `await`。

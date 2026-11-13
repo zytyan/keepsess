@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
-	AuditLog string `toml:"audit_log"`
+	AuditLog string                       `toml:"audit_log"`
+	Profiles map[string]ConnectionProfile `toml:"profiles"`
 	// Tools accepts the obsolete profile setting so existing config files load.
 	// It has no effect: all tools are always discoverable.
 	Tools struct {
@@ -103,6 +105,16 @@ func LoadHome(home string) (Config, error) {
 		return c, fmt.Errorf("%s: %w", p, err)
 	}
 	c.Home = home
+	if _, err := c.ConnectionProfiles(); err != nil {
+		return c, err
+	}
+	if len(c.Profiles) > 0 {
+		if st, e := os.Stat(p); e != nil {
+			return c, e
+		} else if runtime.GOOS != "windows" && st.Mode().Perm()&0077 != 0 {
+			return c, fmt.Errorf("configuration with connection profiles must be private (0600)")
+		}
+	}
 	if err := c.Web.Appearance.Validate(); err != nil {
 		return c, err
 	}

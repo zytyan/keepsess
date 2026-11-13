@@ -7,7 +7,7 @@ import (
 )
 
 // Check public tool definitions: parameters must be usable without
-// first loading sess_help, including nested jump authentication settings.
+// first loading help, including nested jump authentication settings.
 func TestDiscoveryIncludesCompleteDocumentation(t *testing.T) {
 	var checkFields func(map[string]any, string)
 	checkFields = func(node map[string]any, path string) {
@@ -49,16 +49,16 @@ func TestDiscoveryDocumentsFirstCallBoundaries(t *testing.T) {
 		tool, parameter string
 		fragments       []string
 	}{
-		{"sess_exec", "session", []string{"exactly one", "disconnected/stream", "multiple sessions"}},
-		{"sess_exec", "command", []string{"shell-quoting", "wrapper", "max_input_bytes"}},
-		{"sess_exec", "login", []string{"bash --login -c", "without fallback", "cwd/env"}},
-		{"sess_exec", "collect_output", []string{"exec_total_timeout_ms", "False returns a task handle", "no execution wait"}},
-		{"sess_exec", "exec_total_timeout_ms", []string{"300000ms", "RPC budget", "inherit the session"}},
-		{"sess_send_escaped", "data", []string{"AFTER JSON decoding", "DSML", "Invalid escapes reject before writing", "configured encoding"}},
-		{"sess_sendline_text", "data", []string{"no escape decoding", "exactly once", "Empty data allowed"}},
-		{"sess_sendline_text", "line_end", []string{"decoded once", "JSON", "Defaults: SSH", "Telnet"}},
-		{"sess_read_until", "include_pattern", []string{"RE2", "1024 bytes", "64KiB", "advances the cursor"}},
-		{"sess_configure", "read_only", []string{"not a security boundary", "does not stop"}},
+		{"exec", "session", []string{"exactly one", "disconnected/stream", "multiple sessions"}},
+		{"exec", "command", []string{"shell-quoting", "wrapper", "max_input_bytes"}},
+		{"exec", "login", []string{"bash --login -c", "without fallback", "cwd/env"}},
+		{"exec", "collect_output", []string{"exec_total_timeout_ms", "False returns a task handle", "no execution wait"}},
+		{"exec", "exec_total_timeout_ms", []string{"300000ms", "RPC budget", "inherit the session"}},
+		{"send_escaped", "data", []string{"AFTER JSON decoding", "DSML", "Invalid escapes reject before writing", "configured encoding"}},
+		{"sendline_text", "data", []string{"no escape decoding", "exactly once", "Empty data allowed"}},
+		{"sendline_text", "line_end", []string{"decoded once", "JSON", "Defaults: SSH", "Telnet"}},
+		{"read_until", "include_pattern", []string{"RE2", "1024 bytes", "64KiB", "advances the cursor"}},
+		{"configure", "read_only", []string{"not a security boundary", "does not stop"}},
 	} {
 		props := publicDefinitions[tc.tool]["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		desc := props[tc.parameter].(map[string]any)["description"].(string)

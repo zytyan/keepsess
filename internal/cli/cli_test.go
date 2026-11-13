@@ -107,7 +107,7 @@ func TestServeWebDiscoveryAndStdioIsolation(t *testing.T) {
 				launchDaemon = oldLaunch
 			})
 			args := []string{"serve"}
-			input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"sess_list\",\"arguments\":{}}}\n"
+			input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"list\",\"arguments\":{}}}\n"
 			var out, errout bytes.Buffer
 			if e := Run(context.Background(), args, strings.NewReader(input), &out, &errout); e != nil {
 				t.Fatal(e)

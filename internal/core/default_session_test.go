@@ -18,7 +18,7 @@ func TestExecUniqueSession(t *testing.T) {
 			t.Fatalf("want %q, got %v", want, err)
 		}
 	}
-	checkError(req, "sess_connect")
+	checkError(req, "connect")
 	addr, _ := testutil.SSH(t)
 	id := connect(t, m, options(addr, "ssh", "exec"))
 	v := run(t, m, "exec", req)
@@ -53,11 +53,11 @@ func TestExecUniqueSession(t *testing.T) {
 	}
 	s.disconnect("test disconnect")
 	v = run(t, m, "exec", req)
-	if v.Session != id || v.Connected || v.InputState != "not_sent" || v.NextAction != "sess_reconnect" {
+	if v.Session != id || v.Connected || v.InputState != "not_sent" || v.NextAction != "reconnect" {
 		t.Fatal(v)
 	}
 	m.CloseAll()
-	checkError(req, "sess_connect")
+	checkError(req, "connect")
 }
 
 func TestExecUniqueStreamSessionRejected(t *testing.T) {

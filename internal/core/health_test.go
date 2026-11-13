@@ -56,7 +56,7 @@ func TestSSHKeepaliveNegativeReplyIsHealthyAndDoesNotRefreshIdle(t *testing.T) {
 	}
 	_, err := m.Get(id)
 	var lookup *SessionLookupError
-	if !errors.As(err, &lookup) || lookup.Reason != "session_idle_expired" || lookup.NextAction != "sess_connect" {
+	if !errors.As(err, &lookup) || lookup.Reason != "session_idle_expired" || lookup.NextAction != "connect" {
 		t.Fatal(err)
 	}
 }
@@ -76,7 +76,7 @@ func TestSSHKeepaliveTimeoutAndReconnect(t *testing.T) {
 	s, _ := m.Get(id)
 	eventually(t, func() bool { return !s.status().Connected })
 	v := s.status()
-	if v.DisconnectReason != "keepalive_timeout" || v.NextAction != "sess_reconnect" {
+	if v.DisconnectReason != "keepalive_timeout" || v.NextAction != "reconnect" {
 		t.Fatal(v)
 	}
 	v = run(t, m, "task_status", Request{Handle: a.Handle})
@@ -108,7 +108,7 @@ func TestDisconnectClassificationAndTombstoneBounds(t *testing.T) {
 	m, s, _ := localSession(t)
 	s.disconnectError(&net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, "SSH disconnected")
 	v := run(t, m, "read_available", Request{Session: s.id})
-	if v.DisconnectReason != "reset_by_peer" || v.NextAction != "sess_reconnect" || !strings.Contains(v.Error, "reset") {
+	if v.DisconnectReason != "reset_by_peer" || v.NextAction != "reconnect" || !strings.Contains(v.Error, "reset") {
 		t.Fatal(v)
 	}
 	if _, err := m.Close(s.id); err != nil {

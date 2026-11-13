@@ -18,11 +18,11 @@ func main() {
 		name := tool["name"].(string)
 		schema := tool["inputSchema"].(map[string]any)
 		props := schema["properties"].(map[string]any)
-		if name != "sess_connect" && name != "sess_configure" && name != "sess_exec" && name != "sess_task_wait" && !strings.HasPrefix(name, "sess_send") && !strings.HasPrefix(name, "sess_read_") {
+		if name != "connect" && name != "configure" && name != "exec" && name != "task_wait" && !strings.HasPrefix(name, "send") && !strings.HasPrefix(name, "read_") {
 			continue
 		}
 		for key, desc := range core.ConfigDescriptions() {
-			if name != "sess_connect" && name != "sess_configure" {
+			if name != "connect" && name != "configure" {
 				switch key {
 				case "connect_timeout_ms", "session_idle_timeout_ms", "tcp_keepalive_ms", "ssh_keepalive_ms", "ssh_keepalive_timeout_ms", "read_only":
 					continue

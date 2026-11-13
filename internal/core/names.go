@@ -144,7 +144,7 @@ func (m *Manager) RenameTask(ref, name string) (Result, error) {
 	selected.out.mu.Lock()
 	defer selected.out.mu.Unlock()
 	if s.tasks[selected.out.handle] != selected || s.disposed || s.reconnecting || selected.out.disposed {
-		return Result{}, errors.New("unknown or expired task; inspect sess_task_list")
+		return Result{}, errors.New("unknown or expired task; inspect task_list")
 	}
 	selected.out.name = name
 	selected.out.recordLocked("task", nil, "", "", nil)

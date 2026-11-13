@@ -141,7 +141,7 @@ func TestTelnetSSHJumpKeepalive(t *testing.T) {
 	}
 	state.IgnoreKeepalive.Store(true)
 	eventually(t, func() bool { return !s.status().Connected })
-	if v := s.status(); v.DisconnectReason != "keepalive_timeout" || v.NextAction != "sess_reconnect" {
+	if v := s.status(); v.DisconnectReason != "keepalive_timeout" || v.NextAction != "reconnect" {
 		t.Fatal(v)
 	}
 }

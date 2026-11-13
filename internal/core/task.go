@@ -502,7 +502,7 @@ func (t *Task) wait(ctx context.Context, c Config) Result {
 		v.Comment = "Caller deadline ended this wait; task retained. Continue with a new wait/read call. No TERM sent for caller deadline expiry."
 	}
 	if v.Reason == "total_timeout" && v.TimeoutSource == "rpc_budget" {
-		v.Comment = "RPC collection budget reached; task retained. Continue with sess_task_wait or handle-based read. No TERM sent for RPC budget expiry."
+		v.Comment = "RPC collection budget reached; task retained. Continue with task_wait or handle-based read. No TERM sent for RPC budget expiry."
 	}
 	if v.Reason == "total_timeout" && !time.Now().Before(completionDeadline) && c.TermOnTimeout && waitCtx.Err() == nil && ctx.Err() == nil {
 		v.Signal = t.sendSignal(ctx, "TERM")
@@ -660,7 +660,7 @@ func (m *Manager) operateTask(ctx context.Context, kind string, r Request) (Resu
 		return m.taskInput(ctx, kind, r)
 	}
 	if r.Interactive || r.PTY {
-		return Result{}, errors.New("interactive/pty are only for sess_exec")
+		return Result{}, errors.New("interactive/pty are only for exec")
 	}
 	if r.Data != "" || r.Command != "" || r.CollectOutput != nil {
 		return Result{}, errors.New("task/read operations do not accept input")

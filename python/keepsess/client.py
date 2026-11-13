@@ -12,7 +12,7 @@ from typing import Any, Coroutine, TypeVar
 from ._methods import AsyncMethods, SyncMethods
 from ._transport import Transport
 from .errors import ProtocolError, ToolError, TransportError
-from .models import Record, decode_result
+from .models import Record, Result, decode_result
 
 T = TypeVar("T")
 
@@ -74,8 +74,10 @@ class AsyncKeepsess(AsyncMethods):
     async def _invoke(self, tool: str, arguments: dict[str, Any]) -> Any:
         return await _invoke(self._transport, tool, arguments)
 
-    async def close(self) -> None:
-        """Disconnect owned sessions; remote programs are not guaranteed to exit."""
+    async def close(self, *, session: str | None = None) -> Result | None:
+        """With session, close only that connection; without it, stop this client."""
+        if session is not None:
+            return await self._invoke('close', {'session': session})
         await self._transport.close()
 
     async def __aenter__(self) -> AsyncKeepsess:
@@ -157,7 +159,10 @@ class Keepsess(SyncMethods):
     def _invoke(self, tool: str, arguments: dict[str, Any]) -> Any:
         return self._run(_invoke(self._transport, tool, arguments))
 
-    def close(self) -> None:
+    def close(self, *, session: str | None = None) -> Result | None:
+        """With session, close only that connection; without it, stop this client."""
+        if session is not None:
+            return self._invoke('close', {'session': session})
         with self._lock:
             if self._closed:
                 return

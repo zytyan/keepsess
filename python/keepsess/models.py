@@ -101,6 +101,9 @@ class Result(Record):
     warning: str | None = None
     error: str | None = None
     next_action: str | None = None
+    guidance: str | None = None
+    next_arguments: dict[str, Any] | None = None
+    available_profiles: list[str] | None = None
     start: int | None = None
     end: int | None = None
     more: bool | None = None
@@ -137,6 +140,8 @@ class SendResult(Result):
 
 @dataclass
 class SessionList(Record):
+    api_contract: str | None = None
+    available_profiles: list[str] = field(default_factory=list)
     instance_id: str | None = None
     instance_name: str | None = None
     sessions: list[Result] = field(default_factory=list)
@@ -228,19 +233,19 @@ class HelpResult(Record):
 
 
 def result_type(tool: str) -> type[Record]:
-    if tool in {"sess_connect", "sess_reconnect"}:
+    if tool in {"connect", "reconnect"}:
         return ConnectResult
-    if tool in {"sess_exec", "sess_task_wait", "sess_task_status"}:
+    if tool in {"exec", "task_wait", "task_status"}:
         return ExecResult
-    if tool.startswith("sess_send"):
+    if tool.startswith("send"):
         return SendResult
-    if tool.startswith("sess_read_"):
+    if tool.startswith("read_"):
         return ReadResult
-    return {"sess_list": SessionList, "sess_task_list": TaskList,
-            "sess_configure": ConfigResult, "sess_get_config": ConfigResult,
-            "sess_get_file": FileResult, "sess_put_file": FileResult,
-            "sess_help": HelpResult, "sess_tunnel_open": TunnelResult,
-            "sess_tunnel_close": TunnelResult}.get(tool, Result)
+    return {"list": SessionList, "task_list": TaskList,
+            "configure": ConfigResult, "get_config": ConfigResult,
+            "get_file": FileResult, "put_file": FileResult,
+            "help": HelpResult, "tunnel_open": TunnelResult,
+            "tunnel_close": TunnelResult}.get(tool, Result)
 
 
 def decode_record(cls: type[T], data: dict[str, Any]) -> T:
@@ -260,7 +265,7 @@ def decode_record(cls: type[T], data: dict[str, Any]) -> T:
 
 
 def decode_result(tool: str, data: Any) -> Any:
-    if tool == "sess_tunnel_list" and isinstance(data, list):
+    if tool == "tunnel_list" and isinstance(data, list):
         return [decode_record(TunnelResult, item) for item in data]
     if not isinstance(data, dict):
         raise ValueError("Expected a structured result object")

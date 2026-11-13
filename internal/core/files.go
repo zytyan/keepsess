@@ -236,7 +236,7 @@ func (m *Manager) Transfer(ctx context.Context, put bool, r FileRequest) (map[st
 	}
 	if e != nil {
 		result["error"] = e.Error()
-		result["warning"] = "Partial transfer or remote outcome may be unknown. Inspect sess_list and explicitly sess_reconnect if disconnected; do not automatically replay."
+		result["warning"] = "Partial transfer or remote outcome may be unknown. Inspect list and explicitly reconnect if disconnected; do not automatically replay."
 		return result, nil
 	}
 	result["complete"] = true

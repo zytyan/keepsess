@@ -37,18 +37,20 @@ const Help = `keepsess — 面向 AI Agent 的持久 SSH / Telnet MCP 工具 (Go
   keepsess version                     查看版本
   keepsess daemon status|stop|run|upgrade      查询 / 停止 / 前台运行 / 从当前二进制升级共享 daemon
 
+工具 API 契约 2；工具名不含 sess_，客户端可自动加 keepsess 前缀。
 全部 30 个工具统一可发现，提供完整参数说明，无需切换发现分组。
 完整接口：get_file/put_file、tunnel_open/list/close、help、connect/reconnect/rename/task_rename/configure/get_config/list、exec、四种 send/sendline、
-read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（均带 sess_ 前缀）。
-sess_exec 用于 SSH mode=exec，默认 login=true 使用 Bash 登录 shell、stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
-sess_exec 仅在恰好保留一个会话时可省略 session；多会话须明确指定，断开的会话也计数。
+read_available/read_until/read_tail/read_history、task_list/status/wait/signal/release/close_stdin、close/close_all（工具名不含 sess_，客户端可添加 keepsess 前缀）。
+exec 用于 SSH mode=exec，默认 login=true 使用 Bash 登录 shell、stdin EOF；interactive=true 显式保留 stdin，pty=true 需 interactive。
+exec 仅在恰好保留一个会话时可省略 session；多会话须明确指定，断开的会话也计数。
 mode=stream 调用 exec 直接报错，使用 sendline_text/escaped。
 持久终端 shell、console 登录和全部 Telnet 使用 mode=stream；交互 exec 按 task handle send/read。
-sess_task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。
-sess_help() 列内置目录；topic/parameter 定点查看，query 搜索短摘要（默认 3 条），不访问端点/文件/网络。
+task_close_stdin(handle) 发送 EOF，保留输出与退出状态；Ctrl-D 字节不等于关闭 stdin。
+help() 列内置目录；topic/parameter 定点查看，query 搜索短摘要（默认 3 条），不访问端点/文件/网络。
 工具发现保留类型、默认值和关键约束，详细说明按需 help；无需每次调用前查询帮助。
 读取默认总时限 30000ms、静默时限 500ms；所有工具参数均在顶层，无需 config 嵌套。
 connect/configure 设置会话默认值；操作顶层配置仅覆盖本次调用。
+connect(profile="NAME") 显式从 ~/.keepsess.toml [profiles.NAME] 建新连接，不恢复或重放；list 返回可用名字。
 connect/exec 可传 name；rename/task_rename 修改别名，稳定 sN/taskN ID 保持有效；重复名字不发送。
 instance_id 仅用于实例诊断，不要求每次传入；未知句柄先 list 检查，禁止重放。
 exec 可传 cwd/env，在登录初始化后应用；login=false 且无 cwd/env 时原样提交 command。
@@ -73,7 +75,7 @@ TCP keepalive 默认 15000ms；Linux 支持 TCP 队列阈值，Windows 明确报
 MCP 配置: {"command":"/path/to/keepsess","args":["serve"]}
 用户配置统一读取 ~/.keepsess.toml，首次启动生成默认配置，Agent 只需 keepsess serve。
 首个进程自动启动当前用户的共享 daemon（默认 127.0.0.1:8765，占用时自动换端口）。
-所有活动进程共用 Web 入口，initialize._meta.web / sess_list.web 可查 URL；进程退出仍保留历史。
+所有活动进程共用 Web 入口，initialize._meta.web / list.web 可查 URL；进程退出仍保留历史。
 daemon 空闲不退出；SSH/Telnet 仍在原 Agent 进程内，daemon 重启仅恢复观察，不重放输入。
 [web] enabled/listen/base_path/public_url、[history] dir/max_bytes、audit_log 配置替代启动参数。
 IP/localhost 反代入口保留 Host（含端口），页面/API/WS 使用相对路径；DNS 名设置 web.public_url。
@@ -196,7 +198,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		if f.NArg() != 0 {
 			return errors.New("unexpected arguments; configure ~/.keepsess.toml")
 		}
-		s := &mcp.Server{Manager: core.NewManager()}
+		profiles, e := cfg.ConnectionProfiles()
+		if e != nil {
+			return e
+		}
+		s := &mcp.Server{Manager: core.NewManager(), Profiles: profiles}
 		defer s.Manager.CloseAll()
 		connectionRecording := false
 		if cfg.Web.Enabled {

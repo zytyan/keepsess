@@ -47,24 +47,28 @@ import os
 from keepsess import Keepsess
 
 with Keepsess() as ks:
-    ks.sess_configure(instance_name="Python 巡检")
-    conn = ks.sess_connect(
+    ks.configure(instance_name="Python 巡检")
+    conn = ks.connect(
         protocol="ssh", host=os.environ["SSH_HOST"], port=22,
         username=os.environ["SSH_USER"], password=os.environ["SSH_PASSWORD"],
     )
-    result = ks.sess_exec(session=conn.session, command="uname -a")
+    result = ks.exec(session=conn.session, command="uname -a")
     print(result.output, result.exit_code)
 ```
 
 提供全部 30 个同名方法、dataclass 点语法结果及同步/异步客户端，零 Python 运行时依赖。每个客户端独立建连，退出上下文时关闭连接。详见 [Python SDK](python/README.md)。
 
+当前工具契约为 `2`：服务端工具名使用 `connect` / `exec`，删除旧 `sess_` 前缀；客户端可自动加 `keepsess_`。升级后刷新工具列表、更新 skill 和 Python 调用。`initialize._meta` / `list` 展示 `api_contract` 及 `instance_id`。
+
+可在 `~/.keepsess.toml` 配置命名连接配方，再显式 `connect(profile="server")` 建立新连接；不会恢复旧 session 或重放输入。配置示例见 [使用文档](docs/usage.md#命名连接-profile)。
+
 ## 核心使用规则
 
 - 普通服务器用 SSH `mode="exec"`，以 SSH 退出状态判断完成；网络设备、持久 shell 和 Telnet 用 `mode="stream"` 配合 send/read。
 - 所有配置参数放在顶层；connect/configure 修改会话默认值，操作参数只影响本次。全部 30 个工具统一可发现，提供完整参数说明，无需切换发现分组。
-- `sess_help()` 列目录，`sess_help(topic="sess_exec")` 查看工具，`query` 搜索内置帮助。
-- Python 优先 `sess_send_text` / `sess_sendline_text`：普通字符串已解释 `"\r"`、`"\x03"`。仅在需要显式解码可见转义文本时使用 `*_escaped`；`line_end` 配置仍使用可见转义，例如 `r"\r"`。
-- 会话默认连续 2h 无操作且无活跃任务后回收，可用 session_idle_timeout_ms=0 禁用。sess_exec 仅在恰好保留一个会话时可省略 session，多会话必须明确指定。
+- `help()` 列目录，`help(topic="exec")` 查看工具，`query` 搜索内置帮助。
+- Python 优先 `send_text` / `sendline_text`：普通字符串已解释 `"\r"`、`"\x03"`。仅在需要显式解码可见转义文本时使用 `*_escaped`；`line_end` 配置仍使用可见转义，例如 `r"\r"`。
+- 会话默认连续 2h 无操作且无活跃任务后回收，可用 session_idle_timeout_ms=0 禁用。exec 仅在恰好保留一个会话时可省略 session，多会话必须明确指定。
 - 默认增量输出，每页 64KiB；长任务返回 handle 后继续 wait/read，不重复提交。单 RPC 上限 115 秒；exec 默认等待 120 秒，配置等待超时默认尝试 TERM，RPC 预算到期不发 TERM。
 - 空输出、超时和本地写入成功都不证明远端执行或认证成功。缺失退出状态表示结果未知；断连后显式重连，不自动重放命令或凭据。
 
@@ -86,7 +90,7 @@ SSH 默认跳过主机密钥验证；显式设置 `host_key` 或 `known_hosts` �
 
 [完整使用参考与30工具目录](docs/usage.md) · [AI skill](skills/keepsess/SKILL.md) · [历史验证记录](VALIDATION.md)
 
-当前调用以使用参考、tools/list 和 sess_help 为准；验证记录及现场反馈中的历史节保留当时行为，不能作为当前参数规范。
+当前调用以使用参考、tools/list 和 help 为准；验证记录及现场反馈中的历史节保留当时行为，不能作为当前参数规范。
 
 ### 升级共享 daemon
 

@@ -4,6 +4,16 @@
 
 当前实现：全部 30 工具固定发现、完整参数说明；无 tool_profile 参数，旧 TOML `[tools].profile` 兼容读取但忽略；会话空闲默认 2h，read 默认 total=30000ms/idle=500ms，exec 完成等待默认 120000ms（最高 300000ms），RPC 上限 115s；输出默认 64KiB、最高 512KiB，exec 无无输出静默保护。分发 skill 与 CLI 内嵌 skill 应保持一致。
 
+## 工具引用与冷启动改进（2026-11-13）
+
+- API 契约 2 保持 30 工具，公开名称去掉 sess_，客户端可加 keepsess_；错误、帮助、CLI、两份 skill、Python 生成方法和示例同步迁移。固定 ID 与当前别名继续共用 session/handle，保留命名模式限制。
+- 未知/缺失参数提供确定性纠正和无用户数据的最小示例；busy/任务容量与 output_limit/scan_limit 提供 guidance/next_action/next_arguments。真实 SSH 分页测试逐页使用返回参数，保留过滤条件，重建完整输出且确认命令仅执行一次；历史续读参数保持 offset=end。
+- ~/.keepsess.toml 显式命名配方，connect(profile=...) 创建新连接；限制目的地/路由/信任覆盖，不恢复 live session、不选择 last、不重放。配置重载、权限、非法配置、密码不泄漏及跨 Agent 进程新建连接均覆盖。initialize/list 展示 api_contract 与配方名字，未知引用不冒称进程重启。
+- 本机真实 SSH 协议模拟器拒绝一次 exec 后，同一 transport 后续命令仍返回双流和退出状态；未声称复现外部厂商设备问题。
+- Go 1.22.1 全仓 CGO_ENABLED=0 普通测试、全仓 race、go vet 通过；linux/amd64、linux/arm64、windows/amd64 CGO_ENABLED=0 构建通过。Buf FILE 比较冻结基线及修改前 HEAD 契约均通过；本地未提供发布 tag，未声称另行比较未知发布产物。
+- Python 3.13 全部 26 项测试通过，包含真实引擎 SSH/Telnet、交互任务、Web 归档、profile 跨进程及 sync/async close(session=...) 不关闭客户端。close() 无参数仍关闭客户端。generate.py --check、skill validator、两份 skill 一致性与 git diff --check 通过。
+- 测试需本机 socket，受限沙箱会拒绝；允许本地测试 socket 后通过。Windows/ARM64 仅交叉编译，未进行目标平台或真实外部设备实测。
+
 2026-11-11 文档校准：按当前代码修正文档，不代表重新运行下文全部历史验收，也不增加真实设备或目标平台实测结论。
 
 本次文档校准检查：工具目录与运行时导出的30工具、配置表与Config全部22字段一致；两份skill逐字一致且skill validator通过，git diff --check通过。Go1.22.1、CGO_ENABLED=0的internal/mcp测试及CLI命令/skill安装导出相关测试通过。CLI全包的TestServeWebDiscoveryAndStdioIsolation/default遇到daemon startup timed out；Python generate.py --check未通过，现有_methods.py仍保留旧tool_profile签名及旧描述。本次仅更新文档与内嵌skill正文，未修改生成API或daemon实现，以上失败未宣称修复。

@@ -584,3 +584,21 @@ func TestTaskShortCallerDeadlineIsNotShortenedBySignalReserve(t *testing.T) {
 	default:
 	}
 }
+
+func TestExecRequestRejectionPreservesSharedSSHTransport(t *testing.T) {
+	addr, _ := testutil.SSHWithExecGate(t, func(command string) bool { return testutil.LoginPayload(command) != "reject" })
+	m := manager(t)
+	id := connect(t, m, options(addr, "ssh", "exec"))
+	v := run(t, m, "exec", Request{Session: id, Command: "reject"})
+	if v.Error == "" || v.InputState != "unknown" || v.Handle == "" {
+		t.Fatal(v)
+	}
+	s, err := m.Get(id)
+	if err != nil || !s.status().Connected {
+		t.Fatal("exec rejection disconnected shared transport", err)
+	}
+	v = run(t, m, "exec", Request{Session: id, Command: "both"})
+	if v.ExitCode == nil || *v.ExitCode != 0 || !strings.Contains(v.Output, "stdout") || !strings.Contains(v.Output, "stderr") {
+		t.Fatal(v)
+	}
+}

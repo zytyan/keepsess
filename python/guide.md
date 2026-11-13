@@ -39,14 +39,14 @@ import os
 from keepsess import Keepsess, ToolError
 
 with Keepsess() as ks:
-    ks.sess_configure(instance_name="Python 巡检")
-    conn = ks.sess_connect(
+    ks.configure(instance_name="Python 巡检")
+    conn = ks.connect(
         protocol="ssh", host=os.environ["SSH_HOST"], port=22,
         username=os.environ["SSH_USER"], password=os.environ["SSH_PASSWORD"],
         # 如需主机验证，显式指定 host_key 或 known_hosts；继承引擎默认策略。
     )
     try:
-        result = ks.sess_exec(session=conn.session, command="uname -a")
+        result = ks.exec(session=conn.session, command="uname -a")
     except ToolError as error:
         print(error.result.input_state, error.result.handle, error.result.error)
         raise
@@ -66,9 +66,9 @@ from keepsess import AsyncKeepsess
 
 async def main():
     async with AsyncKeepsess() as ks:
-        # 独立客户端需要自行 sess_connect；以下是无需连接的例子。
+        # 独立客户端需要自行 connect；以下是无需连接的例子。
         sessions, help_result = await asyncio.gather(
-            ks.sess_list(), ks.sess_help(query="timeout"),
+            ks.list(), ks.help(query="timeout"),
         )
         print(sessions.instance_id, help_result.matched)
 
@@ -81,7 +81,7 @@ asyncio.run(main())
 import time
 
 # ks、conn 来自上面的 SSH 示例；启动异步任务不设置后台执行截止时间。
-task = ks.sess_exec(
+task = ks.exec(
     session=conn.session, command="your-long-command",
     collect_output=False,
 )
@@ -91,7 +91,7 @@ while True:
     if remaining_ms <= 0:
         # 这里只结束脚本等待；保留 task.handle 供当前客户端后续检查。
         raise TimeoutError(f"等待预算耗尽，任务可能继续运行：{task.handle}")
-    page = ks.sess_task_wait(
+    page = ks.task_wait(
         handle=task.handle,
         exec_total_timeout_ms=min(110_000, remaining_ms),
         term_on_timeout=False,
@@ -110,33 +110,33 @@ while True:
 
 ## 网络设备和精确输入
 
-**AI 编写 Python 脚本时优先使用 `sess_send_text` / `sess_sendline_text`，不要默认使用 `*_escaped`。** Python 普通字符串已经解释转义，`data="\r"` 和 `data="\x03"` 分别含实际 CR 和 Ctrl-C；SDK 的 JSON 序列化不会增加一次应用层解码。路径、命令中的字面反斜杠应使用 Python 原始字符串或正确引用，避免对普通运行时文本使用 `unicode_escape`。
+**AI 编写 Python 脚本时优先使用 `send_text` / `sendline_text`，不要默认使用 `*_escaped`。** Python 普通字符串已经解释转义，`data="\r"` 和 `data="\x03"` 分别含实际 CR 和 Ctrl-C；SDK 的 JSON 序列化不会增加一次应用层解码。路径、命令中的字面反斜杠应使用 Python 原始字符串或正确引用，避免对普通运行时文本使用 `unicode_escape`。
 
 ```python
-conn = ks.sess_connect(
+conn = ks.connect(
     protocol="telnet", host="192.0.2.10", port=23, mode="stream",
 )
 # 登录按实测提示符显式 send/read，不自动发送凭据。
-page = ks.sess_read_until(
+page = ks.read_until(
     session=conn.session, end_pattern="Username:",
     read_idle_timeout_ms=0, read_total_timeout_ms=60_000,
 )
 
 # 原始文本不解码转义；此处末尾实际 CR 只发送一次。
-receipt = ks.sess_send_text(
+receipt = ks.send_text(
     session=conn.session, data="show version\r", collect_output=False,
 )
 # Ctrl-C 同样直接用 Python 的实际控制字符，无需 escaped 方法。
-# ks.sess_send_text(session=conn.session, data="\x03", collect_output=False)
+# ks.send_text(session=conn.session, data="\x03", collect_output=False)
 ```
 
-只有明确持有可见转义文本、需要工具解码一层时才使用 `*_escaped`，例如 `sess_send_escaped(data=r"\x03", ...)`；`sess_send_text(data=r"\x03", ...)` 则发送字面的反斜杠和 `x03`。非 ASCII 精确字节是另一个合理使用场景：Python `"\xff"` 是 Unicode U+00FF，按 UTF-8 发送会成为 C3 BF；需要原始 FF 字节时可以显式使用 escaped 的 `r"\xff"`。此优先规则只针对 send 的 `data`；`line_end` 仍是由工具解码的可见转义配置，例如 `line_end=r"\r"`，正则参数也保留自己的语法。
+只有明确持有可见转义文本、需要工具解码一层时才使用 `*_escaped`，例如 `send_escaped(data=r"\x03", ...)`；`send_text(data=r"\x03", ...)` 则发送字面的反斜杠和 `x03`。非 ASCII 精确字节是另一个合理使用场景：Python `"\xff"` 是 Unicode U+00FF，按 UTF-8 发送会成为 C3 BF；需要原始 FF 字节时可以显式使用 escaped 的 `r"\xff"`。此优先规则只针对 send 的 `data`；`line_end` 仍是由工具解码的可见转义配置，例如 `line_end=r"\r"`，正则参数也保留自己的语法。
 
-SSH 网络设备推荐 `mode="stream"`，`sess_sendline_text` 默认追加 CR；Telnet 默认追加 CRLF，可显式配置 `line_end`。`sendline` 总是追加一次，数据本身包含行尾时也不去重。`sent/written_bytes` 只确认本地写入，不证明设备收到、密码被接受或 shell 就绪。空输出不触发自动重试。
+SSH 网络设备推荐 `mode="stream"`，`sendline_text` 默认追加 CR；Telnet 默认追加 CRLF，可显式配置 `line_end`。`sendline` 总是追加一次，数据本身包含行尾时也不去重。`sent/written_bytes` 只确认本地写入，不证明设备收到、密码被接受或 shell 就绪。空输出不触发自动重试。
 
 ## 结果、错误和生命周期
 
-- 返回值是不同结果类型的 dataclass，例如 `ConnectResult`、`ExecResult`、`ReadResult`。嵌套配置、peer、信号、列表条目支持点语法，例如 `ks.sess_get_config(session=conn.session).config.read_only`。
+- 返回值是不同结果类型的 dataclass，例如 `ConnectResult`、`ExecResult`、`ReadResult`。嵌套配置、peer、信号、列表条目支持点语法，例如 `ks.get_config(session=conn.session).config.read_only`。
 - `to_dict()` 只输出服务端实际返回的字段，包含未来新增的 `extra` 字段。已声明但缺失的字段通常为 `None`，`output` 缺失时便利值为 `""`；`to_dict()` 仍区分缺失和空字符串。未知字段也可以点语法访问；不改写 schema、env 等任意字典键。
 - `ToolError.result` 保留类型化结果，`ToolError.envelope` 保留 MCP 原始结果。`ProtocolError` 表示协议/版本问题；`TransportError` 表示进程或管道故障。均不自动重启或重放。
 - `CallTimeout` 是 Python 本地响应截止时间，默认 `rpc_timeout=125` 秒；启动握手默认 `startup_timeout=15` 秒，均可在构造函数修改，只接受有限正数。工具自身的 `*_timeout_ms` 保持 MCP 语义：单 RPC 约 115 秒；默认 exec 等待 120 秒，最高 300 秒；RPC 预算先到返回句柄且不发送 TERM。
@@ -147,7 +147,7 @@ SSH 网络设备推荐 `mode="stream"`，`sess_sendline_text` 默认追加 CR；
 
 ## 人类 Web 观察
 
-原样使用 `keepsess serve` 和 `~/.keepsess.toml`：Web 默认开启，实例加入每用户共享 daemon。人类可以实时查看和回看归档，Web 读取不消耗 Python 的输出游标。`ks.meta.web` 和 `ks.sess_list().web` 提供入口信息；Web 启动失败不会阻止 MCP 功能。使用 `sess_configure(instance_name=...)` 给脚本命名。
+原样使用 `keepsess serve` 和 `~/.keepsess.toml`：Web 默认开启，实例加入每用户共享 daemon。人类可以实时查看和回看归档，Web 读取不消耗 Python 的输出游标。`ks.meta.web` 和 `ks.list().web` 提供入口信息；Web 启动失败不会阻止 MCP 功能。使用 `configure(instance_name=...)` 给脚本命名。
 
 页面默认只读，人工解锁输入可能与脚本竞争。关闭 Python 客户端会关闭自己的连接，daemon 继续运行并保留已有归档。历史继承原工具策略，可能保存终端输入中的密码；连接认证字段不进入结果。`stderr_tail` 是显式诊断入口，最多保留 64KiB，不自动打印。
 
@@ -168,3 +168,5 @@ PYTHONPATH=python KEEPSESS_TEST_BINARY=/tmp/keepsess-sdk \
 ```
 
 `GO=/path/to/go` 可为生成脚本指定 Go 路径。生成的 API 已纳入源码，普通安装和导入无需运行生成器。SDK 提供全部 30 个同名方法；MCP tools/list 同样统一展示全部 30 个工具，不存在隐藏工具或发现分组。
+
+工具改名后，`close(session="s1")` 只关闭该会话，`close()` 无参数仍关闭整个 SDK 客户端；上下文管理器退出采用后者。

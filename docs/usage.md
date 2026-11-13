@@ -2,7 +2,7 @@
 
 面向 LLM 的持久 SSH exec / SSH、Telnet 双向流 MCP 工具。纯 Go，固定 Go 1.22.1 验证，发布构建 `CGO_ENABLED=0`，支持 linux/amd64、linux/arm64、windows/amd64。
 
-项目、Go module、MCP 注册名和 skill 名称统一为 **keepsess**，仓库地址为 [zytyan/keepsess](https://github.com/zytyan/keepsess)。工具名继续使用 `sess_*`，句柄继续使用 `s1`、`s2`；安装器直接写入 keepsess 配置，不迁移旧名称。
+项目、Go module、MCP 注册名和 skill 名称统一为 **keepsess**，仓库地址为 [zytyan/keepsess](https://github.com/zytyan/keepsess)。工具名继续使用 `*`，句柄继续使用 `s1`、`s2`；安装器直接写入 keepsess 配置，不迁移旧名称。
 
 ## Python 自动化 SDK
 
@@ -31,7 +31,50 @@ keepsess install-skill --dir ./keepsess-skill
 {"command":"/path/to/keepsess","args":["serve"]}
 ```
 
-0.3 API 保留完整 30 个工具（含 sess_help、sess_rename、sess_task_rename），`tools/list` 统一展示全部 30 个工具及完整参数说明。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 sess_interact、sess_read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+当前 API 契约为 `2`（`initialize._meta.api_contract` / `list.api_contract`）。服务端工具名删除 `sess_` 前缀，例如 `exec`、`connect`，客户端自动加名前缀后为 `keepsess_exec`、`keepsess_connect`。旧 `sess_*` 不再可调用；升级后刷新 tools/list、重装 skill，并把 Python 方法改成 `client.exec()` / `client.connect()`。Python `close(session="s1")` 关闭一个会话，`close()` 无参数保持关闭整个客户端的生命周期语义。daemon Protobuf 契约未变。
+
+0.3 API 保留完整 30 个工具（含 help、rename、task_rename），`tools/list` 统一展示全部 30 个工具及完整参数说明。CLI version 与 MCP initialize 暴露相同的版本和 Git 构建标识。**这是接口迁移**：旧 interact、read、address/user/key_file、wait/waitfor/timeout、input_id 等参数不再使用；重新获取 tools/list 并安装新版 skill。
+
+## 命名连接 profile
+
+在 `~/.keepsess.toml` 中显式定义配方，Agent 启动时读取：
+
+```toml
+[profiles.server]
+protocol = "ssh"
+host = "server.example"
+port = 22
+username = "operator"
+keyfile = "~/.ssh/id_ed25519"
+mode = "exec"
+
+# 可选跳板；近端在前，每跳单独认证/主机校验，最多 8 跳。
+# [[profiles.server.ssh_jumps]]
+# host = "bastion.example"
+# username = "operator"
+# keyfile = "~/.ssh/id_ed25519"
+# port = 22
+
+[profiles.switch]
+protocol = "telnet"
+host = "switch.example"
+port = 23
+mode = "stream"
+```
+
+调用 `connect({"profile":"server","name":"prod"})`，或 Python `client.connect(profile="server", name="prod")`。每次显式调用都创建新 session，不恢复旧连接/终端状态，不重放输入。`initialize._meta.available_profiles` 和 `list.available_profiles` 仅返回名字；未知引用错误也给出可用名字，但不会断言进程重启。最多 64 个 profile，名字 1..64 ASCII alphanumeric/._-，首位 alphanumeric，区分大小写，`last` 保留且不提供“最近一次”选择。修改配方后需重新启动相应 Agent；daemon 重启不加载到已有 Agent。
+
+每个配方必填 protocol/host/port/mode，SSH 必填 username；目标 password/keyfile 可在配方或本次 connect 中提供。profile 不可与 protocol/host/port/mode/username/ssh_jumps/主机校验参数混用，防止无意改变目的地；可同时传 name、顶层配置以及目标 password/keyfile/key_passphrase。目标/跳板的 keyfile、known_hosts 支持 `~/`。配方不存私钥内容或私钥口令；目标口令按调用提供，跳板需使用密码或不需要口令的密钥。配置存在 profile 时 Unix 权限须为 0600；可选目标/跳板 password 是本地明文，不得发布配置。
+
+profile 与 Web 连接资料分开，不自动将历史资料或人工补录、未验证的 Telnet 凭据转换为配方。Telnet 配方不接受目标 SSH 凭据，登录仍由明确的终端输入完成。
+
+## 错误与分页的下一步
+
+未知/缺失参数直接返回正确字段、适用时的默认值/范围以及最小调用示例，校验失败不执行操作。`max_output_tokens` 只提示使用字节参数，不自动换算或接受错误拼写。session/handle 都是单一引用入口，接受各自固定 ID 或当前名字；name 只负责起名/改名。
+
+`busy` 的 guidance 区分同步 exec 竞争与其它操作竞争；先让活动调用返回，再决定下一步，禁止 busy 循环发 exec。任务容量不足时先 task_list，再等待或释放完成且无活动操作的记录。
+
+`output_limit` / `scan_limit` 的 `next_action` + `next_arguments` 是续读提示，不会自动执行。增量调用继续 read_available；read_history/read_tail 继续 read_history(offset=end)，不误切增量游标。过滤/编码选项与最小页面要求会保留。start/end 是原始字节偏移，more 表示尚有未读保留字节；dropped_bytes 表示不可恢复的历史缺口，继续读取不能补回。不得因分页重新执行命令或发送输入。
 
 ## 人类 Web 终端与持久历史
 
@@ -43,7 +86,7 @@ keepsess install-skill --dir ./keepsess-skill
 
 连接资料位于 `[history] dir` 下的 `<instance>/connections/`，目录 0700、文件 0600，**密码在本机文件内明文保存，无主密码加密**；不保存私钥内容或私钥口令。关闭会话、进程退出及 daemon 重启后仍可查看。旧实例未记录的资料不会从终端历史反推。即使关闭 Web 注册或 daemon 暂时不可用，新成功连接仍尝试保存私有连接资料；保存使用有界异步队列，失败会报告，不能将连接成功视为资料已落盘。容量保护沿用 history.max_bytes 的启动基数语义，人工补录不构成严格多进程配额。
 
-Telnet 可在详情中补录目标用户名和密码，标注“人工填写，未验证”。密码输入留空保留原值，可显式勾选清空。改用户名后原用户名资料保留为只读历史条目。补录仅更新资料，不改变当前连接或 `sess_reconnect` 参数，不向终端发送输入；Telnet 建连不表示登录成功。此功能不提供从记录发起连接、自动登录、导出或删除入口。凭据不进入 localStorage、浏览器设置导出、MCP 结果或普通历史事件；不要发布连接资料文件。
+Telnet 可在详情中补录目标用户名和密码，标注“人工填写，未验证”。密码输入留空保留原值，可显式勾选清空。改用户名后原用户名资料保留为只读历史条目。补录仅更新资料，不改变当前连接或 `reconnect` 参数，不向终端发送输入；Telnet 建连不表示登录成功。此功能不提供从记录发起连接、自动登录、导出或删除入口。凭据不进入 localStorage、浏览器设置导出、MCP 结果或普通历史事件；不要发布连接资料文件。
 
 网页“本地回显”仅以半透明文字预览输入，不进入终端输出缓冲、复制内容或输出历史。当前终端收到任意非空远程输出字节时，清除全部预览，再显示远程原文，不匹配内容；无关日志、控制序列或分包字符也会清除预览。关闭回显、锁定、切换、断连或发送失败时也会清除。预览不改变发送内容，不自动重试；开启时密码输入同样可见。
 
@@ -56,7 +99,7 @@ Telnet 可在详情中补录目标用户名和密码，标注“人工填写，�
 点击“应用预览”临时应用当前编辑，关闭窗口撤销未保存预览。“保存到浏览器”将规则写入 localStorage，不修改 `~/.keepsess.toml`。首次无本地高亮时，以服务端规则为初值。规则最多 32 条，表达式最多 512 字节。主题、终端与界面字号、滚动历史、回显、查找/过滤、查找面板宽度及来源栏偏好统一保存在 `keepsess.preferences.v1`，同源标签页即时同步；独立浏览器使用“配置管理”导入导出 JSON。导入最大 64KiB，校验通过后整体应用；不支持的版本或无效规则保留旧设置。导出不包含结构化认证、终端历史或解锁状态；查询条件属于设置，会一并导出。实例名称仍由服务端保存。
 
 端口占用时依次尝试后续 100 个端口，再由系统分配。实际入口写入 stderr，
-模型可以从 `initialize._meta.web` 或 `sess_list` 的 `web` 查询 URL 和历史记录状态；stdout 仍只输出 MCP。
+模型可以从 `initialize._meta.web` 或 `list` 的 `web` 查询 URL 和历史记录状态；stdout 仍只输出 MCP。
 
 右上角按钮文字固定为“只读”，按下表示只读、松开表示输入启用；独立输入页点击切换，收到解锁回执后才允许输入。锁定立即清除待发送输入和临时回显，切换/重连恢复只读。观察页按钮保持按下并禁用，不修改会话级 `read_only`。
 
@@ -82,7 +125,7 @@ SSH exec 连续视图在当前页面内缓存最多 32 个已读会话，按估�
 
 “打开终端”使用新的浏览器标签页。SSH exec 复用连接，明确解锁并点击启动后创建独立的交互式登录 Bash/PTY；新建人类终端使用 xterm-256color 并启用 PTY ECHO，普通 MCP PTY 默认值不变。空终端页跳过旧历史，新 Shell 从发起前的历史游标补齐，不重新扫完整会话；远端登录 profile 自身仍可能耗时；没有 Bash 时失败，不回退。可从下拉列表恢复已有的人类终端。SSH/Telnet stream 操作原会话，输入与其他操作者共享。关闭页面、断网或刷新不终止 shell，也不会新建 shell 或重发命令；恢复后重新锁定。显式“结束终端”只发送 TERM，请以任务完成状态判断是否退出，不保证信号生效。输入、窗口尺寸及结束操作受当前 `read_only` 保护，沿用任务配额和有界写入；resize 卡住会关闭共享 transport 并报告任务未知。旧 Agent 未协商对应能力时禁用入口。人类终端输出默认进入主窗口，可过滤隐藏。
 
-交互程序若忽略 stdin EOF，可能反复输出 prompt；这不等于工具重复发送输入。普通 `sess_exec` 默认非交互并发送 EOF，需交互的程序应显式设置 `interactive=true`，需要终端时同时设置 `pty=true`，用 `collect_output=false` 先取得 handle，再通过 handle 读写。读取不自动发送终端查询回复或补发回车，`task_close_stdin` 才显式结束交互输入。未实测某内部程序时，不能仅凭 prompt 循环断定其具体原因。
+交互程序若忽略 stdin EOF，可能反复输出 prompt；这不等于工具重复发送输入。普通 `exec` 默认非交互并发送 EOF，需交互的程序应显式设置 `interactive=true`，需要终端时同时设置 `pty=true`，用 `collect_output=false` 先取得 handle，再通过 handle 读写。读取不自动发送终端查询回复或补发回车，`task_close_stdin` 才显式结束交互输入。未实测某内部程序时，不能仅凭 prompt 循环断定其具体原因。
 
 停在终端尾部时自动跟随新输出，向上滚动后保持阅读位置；新任务不重建终端、不切换视图。连续输出共享整体滚动历史，默认 **5000 行**，可设为 100..50000 行；磁盘历史独立保留。WS 实时更新和断线补齐不消耗 MCP 输出游标、不重放输入。
 
@@ -120,13 +163,13 @@ keepsess daemon stop    # 停止当前 daemon；活动 Agent 可自动拉起并�
 keepsess daemon run     # 前台运行，用于诊断；日志默认 ~/.keepsess/daemon.log
 ```
 
-实例首次连接成功会提示 AI 调用 `sess_configure({"instance_name":"当前任务名称"})`，不用传 `session`。
+实例首次连接成功会提示 AI 调用 `configure({"instance_name":"当前任务名称"})`，不用传 `session`。
 实例名允许 1..64 个可见 Unicode 字符，显示在活动/归档列表；不改变稳定 `instance_id`，不同实例可重名。
 实例下拉列表的编辑图标可独立设置人类名称，活动和归档均支持，刷新或 daemon 重启后保留。人类名称优先显示，AI 名称在下方展示；清空后恢复显示 AI 名称。活动实例优先于归档，页面显示活动状态与本地时间。
 未产生 session 记录的实例隐藏；连接失败也算记录。正常退出后清理已完整写入的空实例目录，异常退出仅在确认写入者结束且历史完整时有界清理，无法确认则保留。会话按已连接/连接中、已关闭/断开、首次连接失败排序；失败记录默认折叠，排序不改变当前选择。
 全部 30 个工具统一通过 tools/list 可发现，每个工具携带完整参数说明，无需切换发现分组。
-`sess_send_escaped` 只解码一层转义，不追加行尾；需要 CR/LF 时在 data 中明确指定。`sess_sendline_escaped` 解码后追加一次配置的行尾。
-`sess_help` 提供可选的流程参考；配置查询可用 `sess_configure({"session":"s1"})` 或 `sess_get_config`。
+`send_escaped` 只解码一层转义，不追加行尾；需要 CR/LF 时在 data 中明确指定。`sendline_escaped` 解码后追加一次配置的行尾。
+`help` 提供可选的流程参考；配置查询可用 `configure({"session":"s1"})` 或 `get_config`。
 
 历史写入 `<history.dir>/<instance_id>/`，目录/文件在支持的平台使用 0700/0600；会话关闭、任务淘汰不删除历史。
 日志保存命令/cwd、原始终端输入和输出，**终端中输入的密码也会保存**；普通历史日志不写入连接认证参数、私钥或结构化 env 字段；成功连接的目标及跳板密码仅写入上述独立私有连接资料。
@@ -206,81 +249,81 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 
 文件传输与隧道复用既有 SSH 连接（exec/stream 均可，支持跳板），Telnet 不支持。路径中的“本机”指 keepsess 所在主机，不一定是浏览器或 Python 调用方所在主机。
 
-`sess_get_file(session, src, dst?)` 下载，`sess_put_file(session, src, dst)` 上传单个普通文件。`backend` 为 auto（默认）、sftp、scp 或 exec；auto 仅探测后端可用性，已启动的传输不重试。`overwrite=false` 默认禁止覆盖，不递归、不续传，传输预算 110s；不使用 PTY 或 Bash login 包装。上传在目标旁暂存后发布，失败/未知结果可能留下 `temporary_path`。SFTP 无覆盖发布需要 hardlink 扩展，覆盖需要 posix-rename。取消可能关闭共享 SSH transport，应检查同连接任务的未知结果，不自动重放。
+`get_file(session, src, dst?)` 下载，`put_file(session, src, dst)` 上传单个普通文件。`backend` 为 auto（默认）、sftp、scp 或 exec；auto 仅探测后端可用性，已启动的传输不重试。`overwrite=false` 默认禁止覆盖，不递归、不续传，传输预算 110s；不使用 PTY 或 Bash login 包装。上传在目标旁暂存后发布，失败/未知结果可能留下 `temporary_path`。SFTP 无覆盖发布需要 hardlink 扩展，覆盖需要 posix-rename。取消可能关闭共享 SSH transport，应检查同连接任务的未知结果，不自动重放。
 
-`sess_tunnel_open` 的 `type` 支持 local、remote、dynamic、remote_dynamic。local/dynamic 在 keepsess 本机监听，从最终 SSH 服务器连接目标；remote/remote_dynamic 在 SSH 服务器监听，从 keepsess 本机连接目标。dynamic 两种模式仅支持 SOCKS5 CONNECT；local/remote 必须提供 `target_host` 和 `target_port`。`bind_host` 默认 127.0.0.1，`bind_port` 默认 0 自动分配，远端绑定受 SSH 服务器 GatewayPorts 限制。返回 `listen_address` 与独立隧道 handle，后者不是 task handle。
+`tunnel_open` 的 `type` 支持 local、remote、dynamic、remote_dynamic。local/dynamic 在 keepsess 本机监听，从最终 SSH 服务器连接目标；remote/remote_dynamic 在 SSH 服务器监听，从 keepsess 本机连接目标。dynamic 两种模式仅支持 SOCKS5 CONNECT；local/remote 必须提供 `target_host` 和 `target_port`。`bind_host` 默认 127.0.0.1，`bind_port` 默认 0 自动分配，远端绑定受 SSH 服务器 GatewayPorts 限制。返回 `listen_address` 与独立隧道 handle，后者不是 task handle。
 
-每会话最多 16 个监听，全局 64 个，每监听最多 64 个连接。`sess_tunnel_list(session)` 查询，`sess_tunnel_close(session, handle)` 关闭监听及连接。断连/重连关闭旧隧道，不自动恢复。read_only 禁止上传和新建隧道，允许下载，已有隧道流量继续。
+每会话最多 16 个监听，全局 64 个，每监听最多 64 个连接。`tunnel_list(session)` 查询，`tunnel_close(session, handle)` 关闭监听及连接。断连/重连关闭旧隧道，不自动恢复。read_only 禁止上传和新建隧道，允许下载，已有隧道流量继续。
 
 ## 工具
 
-发送工具默认发送后等待并收集未读输出；`collect_output=false` 时仅发送。`sess_read_history` 是有输出预算的保留历史读取，并非一次返回全部输出。工具名已改为 `sess_send_text`、`sess_sendline_text`、`sess_read_history`；旧工具名不再注册，更新后需刷新客户端 tools/list。
+发送工具默认发送后等待并收集未读输出；`collect_output=false` 时仅发送。`read_history` 是有输出预算的保留历史读取，并非一次返回全部输出。工具名已改为 `send_text`、`sendline_text`、`read_history`；旧工具名不再注册，更新后需刷新客户端 tools/list。
 
 | 旧名 | 新名 |
 |---|---|
-| sess_send_raw | sess_send_text |
-| sess_sendline_raw | sess_sendline_text |
-| sess_read_all | sess_read_history |
+| send_raw | send_text |
+| sendline_raw | sendline_text |
+| read_all | read_history |
 
 | 工具 | 参数与用途 |
 |---|---|
-| sess_help | 无参数列目录；topic 查询工具/主题，topic+parameter 查询单个参数，query 搜索短摘要；limit 默认 3、最大 5 |
-| sess_connect | 必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、ssh_jumps、mode 和顶层配置 |
-| sess_rename | session、name；更新会话别名，稳定 sN ID 保持有效，不重建连接 |
-| sess_task_rename | handle、name；更新任务别名，稳定 taskN ID 保持有效，不消费输出 |
-| sess_reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
-| sess_configure | session、顶层配置字段；原子更新出现的字段，其余不变；或仅传 instance_name 命名实例，不与会话配置混用 |
-| sess_get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
-| sess_list | 无参数；列出连接和 exec 状态 |
-| sess_exec | session?、command、name?、login?、cwd?、env?、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
-| sess_send_text | session 或 handle（二选一）、data、collect_output?、其他顶层配置?；发送文字并默认收集输出，不解析转义 |
-| sess_send_escaped | 同上；显式解码一层转义再发送 |
-| sess_sendline_text | 同 text，追加一次配置的 line_end |
-| sess_sendline_escaped | 同 escaped，追加一次配置的 line_end |
-| sess_read_available | session 或 handle（二选一）、其他顶层配置?；立即读取未读数据，不等待 |
-| sess_read_until | session 或 handle（二选一）、其他顶层配置?；按匹配、超时等条件结束读取 |
-| sess_read_tail | session 或 handle（二选一）、lines?、其他顶层配置?；最后 N 行，默认 20，不移动增量游标 |
-| sess_read_history | session 或 handle（二选一）、offset?、其他顶层配置?；立即分页读取保留历史，不移动增量游标 |
-| sess_task_list | session?；列出保留任务，不消费输出 |
-| sess_task_status | handle；任务状态、退出信息和 stdin_open |
-| sess_task_wait | handle、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；等待任务完成并收集增量输出 |
-| sess_task_signal | handle、signal；请求 SSH 信号，不保证退出 |
-| sess_task_release | handle；释放已完成且无活动操作的任务记录 |
-| sess_task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
-| sess_close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
-| sess_close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
-| sess_get_file | session、src、dst?、backend?、overwrite?；下载一个普通文件，省略 dst 时返回本机绝对临时路径 |
-| sess_put_file | session、src、dst、backend?、overwrite?；上传一个普通文件，受 read_only 保护 |
-| sess_tunnel_open | session、type、bind_host?、bind_port?、target_host?、target_port?；建立 TCP/SOCKS5 CONNECT 监听，受 read_only 保护 |
-| sess_tunnel_list | session；列出隧道句柄、监听地址和活动连接 |
-| sess_tunnel_close | session、handle；关闭隧道监听及其连接，handle 为隧道句柄 |
+| help | 无参数列目录；topic 查询工具/主题，topic+parameter 查询单个参数，query 搜索短摘要；limit 默认 3、最大 5 |
+| connect | 显式 profile，或必填 protocol、host、port；SSH 还必填 username，password/keyfile 至少一个（可同时提供）；可选 SSH 主机校验、ssh_jumps、mode 和顶层配置 |
+| rename | session、name；更新会话别名，稳定 sN ID 保持有效，不重建连接 |
+| task_rename | handle、name；更新任务别名，稳定 taskN ID 保持有效，不消费输出 |
+| reconnect | session；显式重建连接，复用原参数与当前配置、保留句柄、丢弃旧输出，不重放输入 |
+| configure | session、顶层配置字段；原子更新出现的字段，其余不变；或仅传 instance_name 命名实例，不与会话配置混用 |
+| get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
+| list | 无参数；列出连接和 exec 状态 |
+| exec | session?、command、name?、login?、cwd?、env?、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
+| send_text | session 或 handle（二选一）、data、collect_output?、其他顶层配置?；发送文字并默认收集输出，不解析转义 |
+| send_escaped | 同上；显式解码一层转义再发送 |
+| sendline_text | 同 text，追加一次配置的 line_end |
+| sendline_escaped | 同 escaped，追加一次配置的 line_end |
+| read_available | session 或 handle（二选一）、其他顶层配置?；立即读取未读数据，不等待 |
+| read_until | session 或 handle（二选一）、其他顶层配置?；按匹配、超时等条件结束读取 |
+| read_tail | session 或 handle（二选一）、lines?、其他顶层配置?；最后 N 行，默认 20，不移动增量游标 |
+| read_history | session 或 handle（二选一）、offset?、其他顶层配置?；立即分页读取保留历史，不移动增量游标 |
+| task_list | session?；列出保留任务，不消费输出 |
+| task_status | handle；任务状态、退出信息和 stdin_open |
+| task_wait | handle、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；等待任务完成并收集增量输出 |
+| task_signal | handle、signal；请求 SSH 信号，不保证退出 |
+| task_release | handle；释放已完成且无活动操作的任务记录 |
+| task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
+| close | session；关闭并丢弃该连接和缓冲，不返回终端正文 |
+| close_all | 无参数；关闭并丢弃全部连接和缓冲，不返回终端正文 |
+| get_file | session、src、dst?、backend?、overwrite?；下载一个普通文件，省略 dst 时返回本机绝对临时路径 |
+| put_file | session、src、dst、backend?、overwrite?；上传一个普通文件，受 read_only 保护 |
+| tunnel_open | session、type、bind_host?、bind_port?、target_host?、target_port?；建立 TCP/SOCKS5 CONNECT 监听，受 read_only 保护 |
+| tunnel_list | session；列出隧道句柄、监听地址和活动连接 |
+| tunnel_close | session、handle；关闭隧道监听及其连接，handle 为隧道句柄 |
 
-工具发现直接提供完整工具说明及每个适用参数的语义、默认值、取值范围、互斥关系、执行与转义边界，包括 ssh_jumps 内嵌字段；模型获得工具定义后即可构造调用，无需先查 help。发现与 `sess_help` 使用同一套内置定义，只隐藏该操作不适用的配置参数。`sess_help` 继续提供可选的流程参考和排障查询：
+工具发现直接提供完整工具说明及每个适用参数的语义、默认值、取值范围、互斥关系、执行与转义边界，包括 ssh_jumps 内嵌字段；模型获得工具定义后即可构造调用，无需先查 help。发现与 `help` 使用同一套内置定义，只隐藏该操作不适用的配置参数。`help` 继续提供可选的流程参考和排障查询：
 
 ```text
-sess_help()                                            # 简短主题目录
-sess_help(query="RPC 超时")                            # 默认最多 3 条搜索摘要
-sess_help(topic="timeouts")                             # 一个操作主题
-sess_help(topic="sess_exec")                            # 一个工具的详细 schema
-sess_help(topic="sess_exec", parameter="env")           # 仅一个参数
-sess_help(topic="configuration", parameter="line_end") # 配置默认值/协议差异
+help()                                            # 简短主题目录
+help(query="RPC 超时")                            # 默认最多 3 条搜索摘要
+help(topic="timeouts")                             # 一个操作主题
+help(topic="exec")                            # 一个工具的详细 schema
+help(topic="exec", parameter="env")           # 仅一个参数
+help(topic="configuration", parameter="line_end") # 配置默认值/协议差异
 ```
 
-内置主题包含 connections、tasks、timeouts、ssh_jumps、naming、exec_environment、interactive、read_only、output、configuration，也接受全部工具名作为 topic。query 与 topic/parameter 互斥，parameter 必须配合 topic。搜索使用固定代码的关键词/标题/正文匹配及中英文关键词映射，不调用模型、向量库、网络或本地文件，也不搜索会话输出/凭据；query 最长 512 字节，最多处理 16 个搜索词，limit=1..5，每条摘要最多约 220 字符。无匹配明确返回 matched=false；按结果的 topic/parameter 获取细节，避免重复加载全文。
+内置主题包含 connections、profiles、tasks、timeouts、ssh_jumps、naming、exec_environment、interactive、read_only、output、configuration，也接受全部工具名作为 topic。query 与 topic/parameter 互斥，parameter 必须配合 topic。搜索使用固定代码的关键词/标题/正文匹配及中英文关键词映射，不调用模型、向量库、网络或本地文件，也不搜索会话输出/凭据；query 最长 512 字节，最多处理 16 个搜索词，limit=1..5，每条摘要最多约 220 字符。无匹配明确返回 matched=false；按结果的 topic/parameter 获取细节，避免重复加载全文。
 
 全部工具统一使用完整描述，不再提供 tool_profile 切换；运行时协议和配置默认值保持不变；原来已接受但对该操作无效的配置覆盖保持运行时兼容，发现列表和 help 不再推荐它们。数字配置仍支持整数及算术字符串。完整 skill 是可选流程参考，不要求常驻或每次查 help。
 
-所有工具的配置参数都直接写在顶层，例如 `sess_configure({"session":"s1","read_only":true})`，或 `sess_read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
+所有工具的配置参数都直接写在顶层，例如 `configure({"session":"s1","read_only":true})`，或 `read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
 
-会话和任务命名：connect/exec 可传顶层 `name`，默认仍返回稳定 `sN` / `taskN` ID。`session` 或 `handle` 也接受当前名字作为别名；结果中的 session/handle 始终是稳定 ID，name 单独返回。使用 `sess_rename({"session":"s1","name":"prod"})` 和 `sess_task_rename({"handle":"task1","name":"build"})` 更新别名；旧别名立即失效，稳定 ID 仍有效。名字限 1..64 个 ASCII 字母、数字、点、下划线或短横线，首位须字母/数字，`sN/taskN` 保留。会话名与任务名分别唯一；会话连接期间也预留名字，任务名在发送 exec 请求前原子预留，重复名字不发送。名字只在当前保留记录内有效，释放后可复用；长流程优先保留稳定 ID。
+会话和任务命名：connect/exec 可传顶层 `name`，默认仍返回稳定 `sN` / `taskN` ID。`session` 或 `handle` 也接受当前名字作为别名；结果中的 session/handle 始终是稳定 ID，name 单独返回。使用 `rename({"session":"s1","name":"prod"})` 和 `task_rename({"handle":"task1","name":"build"})` 更新别名；旧别名立即失效，稳定 ID 仍有效。名字限 1..64 个 ASCII 字母、数字、点、下划线或短横线，首位须字母/数字，`sN/taskN` 保留。会话名与任务名分别唯一；会话连接期间也预留名字，任务名在发送 exec 请求前原子预留，重复名字不发送。名字只在当前保留记录内有效，释放后可复用；长流程优先保留稳定 ID。
 
-每个服务进程生成短随机 Bitcoin Base58 `instance_id`（旧归档 ID 保持兼容），在 initialize 的 `_meta`、connect/reconnect、列表及未知句柄错误中展示，不要求调用方每次传入标识。未知句柄可能已关闭、过期或来自服务实例变化，先 list 检查，不自动重放；该诊断标识不是访问控制或强制实例校验，不提供重启恢复。本轮不增加 sess_expect 工具。
+每个服务进程生成短随机 Bitcoin Base58 `instance_id`（旧归档 ID 保持兼容），在 initialize 的 `_meta`、connect/reconnect、列表及未知句柄错误中展示，不要求调用方每次传入标识。未知句柄可能已关闭、过期或来自服务实例变化，先 list 检查，不自动重放；该诊断标识不是访问控制或强制实例校验，不提供重启恢复。本轮不增加 expect 工具。
 
 每次连接返回短句柄，例如 `{"session":"s1","connected":true}`，不读取、不消费欢迎信息。句柄进程内递增不复用；连接操作明确指定 session；exec 任务操作使用独立 handle（task1、task2……），同样进程内递增不复用。Telnet 登录属于终端流，应观察提示再发送相应信息，不猜测或重放登录流程。
 
-`sess_exec` 可省略 `session`，仅在恰好保留一个会话时推断；结果仍返回实际 `session`。没有会话时须先 connect，多个会话时必须明确指定，不按在线状态、模式或最近连接筛选。唯一会话已断开时须显式 reconnect，不自动重连；显式指定的会话失效时不回退。任务工具仍须提供 `handle`，`sess_task_list()` 仍列出全部任务。
+`exec` 可省略 `session`，仅在恰好保留一个会话时推断；结果仍返回实际 `session`。没有会话时须先 connect，多个会话时必须明确指定，不按在线状态、模式或最近连接筛选。唯一会话已断开时须显式 reconnect，不自动重连；显式指定的会话失效时不回退。任务工具仍须提供 `handle`，`task_list()` 仍列出全部任务。
 
-SSH 默认 mode=exec，适合普通服务器。**sess_exec 仅适配 SSH mode=exec，默认非交互；可用 interactive=true 显式保留任务 stdin。SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**持久终端 shell、console 登录流程和任何 Telnet 会话使用 mode=stream 的 send/read。SSH mode=exec 可显式启动 GDB 等交互任务，再按 task handle 收发。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
+SSH 默认 mode=exec，适合普通服务器。**exec 仅适配 SSH mode=exec，默认非交互；可用 interactive=true 显式保留任务 stdin。SSH mode=stream 和全部 Telnet 会话直接报错，不发送输入，也不自动回退到交互 shell。**持久终端 shell、console 登录流程和任何 Telnet 会话使用 mode=stream 的 send/read。SSH mode=exec 可显式启动 GDB 等交互任务，再按 task handle 收发。SSH 只是传输协议，不表示 shell 非交互；流静默也不能成为改用 exec 探测或重放的理由。交换机、路由器和 console 必须显式 mode=stream。Telnet 只能使用 stream。SSH 默认不校验主机密钥，也不自动读取或写入 known_hosts。显式提供 host_key（SHA256 指纹）或 known_hosts 文件路径才启用校验，校验失败直接报错。兼容保留 insecure=true 显式跳过；优先级为 insecure=true、host_key、known_hosts。insecure=false 本身不启用校验。
 
 ```json
 {"protocol":"ssh","host":"server.example","port":22,"username":"operator","keyfile":"/private/id_ed25519","mode":"exec"}
@@ -298,7 +341,7 @@ Telnet 目标示例（登录仍须观察提示后通过 send/read 显式处理�
 {"protocol":"telnet","host":"switch.internal","port":23,"ssh_jumps":[{"host":"bastion.example","username":"jump-user","keyfile":"/path/to/jump_key"}],"connect_timeout_ms":30000}
 ```
 
-整条链路共用一个 connect_timeout_ms 预算（仍受 RPC 上限约束），失败或取消会关闭已建立的链路，不自动重试。sess_reconnect 私下复用整条跳板链与当前会话配置，保持句柄、不重放命令；close 释放链路与认证参数。SSH 目标的 SSH keepalive 探测目标；Telnet 目标的 SSH keepalive 探测最后一个 SSH 跳板（不检测 Telnet 登录/应用就绪），均穿过前面的跳板；TCP keepalive/排队反压测量本机到第一跳的 TCP 连接。SSH 目标的 connect/reconnect peer 摘要仍描述最终目标；Telnet 目标不返回 peer，不能把跳板身份当作设备身份；跳板认证参数不会进入结果或配置，审计中的密码/私钥口令逐跳脱敏。
+整条链路共用一个 connect_timeout_ms 预算（仍受 RPC 上限约束），失败或取消会关闭已建立的链路，不自动重试。reconnect 私下复用整条跳板链与当前会话配置，保持句柄、不重放命令；close 释放链路与认证参数。SSH 目标的 SSH keepalive 探测目标；Telnet 目标的 SSH keepalive 探测最后一个 SSH 跳板（不检测 Telnet 登录/应用就绪），均穿过前面的跳板；TCP keepalive/排队反压测量本机到第一跳的 TCP 连接。SSH 目标的 connect/reconnect peer 摘要仍描述最终目标；Telnet 目标不返回 peer，不能把跳板身份当作设备身份；跳板认证参数不会进入结果或配置，审计中的密码/私钥口令逐跳脱敏。
 
 ```json
 {"read_idle_timeout_ms":500,"read_total_timeout_ms":30000,"protocol":"telnet","host":"switch.example","port":23}
@@ -312,7 +355,7 @@ Telnet 目标示例（登录仍须观察提示后通过 send/read 显式处理�
 {"session":"s1"}
 ```
 
-上例用于 sess_reconnect：先关闭旧传输连接，再使用原地址、SSH 认证方式、主机校验参数、mode 和当前会话配置建立连接，成功后仍使用 s1。connect_timeout_ms 的当前值用于本次重连。私钥与 known_hosts 文件按原路径重新读取；密码等必要参数仅保留在进程内，不出现在 get_config/list 或重连工具结果中。
+上例用于 reconnect：先关闭旧传输连接，再使用原地址、SSH 认证方式、主机校验参数、mode 和当前会话配置建立连接，成功后仍使用 s1。connect_timeout_ms 的当前值用于本次重连。私钥与 known_hosts 文件按原路径重新读取；密码等必要参数仅保留在进程内，不出现在 get_config/list 或重连工具结果中。
 
 重连丢弃旧缓冲和游标，从新连接的偏移 0 开始；新连接欢迎信息保留供显式 read，不消费、不返回终端正文。不发送回车、Telnet 用户名/密码、初始化命令或历史输入；SSH 协议认证正常执行。不保证 shell 目录/环境、设备视图或终端登录状态恢复，重连后应先读取观察。
 
@@ -322,7 +365,7 @@ Telnet 目标示例（登录仍须观察提示后通过 send/read 显式处理�
 
 会话默认连续两小时无工具操作才回收（不是连接建立后两小时强制关闭）；活动读写与活跃任务不回收。SSH 默认同时启用 TCP keepalive 和每 30s 的 SSH `keepalive@openssh.com` 协议探测，每次等回复最多 10s，仅一个探测在途。服务端否定回复也算有响应。keepalive 不输入字符、不延长本地会话空闲期限，不能阻止设备重启或终端自身的登录超时。配置更改可唤醒探测调度；已在途探测按原截止时间完成。
 
-断连返回 disconnect_reason 与可用的原始 error：reset_by_peer、transport_timeout、keepalive_timeout、ssh_disconnect、remote_eof、transport_error。EOF 只说明连接关闭，不猜测设备空闲超时或重启；探测超时也不能证明设备一定已死机。保留句柄时优先 next_action=sess_reconnect，绝不重放输入。已回收/关闭时返回 session_idle_expired/explicit_close 与 sess_connect；最多保留 128 条、不含凭据的原因记录两小时，可能提前淘汰。未识别句柄报告 unknown_handle，说明可能关闭/回收/服务重启，不伪造设备原因。
+断连返回 disconnect_reason 与可用的原始 error：reset_by_peer、transport_timeout、keepalive_timeout、ssh_disconnect、remote_eof、transport_error。EOF 只说明连接关闭，不猜测设备空闲超时或重启；探测超时也不能证明设备一定已死机。保留句柄时优先 next_action=reconnect，绝不重放输入。已回收/关闭时返回 session_idle_expired/explicit_close 与 connect；最多保留 128 条、不含凭据的原因记录两小时，可能提前淘汰。未识别句柄报告 unknown_handle，说明可能关闭/回收/服务重启，不伪造设备原因。
 
 SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字符软件标识）、host_key（SHA256 指纹），与同句柄上次观察值不同则附 host_key_changed=true。不在普通 read/send/list 中重复。失败重连不会把上次身份冒充为本次观测值。默认不校验策略不变；这是对端线索，不能证明镜像版本、物理设备身份或是否重启；不会自动执行 uname 等命令。
 
@@ -333,12 +376,12 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 | 配置项 | 默认值 | 语义 |
 |---|---|---|
 | read_only | false | 会话级输入保护，禁止 send、exec、上传、新建隧道及手动/自动信号；只能通过 connect/configure 设置，不能单次覆盖；已有任务和隧道继续 |
-| connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 sess_reconnect 使用；新 connect 仍需显式传入配置字段 |
+| connect_timeout_ms | 10000 | TCP 连接、SSH 认证和初始 shell 建立，总范围 1..110000ms；已建连后修改供下次 reconnect 使用；新 connect 仍需显式传入配置字段 |
 | write_timeout_ms | 10000 | 输入写入或 exec channel 建立，1..110000ms |
 | session_idle_timeout_ms | 7200000（2h） | 无操作会话回收，0 禁用；最长一年；活动读写或运行中 exec 不回收 |
-| read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 sess_exec |
-| read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 sess_exec |
-| exec_total_timeout_ms | 120000 | sess_exec/task_wait 等待协议完成的独立总时限，1..300000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
+| read_total_timeout_ms | 30000 | 从读取开始的总时限，1..110000ms；不影响 exec |
+| read_idle_timeout_ms | **500** | 从读取开始计算，收到端点字节后重置；0 禁用，最高 110000ms；不影响 exec |
+| exec_total_timeout_ms | 120000 | exec/task_wait 等待协议完成的独立总时限，1..300000ms；不受 read 超时与 end_pattern 影响；异步启动不建立后台运行计时器 |
 | term_on_timeout | true | 完成等待超时尝试一次 TERM；可单次覆盖；普通 read 超时、取消等待和输出上限不触发 |
 | ssh_keepalive_ms | 30000 | SSH 协议探测间隔，0 禁用；不发送终端输入、不刷新本地空闲计时；直连 Telnet 不使用，经 SSH 跳板的 Telnet 探测最后一个跳板 |
 | ssh_keepalive_timeout_ms | 10000 | 单次 SSH 探测回复时限，1..110000ms；无回复关闭传输，未完成任务结果未知 |
@@ -350,7 +393,7 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 | max_input_bytes | 4096 | 实际编码后输入长度，包含行结束符；1..1048576 |
 | max_output_bytes | 65536 | 默认 64KiB 分页，返回 UTF-8 文本字节预算，包括非法字节的展示文本；1..524288（最高 512KiB） |
 | backpressure_bytes | 0 | 非零时按系统 TCP 队列阈值拒绝新写入，最高 1GiB；需平台支持 |
-| end_pattern | 空 | Go RE2，匹配解码后的未读输出；空表示禁用，最多 1024 字节；不影响 sess_exec |
+| end_pattern | 空 | Go RE2，匹配解码后的未读输出；空表示禁用，最多 1024 字节；不影响 exec |
 | strip_ansi | false | 仅投影返回文本，移除 ANSI 控制序列；保留原始历史/偏移 |
 | include_pattern | 空 | ANSI 投影后按行包含，Go RE2、最多 1024 字节；空禁用 |
 | exclude_pattern | 空 | 包含过滤后按行排除，Go RE2、最多 1024 字节；空禁用 |
@@ -371,21 +414,21 @@ SSH connect/reconnect 仅在该次结果附简短 peer：server（最多 96 字�
 {"read_only":true,"session":"s1"}
 ```
 
-上例用于 sess_configure。开启后四个 send 工具与 sess_exec 返回 `input_state=not_sent`、`error` 以 `read_only:` 开头，不发送应用输入、不消费输出；手动信号被拒绝，自动 TERM 报 skipped_read_only；读取、查看配置、列出会话、关闭连接仍可用。SSH/Telnet 协议协商与系统 keepalive 不受影响。
+上例用于 configure。开启后四个 send 工具与 exec 返回 `input_state=not_sent`、`error` 以 `read_only:` 开头，不发送应用输入、不消费输出；手动信号被拒绝，自动 TERM 报 skipped_read_only；读取、查看配置、列出会话、关闭连接仍可用。SSH/Telnet 协议协商与系统 keepalive 不受影响。
 
 read_only 不能在任意操作中覆盖，无论 true 或 false 都拒绝。修改 read_only 时若应用写入正在进行，整份 configure 返回 busy 且不修改任何配置；待写入结束后显式重试。开启成功后，先前操作即使持有旧配置，也必须通过写入前的最新只读检查。不会停止已启动的远端命令，其后续输出仍可读取。
 
-这是防误操作开关，AI 仍可通过 sess_configure 关闭，不是权限隔离。每个 keepsess 连接有独立的读取游标；串口服务器能否广播输出、是否抢占连接取决于服务端，read_only 不提供多人广播或输入仲裁。
+这是防误操作开关，AI 仍可通过 configure 关闭，不是权限隔离。每个 keepsess 连接有独立的读取游标；串口服务器能否广播输出、是否抢占连接取决于服务端，read_only 不提供多人广播或输入仲裁。
 
 ## 交互 exec 与 stdin
 
-普通 sess_exec 默认 interactive=false、pty=false，stdin 保持 EOF 语义；cat/python 等普通命令不会因隐式保持输入而挂起。显式交互示例（已建立 SSH mode=exec 的 s1）：
+普通 exec 默认 interactive=false、pty=false，stdin 保持 EOF 语义；cat/python 等普通命令不会因隐式保持输入而挂起。显式交互示例（已建立 SSH mode=exec 的 s1）：
 
 ```json
 {"session":"s1","command":"gdb ./app","interactive":true,"pty":true,"collect_output":false}
 ```
 
-拿到 task handle 后，依次调用 sess_read_until 观察提示，使用四个 send 工具之一输入；例如 sess_sendline_text：
+拿到 task handle 后，依次调用 read_until 观察提示，使用四个 send 工具之一输入；例如 sendline_text：
 
 ```json
 {"line_end":"\\n","read_idle_timeout_ms":500,"handle":"task1","data":"bt"}
@@ -395,7 +438,7 @@ interactive=true 在命令启动前保留 stdin，不自动修改 collect_output
 
 pty=true 必须搭配 interactive=true，启动前申请 vt100 PTY；默认不申请。PTY 会改变行规程、回显、换行以及 stdout/stderr 表现，服务器可能把双流合并到终端。结束符仍按 line_end 显式配置，工具不猜测或规范化输入。无 PTY 时 Ctrl-C/Ctrl-D 是普通输入字节，信号请用 task_signal。
 
-sess_task_close_stdin({"handle":"task1"}) 发送 SSH stdin EOF，保留输出和退出状态，重复关闭不再发送请求。发送 \x04 与 EOF 不等价；EOF 不保证程序退出，也不关闭 transport。关闭后继续 read/task_wait 收集输出。四种 send 与 EOF 都受当前会话 read_only、写入超时及 RPC 上限保护；卡住或取消正在进行的写入会关闭共享连接、明确报告未知结果，不重放输入。结果中的 interactive、pty、stdin_open 可供检查。
+task_close_stdin({"handle":"task1"}) 发送 SSH stdin EOF，保留输出和退出状态，重复关闭不再发送请求。发送 \x04 与 EOF 不等价；EOF 不保证程序退出，也不关闭 transport。关闭后继续 read/task_wait 收集输出。四种 send 与 EOF 都受当前会话 read_only、写入超时及 RPC 上限保护；卡住或取消正在进行的写入会关闭共享连接、明确报告未知结果，不重放输入。结果中的 interactive、pty、stdin_open 可供检查。
 
 ## 发送、转义和编码
 
@@ -420,7 +463,7 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 {"end_pattern":"(?m)^<[^>\r\n]+>\\s*$","session":"s1","data":"display version"}
 ```
 
-上例用于 sess_sendline_text；提示符须按观察结果配置，不能把正文里的括号猜成命令完成。没有自动分页、自动登录、自动 commit/save 或自动确认。
+上例用于 sendline_text；提示符须按观察结果配置，不能把正文里的括号猜成命令完成。没有自动分页、自动登录、自动 commit/save 或自动确认。
 
 默认 collect_output=true：写入成功后按 read_until 收集未读输出，减少工具往返；false 只返回发送回执。**返回的流不归属于本次输入**：可能包括旧的未读输出、回放或自发日志。
 
@@ -448,13 +491,13 @@ sendline 无条件追加一次 line_end，不检查已有结尾、不裁剪、�
 {"read_total_timeout_ms":10000,"read_idle_timeout_ms":0,"end_pattern":"(?im)^(<switch>|Password:|Login incorrect)[[:blank:]]*\\r?$","session":"s1"}
 ```
 
-上例用于 sess_read_until；仅示意等待设备提示符、重新询问密码或失败文本，正则必须按实际观察到的设备输出配置。end_pattern 匹配只是观察到文本，旧未读内容或 console 回放也可能命中，不能把它当作本次密码认证的协议确认。若等待后仍无输出，应报告“本地写入已完成，远端是否收到、是否通过认证和 shell 是否就绪仍未知”，再检查端点/console 服务、已知结束符要求或请求现场证据。不要无限轮询或重连后自动重放凭据。
+上例用于 read_until；仅示意等待设备提示符、重新询问密码或失败文本，正则必须按实际观察到的设备输出配置。end_pattern 匹配只是观察到文本，旧未读内容或 console 回放也可能命中，不能把它当作本次密码认证的协议确认。若等待后仍无输出，应报告“本地写入已完成，远端是否收到、是否通过认证和 shell 是否就绪仍未知”，再检查端点/console 服务、已知结束符要求或请求现场证据。不要无限轮询或重连后自动重放凭据。
 
 ### 模型参数值与 JSON 展示转义
 
 模型不一定直接生成 MCP JSON。DeepSeek V4.1 的公开参考实现生成 DSML，字符串参数 string="true" 的正文原样保留，服务解析层再用 json.dumps 组装 API arguments，agent 再构造 MCP JSON-RPC；对象/数组等 string="false" 的参数正文仍使用 JSON。参见[官方编码说明](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/encoding/README.md)和[解析器实现](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/encoding/encoding.py)。具体 agent 是否另有转换，须查看其实现。
 
-以 sess_send_escaped 发送 Ctrl-C 为例：逻辑 data 值是四个可见字符 `\x03`；DSML 字符串参数正文写 `\x03`，等价 JSON 参数表示为 `{"data":"\\x03"}`。正常 JSON 序列化/反序列化保留逻辑值；最后由 keepsess 显式解码为一个 03 字节。不要把 JSON 示例里的额外反斜杠直接照搬进原样字符串参数，不要多次预解码。DSML 的 XML 样式不代表 HTML 实体会被解码，`&#13;` 仍是五个字符；不能仅凭最终输入错误就推断模型或 agent 哪一层有问题。
+以 send_escaped 发送 Ctrl-C 为例：逻辑 data 值是四个可见字符 `\x03`；DSML 字符串参数正文写 `\x03`，等价 JSON 参数表示为 `{"data":"\\x03"}`。正常 JSON 序列化/反序列化保留逻辑值；最后由 keepsess 显式解码为一个 03 字节。不要把 JSON 示例里的额外反斜杠直接照搬进原样字符串参数，不要多次预解码。DSML 的 XML 样式不代表 HTML 实体会被解码，`&#13;` 仍是五个字符；不能仅凭最终输入错误就推断模型或 agent 哪一层有问题。
 
 ## 读取与结果
 
@@ -479,7 +522,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 ## exec 登录环境与输出投影
 
-`sess_exec` 默认 `login=true`，通过 `bash --login -c` 运行非交互登录 shell；stdin 仍默认 EOF，无自动 PTY。Bash 不存在时按远端退出结果报错，不回退或重试。登录初始化通常读取 `/etc/profile` 和第一个可用用户登录初始化文件，不保证读取 `.bashrc`，也不代表加载所有 profile。初始化可能产生输出和副作用，计入相同的任务完成等待。
+`exec` 默认 `login=true`，通过 `bash --login -c` 运行非交互登录 shell；stdin 仍默认 EOF，无自动 PTY。Bash 不存在时按远端退出结果报错，不回退或重试。登录初始化通常读取 `/etc/profile` 和第一个可用用户登录初始化文件，不保证读取 `.bashrc`，也不代表加载所有 profile。初始化可能产生输出和副作用，计入相同的任务完成等待。
 
 `env` 是最多 128 项的字符串对象，键必须是 shell 标识符；`cwd` 和 env 值正确引用。顺序为登录初始化 → export 显式 env → cd 到 cwd → 执行 command，设置失败就不执行 command，env 审计脱敏。设置仅本任务生效，不影响下次 exec。`login=false` 且没有 cwd/env 时原样提交 command；显式 cwd/env 时仍用 `bash -c` 包装但不加载登录 profile。max_input_bytes 对最终编码后的 exec 请求（含包装）生效。
 
@@ -499,11 +542,11 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 ## SSH exec 与连接保护
 
-**sess_exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次顶层参数，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
+**exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次顶层参数，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
 
-`exec_total_timeout_ms` 和 `term_on_timeout` 是 `sess_exec` / `sess_task_wait` 的顶层参数，只影响本次调用。会话默认值仍通过 connect/configure 的顶层参数设置。旧的嵌套 config 调用仅为兼容保留，不再出现在工具 schema；同时提供时顶层值优先。
+`exec_total_timeout_ms` 和 `term_on_timeout` 是 `exec` / `task_wait` 的顶层参数，只影响本次调用。会话默认值仍通过 connect/configure 的顶层参数设置。旧的嵌套 config 调用仅为兼容保留，不再出现在工具 schema；同时提供时顶层值优先。
 
-例如，下面的 sess_exec 最多等待协议完成 60 秒，不改变会话默认设置：
+例如，下面的 exec 最多等待协议完成 60 秒，不改变会话默认设置：
 
 ```json
 {"session":"s1","command":"sleep 2; uname -a","exec_total_timeout_ms":60000,"term_on_timeout":false}
@@ -515,22 +558,22 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 每次 task_wait 均获得新的本次等待预算。结果中的 `wait_elapsed_ms` 表示本次收集耗时，`started_at/task_elapsed_ms` 表示任务启动及累计运行时间（完成后冻结）。`reason=total_timeout` 额外提供 `timeout_source=rpc_budget|exec_wait|caller_deadline`；普通 read 的配置总时限为 read_total。RPC 预算或调用方截止只结束收集，保留 handle，不发送 TERM，也不会把截止时间带入下一次等待。
 
-完成等待超时返回 reason=total_timeout。**term_on_timeout 默认 true**：sess_exec 与 sess_task_wait 在超时后尝试发送一次 TERM，然后返回 handle，不等程序退出、不自动升级 KILL、不重放。设 false 仅结束等待。TERM 请求的 `signal.request_state=sent` 只表示请求已写出，不证明远端处理或程序/子进程树退出。可能返回 not_sent、unknown、skipped_read_only、skipped_finished，并附具体错误。信号写入限时 1s，包含在整个 RPC 115s 预算内；实际完成等待还受剩余 RPC 预算约束。半开连接导致 channel 建立或控制写入卡住时，必须关闭共享 transport 才能解除底层阻塞，会明确报告所有受影响任务的未知结果。
+完成等待超时返回 reason=total_timeout。**term_on_timeout 默认 true**：exec 与 task_wait 在超时后尝试发送一次 TERM，然后返回 handle，不等程序退出、不自动升级 KILL、不重放。设 false 仅结束等待。TERM 请求的 `signal.request_state=sent` 只表示请求已写出，不证明远端处理或程序/子进程树退出。可能返回 not_sent、unknown、skipped_read_only、skipped_finished，并附具体错误。信号写入限时 1s，包含在整个 RPC 115s 预算内；实际完成等待还受剩余 RPC 预算约束。半开连接导致 channel 建立或控制写入卡住时，必须关闭共享 transport 才能解除底层阻塞，会明确报告所有受影响任务的未知结果。
 
-普通 sess_read_until 仍使用 read 的 total/idle/end_pattern 配置，超时**绝不触发 TERM**。取消等待、输出上限和解码错误不发信号。sess_task_wait 不占同步 exec 名额，等待期间可并行查询状态和发信号；同一任务只允许一个输出读取者。
+普通 read_until 仍使用 read 的 total/idle/end_pattern 配置，超时**绝不触发 TERM**。取消等待、输出上限和解码错误不发信号。task_wait 不占同步 exec 名额，等待期间可并行查询状态和发信号；同一任务只允许一个输出读取者。
 
 任务状态：starting（启动中）、running（尚未观察到结束）、finished（channel 完成，成功与否看退出信息）、unknown（启动/连接故障导致远端结果未知）。task_status 不消费输出，more 表示还有未读字节，signal 是最近一次信号请求信息。task_release 仅删除已结束且无活动操作的记录；运行中或未知任务返回 busy。close/close_all 丢弃全部关联 handle 和缓冲，但不保证远端程序停止。
 
 示例调用顺序（handle 使用实际返回值）：
 
 ```text
-sess_exec({"session":"s1","command":"long-job","collect_output":false})
-sess_task_status({"handle":"task22"})
-sess_read_available({"handle":"task22"})
-sess_task_wait({"handle":"task22","exec_total_timeout_ms":10000,"term_on_timeout":false})
-sess_task_signal({"handle":"task22","signal":"TERM"})
-sess_task_wait({"handle":"task22"})
-sess_task_release({"handle":"task22"})
+exec({"session":"s1","command":"long-job","collect_output":false})
+task_status({"handle":"task22"})
+read_available({"handle":"task22"})
+task_wait({"handle":"task22","exec_total_timeout_ms":10000,"term_on_timeout":false})
+task_signal({"handle":"task22","signal":"TERM"})
+task_wait({"handle":"task22"})
+task_release({"handle":"task22"})
 ```
 
 每连接最多 8 个未完成任务、16 条保留记录；全局最多 64 个未完成任务、128 条记录。运行中/未知任务不自动淘汰以腾出容量；完成记录保留 30min，达到容量时可提前淘汰最旧且无活动操作的完成记录。读取被淘汰的 handle 明确报 unknown or expired，不切换到其他任务、不重放。会话被关闭、重连或回收时任务记录一起清理。
@@ -571,14 +614,14 @@ GOTOOLCHAIN=go1.22.1 sh scripts/build.sh
 
 新增五个工具，总计 30 个。均复用已有 SSH 连接及跳板链路，适用于 SSH exec/stream，不支持 Telnet。
 
-- `sess_get_file(session, src, dst?, backend?, overwrite?)`：远端普通文件下载到 keepsess 所在机器。省略 dst 时创建系统临时目录，返回 JSON 中的绝对 dst。文件由调用者使用后删除。
-- `sess_put_file(session, src, dst, backend?, overwrite?)`：上传本地普通文件。路径均是文件，不自动创建父目录，不支持目录递归或续传。
+- `get_file(session, src, dst?, backend?, overwrite?)`：远端普通文件下载到 keepsess 所在机器。省略 dst 时创建系统临时目录，返回 JSON 中的绝对 dst。文件由调用者使用后删除。
+- `put_file(session, src, dst, backend?, overwrite?)`：上传本地普通文件。路径均是文件，不自动创建父目录，不支持目录递归或续传。
 - backend 默认 auto：探测 SFTP，随后传统 SCP，最后 SSH exec 原始字节流。无覆盖上传在 auto 下优先使用 exec 而非 SCP。远端分别需要 SFTP subsystem、scp 命令或 POSIX shell/cat/wc；发布还需 mv 或 ln/rm。无 PTY、无 Bash login 包装，不污染终端历史。只在传输开始前选择后端，失败不自动重传。
 - overwrite 默认 false。上传先写同目录临时文件，再发布；失败返回 temporary_path 供检查/清理，可能保留部分临时文件。SFTP 无覆盖发布需要 hardlink 扩展，覆盖需要 posix-rename 扩展，不支持时明确失败。下载先写本地临时文件，成功才发布；无覆盖发布需要本地硬链接支持。
 - 单次传输最多 110 秒；超时/取消可能关闭共享 SSH transport，影响其他任务，须检查状态并显式 reconnect。bytes_transferred 是本地复制确认数，不是远端持久化证明；缺失 SSH exit-status 返回失败/未知，不假定成功。
 - read_only 阻止上传及新建隧道，允许下载。既有隧道继续运行；read_only 不检查隧道中的应用协议。
 
-`sess_tunnel_open` 参数为 session、type、bind_host（默认 127.0.0.1）、bind_port（默认 0 自动分配），固定转发还需 target_host/target_port。返回 handle 和 listen_address：
+`tunnel_open` 参数为 session、type、bind_host（默认 127.0.0.1）、bind_port（默认 0 自动分配），固定转发还需 target_host/target_port。返回 handle 和 listen_address：
 
 | type | 监听位置 | 目标连接位置 |
 |---|---|---|
@@ -587,6 +630,6 @@ GOTOOLCHAIN=go1.22.1 sh scripts/build.sh
 | dynamic | keepsess 本地 SOCKS5 | 最终 SSH 服务器 |
 | remote_dynamic | 最终 SSH 服务器 SOCKS5 | keepsess 本地 |
 
-例如 `sess_tunnel_open({"session":"s1","type":"local","target_host":"127.0.0.1","target_port":5556})` 后，本地 Python 可连接返回的 listen_address 访问远端 QMP。动态模式仅支持 SOCKS5 无认证 CONNECT（TCP），不支持 UDP、TUN/TAP 或 Unix socket；远程绑定范围受 SSH 服务器配置影响。
+例如 `tunnel_open({"session":"s1","type":"local","target_host":"127.0.0.1","target_port":5556})` 后，本地 Python 可连接返回的 listen_address 访问远端 QMP。动态模式仅支持 SOCKS5 无认证 CONNECT（TCP），不支持 UDP、TUN/TAP 或 Unix socket；远程绑定范围受 SSH 服务器配置影响。
 
-`sess_tunnel_list(session)` 查看监听与连接状态；`sess_tunnel_close(session, handle)` 关闭监听、连接并释放记录。每会话最多 16 个记录，全局最多 64 个监听，每监听最多 64 个 socket。建连/握手/写阻塞有界，空闲读取上限 2h，活跃连接阻止会话空闲回收。断线/reconnect 关闭旧隧道，不自动恢复，关闭的记录可显式释放。SSH 转发建连阻塞超时时可能关闭共享 transport。
+`tunnel_list(session)` 查看监听与连接状态；`tunnel_close(session, handle)` 关闭监听、连接并释放记录。每会话最多 16 个记录，全局最多 64 个监听，每监听最多 64 个 socket。建连/握手/写阻塞有界，空闲读取上限 2h，活跃连接阻止会话空闲回收。断线/reconnect 关闭旧隧道，不自动恢复，关闭的记录可显式释放。SSH 转发建连阻塞超时时可能关闭共享 transport。

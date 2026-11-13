@@ -25,6 +25,7 @@ const (
 )
 
 type Options struct {
+	Profile       string      `json:"profile,omitempty"`
 	Name          string      `json:"name,omitempty"`
 	SSHJumps      []SSHJump   `json:"ssh_jumps,omitempty"`
 	Protocol      string      `json:"protocol"`
@@ -92,45 +93,48 @@ type PeerIdentity struct {
 
 // Result separates local write receipts from observed stream output.
 type Result struct {
-	Name               string        `json:"name,omitempty"`
-	InstanceID         string        `json:"instance_id,omitempty"`
-	InstanceName       string        `json:"instance_name,omitempty"`
-	StartedAt          *time.Time    `json:"started_at,omitempty"`
-	TaskElapsedMS      int64         `json:"task_elapsed_ms,omitempty"`
-	WaitElapsedMS      *int64        `json:"wait_elapsed_ms,omitempty"`
-	TimeoutSource      string        `json:"timeout_source,omitempty"`
-	FilteredBytes      int64         `json:"filtered_bytes,omitempty"`
-	FilteredLines      int64         `json:"filtered_lines,omitempty"`
-	StrippedBytes      int64         `json:"stripped_bytes,omitempty"`
-	LineFragments      bool          `json:"line_fragments,omitempty"`
-	Interactive        bool          `json:"interactive,omitempty"`
-	PTY                bool          `json:"pty,omitempty"`
-	StdinOpen          *bool         `json:"stdin_open,omitempty"`
-	Peer               *PeerIdentity `json:"peer,omitempty"`
-	DisconnectReason   string        `json:"disconnect_reason,omitempty"`
-	Session            string        `json:"session"`
-	Handle             string        `json:"handle,omitempty"`
-	State              string        `json:"state,omitempty"`
-	Comment            string        `json:"comment,omitempty"`
-	ExitSignal         string        `json:"exit_signal,omitempty"`
-	Signal             *SignalResult `json:"signal,omitempty"`
-	Output             string        `json:"output,omitempty"`
-	Reason             string        `json:"reason,omitempty"`
-	Connected          bool          `json:"connected"`
-	Running            bool          `json:"running,omitempty"`
-	InputState         string        `json:"input_state,omitempty"`
-	InputBytes         int           `json:"input_bytes,omitempty"`
-	WrittenBytes       int           `json:"written_bytes,omitempty"`
-	ExitCode           *int          `json:"exit_code,omitempty"`
-	Warning            string        `json:"warning,omitempty"`
-	Error              string        `json:"error,omitempty"`
-	NextAction         string        `json:"next_action,omitempty"`
-	Start              int64         `json:"start,omitempty"`
-	End                int64         `json:"end,omitempty"`
-	More               bool          `json:"more,omitempty"`
-	DroppedBytes       int64         `json:"dropped_bytes,omitempty"`
-	MinimumOutputBytes int           `json:"minimum_output_bytes,omitempty"`
-	QueuedBytes        *int          `json:"queued_bytes,omitempty"`
+	Name               string         `json:"name,omitempty"`
+	InstanceID         string         `json:"instance_id,omitempty"`
+	InstanceName       string         `json:"instance_name,omitempty"`
+	StartedAt          *time.Time     `json:"started_at,omitempty"`
+	TaskElapsedMS      int64          `json:"task_elapsed_ms,omitempty"`
+	WaitElapsedMS      *int64         `json:"wait_elapsed_ms,omitempty"`
+	TimeoutSource      string         `json:"timeout_source,omitempty"`
+	FilteredBytes      int64          `json:"filtered_bytes,omitempty"`
+	FilteredLines      int64          `json:"filtered_lines,omitempty"`
+	StrippedBytes      int64          `json:"stripped_bytes,omitempty"`
+	LineFragments      bool           `json:"line_fragments,omitempty"`
+	Interactive        bool           `json:"interactive,omitempty"`
+	PTY                bool           `json:"pty,omitempty"`
+	StdinOpen          *bool          `json:"stdin_open,omitempty"`
+	Peer               *PeerIdentity  `json:"peer,omitempty"`
+	DisconnectReason   string         `json:"disconnect_reason,omitempty"`
+	Session            string         `json:"session"`
+	Handle             string         `json:"handle,omitempty"`
+	State              string         `json:"state,omitempty"`
+	Comment            string         `json:"comment,omitempty"`
+	ExitSignal         string         `json:"exit_signal,omitempty"`
+	Signal             *SignalResult  `json:"signal,omitempty"`
+	Output             string         `json:"output,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	Connected          bool           `json:"connected"`
+	Running            bool           `json:"running,omitempty"`
+	InputState         string         `json:"input_state,omitempty"`
+	InputBytes         int            `json:"input_bytes,omitempty"`
+	WrittenBytes       int            `json:"written_bytes,omitempty"`
+	ExitCode           *int           `json:"exit_code,omitempty"`
+	Warning            string         `json:"warning,omitempty"`
+	Error              string         `json:"error,omitempty"`
+	NextAction         string         `json:"next_action,omitempty"`
+	Guidance           string         `json:"guidance,omitempty"`
+	AvailableProfiles  []string       `json:"available_profiles,omitempty"`
+	NextArguments      map[string]any `json:"next_arguments,omitempty"`
+	Start              int64          `json:"start,omitempty"`
+	End                int64          `json:"end,omitempty"`
+	More               bool           `json:"more,omitempty"`
+	DroppedBytes       int64          `json:"dropped_bytes,omitempty"`
+	MinimumOutputBytes int            `json:"minimum_output_bytes,omitempty"`
+	QueuedBytes        *int           `json:"queued_bytes,omitempty"`
 }
 type Session struct {
 	origin string // Internal Web task attribution, never inferred from command text.
@@ -227,16 +231,19 @@ func (m *Manager) uniqueExecSession() (*Session, error) {
 			continue
 		}
 		if selected != nil {
-			return nil, errors.New("multiple retained sessions; specify session explicitly; use sess_list; nothing sent")
+			return nil, errors.New("multiple retained sessions; specify session explicitly; use list; nothing sent")
 		}
 		selected = s
 	}
 	if selected == nil {
-		return nil, errors.New("no retained session; use sess_connect first; nothing sent")
+		return nil, errors.New("no retained session; use connect first; nothing sent")
 	}
 	return selected, nil
 }
 func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
+	if o.Profile != "" {
+		return Result{}, errors.New("resolve a named connection profile before connecting; nothing sent")
+	}
 	ctx, cancel := context.WithTimeout(ctx, CallLimit)
 	defer cancel()
 	if o.Protocol != "ssh" && o.Protocol != "telnet" {
@@ -323,7 +330,7 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	if generation != m.generation {
 		m.mu.Unlock()
 		s.disconnect("")
-		return Result{}, errors.New("connect cancelled by sess_close_all")
+		return Result{}, errors.New("connect cancelled by close_all")
 	}
 	m.sessions[id] = s
 	promptName := !m.instanceNamingPrompted && m.instanceName == ""
@@ -341,8 +348,8 @@ func (m *Manager) Connect(ctx context.Context, o Options) (Result, error) {
 	v.InstanceName = instanceName
 	s.mu.Unlock()
 	if promptName {
-		v.Comment = "First connection succeeded. Name this instance for the current work using sess_configure({\"instance_name\":\"short task label\"}); instance_id stays unchanged. Do not reconnect or replay commands."
-		v.NextAction = "sess_configure"
+		v.Comment = "First connection succeeded. Name this instance for the current work using configure({\"instance_name\":\"short task label\"}); instance_id stays unchanged. Do not reconnect or replay commands."
+		v.NextAction = "configure"
 	}
 	return v, nil
 }
@@ -425,9 +432,9 @@ func (s *Session) statusLocked() Result {
 		r.More = s.cursor < s.total
 	}
 	if !s.connected {
-		r.NextAction = "sess_reconnect"
+		r.NextAction = "reconnect"
 		if s.disposed {
-			r.NextAction = "sess_connect"
+			r.NextAction = "connect"
 		}
 	}
 	return r
@@ -561,7 +568,7 @@ func (m *Manager) GetConfig(id string) (ConfigResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.disposed {
-		return ConfigResult{}, errors.New("session disposed; use sess_connect")
+		return ConfigResult{}, errors.New("session disposed; use connect")
 	}
 	s.lastUse = time.Now()
 	return configInfo(s.id, s.config), nil
@@ -579,7 +586,7 @@ func (m *Manager) Configure(id string, p ConfigPatch) (ConfigResult, error) {
 	// A successful configure guarantees any preceding write has finished.
 	if _, changingGuard := p["read_only"]; changingGuard {
 		if !s.writeMu.TryLock() {
-			return ConfigResult{}, errors.New("busy: application write in progress; read_only unchanged; retry sess_configure after it finishes")
+			return ConfigResult{}, errors.New("busy: application write in progress; read_only unchanged; retry configure after it finishes")
 		}
 		defer s.writeMu.Unlock()
 	}
@@ -654,10 +661,10 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return m.operateTask(ctx, kind, r)
 	}
 	if kind != "exec" && (r.Interactive || r.PTY) {
-		return Result{}, errors.New("interactive/pty are only for sess_exec")
+		return Result{}, errors.New("interactive/pty are only for exec")
 	}
 	if r.Signal != "" {
-		return Result{}, errors.New("signal is only for sess_task_signal")
+		return Result{}, errors.New("signal is only for task_signal")
 	}
 	var s *Session
 	var err error
@@ -678,10 +685,10 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return Result{}, errors.New("busy: reconnect in progress; nothing sent")
 	}
 	if disposed {
-		return Result{}, errors.New("session disposed; use sess_connect")
+		return Result{}, errors.New("session disposed; use connect")
 	}
 	if kind == "exec" && (s.mode != "exec" || s.protocol != "ssh") {
-		return Result{}, errors.New("sess_exec requires SSH mode=exec; stream sessions do not support exec; nothing sent")
+		return Result{}, errors.New("exec requires SSH mode=exec; stream sessions do not support exec; nothing sent")
 	}
 	cfg, err = applyConfig(cfg, r.Config, true)
 	if err != nil {
@@ -712,12 +719,12 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 		return m.startTask(ctx, s, r, cfg)
 	}
 	if !sending && s.mode == "exec" {
-		return Result{}, errors.New("exec output requires handle; use sess_task_list to find retained tasks")
+		return Result{}, errors.New("exec output requires handle; use task_list to find retained tasks")
 	}
 	if sending && cfg.ReadOnly {
 		v := s.status()
 		v.InputState = "not_sent"
-		v.Error = "read_only: application input disabled; nothing sent; change explicitly with sess_configure"
+		v.Error = "read_only: application input disabled; nothing sent; change explicitly with configure"
 		return v, nil
 	}
 	collect := !sending || r.CollectOutput == nil || *r.CollectOutput
@@ -730,7 +737,7 @@ func (m *Manager) Operate(parent context.Context, kind string, r Request) (Resul
 	s.mu.Lock()
 	if s.disposed {
 		s.mu.Unlock()
-		return Result{}, errors.New("session disposed; use sess_connect")
+		return Result{}, errors.New("session disposed; use connect")
 	}
 	s.active++
 	s.lastUse = time.Now()
@@ -788,9 +795,9 @@ func (s *Session) write(ctx context.Context, kind string, b []byte, c Config) Re
 	readOnly := s.config.ReadOnly
 	s.mu.Unlock()
 	// Recheck the live guard while holding writeMu: an operation may have
-	// captured its config before a concurrent sess_configure enabled it.
+	// captured its config before a concurrent configure enabled it.
 	if readOnly {
-		v.Error = "read_only: application input disabled; nothing sent; change explicitly with sess_configure"
+		v.Error = "read_only: application input disabled; nothing sent; change explicitly with configure"
 		return v
 	}
 	if c.BackpressureBytes > 0 {
@@ -899,7 +906,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 	if m.sessions[id] != old || old.disposed {
 		old.mu.Unlock()
 		m.mu.Unlock()
-		return Result{}, errors.New("session disposed; use sess_connect")
+		return Result{}, errors.New("session disposed; use connect")
 	}
 	if old.active != 0 || old.runningLocked() || old.reconnecting {
 		old.mu.Unlock()
@@ -963,7 +970,7 @@ func (m *Manager) Reconnect(parent context.Context, id string) (Result, error) {
 		next.buf = nil
 		next.mu.Unlock()
 		next.disconnect("")
-		return Result{}, errors.New("reconnect cancelled by close; use sess_connect")
+		return Result{}, errors.New("reconnect cancelled by close; use connect")
 	}
 	next.record("session", nil, "", "", nil)
 	go m.watch(next)

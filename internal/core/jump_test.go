@@ -193,7 +193,7 @@ func TestSSHJumpDisconnectLeavesOutcomeUnknownAndReconnectable(t *testing.T) {
 	// Channel EOF and transport closure can arrive in either order. Missing
 	// exit-status may finish the channel first, but must keep its outcome unknown.
 	unknown := v.State == "unknown" || (v.State == "finished" && v.ExitCode == nil && v.Warning != "")
-	if !unknown || v.NextAction != "sess_reconnect" || v.Connected {
+	if !unknown || v.NextAction != "reconnect" || v.Connected {
 		t.Fatal(v)
 	}
 	if v, err := m.Reconnect(context.Background(), id); err != nil || !v.Connected {

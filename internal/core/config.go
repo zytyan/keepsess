@@ -55,13 +55,13 @@ var configDescriptions = map[string]string{
 	"strip_ansi":                 "Default false. Strip ANSI CSI/OSC/control sequences from returned output only; raw history and offsets remain unchanged. Incomplete sequences remain unread.",
 	"include_pattern":            "Optional Go RE2 (not shell/glob syntax, max 1024 bytes) line inclusion filter after ANSI projection; empty disables. Lines over 16KiB are filtered as bounded fragments. 64KiB raw scan per page; skipped text advances the cursor.",
 	"exclude_pattern":            "Optional Go RE2 (not shell/glob syntax, max 1024 bytes) line exclusion filter after inclusion; empty disables. Raw history remains available. Output limits still apply; filtered_bytes/lines report projection loss, distinct from dropped history.",
-	"read_only":                  "Session-only input guard; default false. Reject send, exec and manual/automatic signals before application writes. Set only with connect/configure; per-operation overrides are rejected. Protocol negotiation/keepalive remain enabled. Change explicitly with sess_configure; not a security boundary and does not stop an already running command.",
-	"connect_timeout_ms":         "Connect/reconnect, authentication and initial shell setup deadline, 1..110000ms; one shared budget for the entire jump chain. Updating an established session stores the value for its next explicit sess_reconnect; a new sess_connect needs its own config.",
+	"read_only":                  "Session-only input guard; default false. Reject send, exec and manual/automatic signals before application writes. Set only with connect/configure; per-operation overrides are rejected. Protocol negotiation/keepalive remain enabled. Change explicitly with configure; not a security boundary and does not stop an already running command.",
+	"connect_timeout_ms":         "Connect/reconnect, authentication and initial shell setup deadline, 1..110000ms; one shared budget for the entire jump chain. Updating an established session stores the value for its next explicit reconnect; a new connect needs its own config.",
 	"write_timeout_ms":           "Write/channel setup deadline, 1..110000ms; failed writes close transport and may have executed. Maximum 110000ms.",
 	"session_idle_timeout_ms":    "0..31536000000ms; default 7200000ms (2h): reclaim session and buffers after no tool operations; 0 disables. Active readers/writers or running exec are excluded.",
-	"read_total_timeout_ms":      "Total read deadline from read start; 1..110000ms. Does not close transport. Ignored by sess_exec.",
-	"read_idle_timeout_ms":       "Read silence deadline, 0..110000ms, from read start, reset by endpoint bytes; 0 disables. Default 500ms. Ignored by sess_exec.",
-	"exec_total_timeout_ms":      "sess_exec/sess_task_wait completion wait deadline; default 120000ms, 1..300000ms. Independent of read settings. RPC budget ends collection earlier without TERM; continue with the handle. No background runtime timer for collect_output=false.",
+	"read_total_timeout_ms":      "Total read deadline from read start; 1..110000ms. Does not close transport. Ignored by exec.",
+	"read_idle_timeout_ms":       "Read silence deadline, 0..110000ms, from read start, reset by endpoint bytes; 0 disables. Default 500ms. Ignored by exec.",
+	"exec_total_timeout_ms":      "exec/task_wait completion wait deadline; default 120000ms, 1..300000ms. Independent of read settings. RPC budget ends collection earlier without TERM; continue with the handle. No background runtime timer for collect_output=false.",
 	"term_on_timeout":            "Default true: attempt TERM on exec/task_wait completion timeout, then return the handle. Delivery and exit are not guaranteed. Read timeouts, output limits and cancellation do not signal. read_only blocks signals. Per-call overrides do not alter session config.",
 	"ssh_keepalive_ms":           "SSH protocol probe interval, 0..86400000ms; default 30000ms, 0 disables; for SSH targets or SSH jumps to Telnet (probe the final jump). Connection-only: set with connect/configure. No terminal input or local idle refresh. Rejection replies still prove responsiveness.",
 	"ssh_keepalive_timeout_ms":   "SSH probe response deadline; default 10000ms, 1..110000ms. Connection-only: set with connect/configure. One outstanding probe; expiry closes transport with unknown outcomes for unfinished tasks.",
@@ -73,7 +73,7 @@ var configDescriptions = map[string]string{
 	"max_input_bytes":            "1..1048576 encoded bytes, including line ending.",
 	"max_output_bytes":           "1..524288 UTF-8 output bytes, including invalid-byte representations. Default 65536.",
 	"backpressure_bytes":         "0..1073741824 bytes; 0 disables threshold. Otherwise reject a new write while OS TCP queued bytes >= threshold; no user-space queue. Platform support required.",
-	"end_pattern":                "Go RE2 (not shell/glob syntax, max 1024 bytes) over original decoded unread output before ANSI/line projection; empty disables. Match is observation, not command completion. Ignored by sess_exec.",
+	"end_pattern":                "Go RE2 (not shell/glob syntax, max 1024 bytes) over original decoded unread output before ANSI/line projection; empty disables. Match is observation, not command completion. Ignored by exec.",
 }
 
 func DefaultConfig(protocol string) Config {
@@ -90,7 +90,7 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 			return c, fmt.Errorf("unknown config parameter %q", k)
 		}
 		if override && (k == "connect_timeout_ms" || k == "session_idle_timeout_ms" || k == "tcp_keepalive_ms" || k == "ssh_keepalive_ms" || k == "ssh_keepalive_timeout_ms" || k == "read_only") {
-			return c, fmt.Errorf("%s is connection configuration; use sess_configure", k)
+			return c, fmt.Errorf("%s is connection configuration; use configure", k)
 		}
 		var err error
 		switch k {

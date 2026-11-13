@@ -28,11 +28,11 @@ func TestAllToolsDiscoverableWithoutProfile(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatal("tools/list differs from complete tool definitions")
 	}
-	props := publicDefinitions["sess_configure"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	props := publicDefinitions["configure"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
 	if props["tool_profile"] != nil {
 		t.Fatal("obsolete profile switch exposed")
 	}
-	c.tool(t, "name", "sess_configure", map[string]any{"instance_name": "test work"})
+	c.tool(t, "name", "configure", map[string]any{"instance_name": "test work"})
 	r := structured(t, c.receive(t, "name", time.Second))
 	if r["instance_name"] != "test work" || r["tool_profile"] != nil {
 		t.Fatal(r)
@@ -41,7 +41,7 @@ func TestAllToolsDiscoverableWithoutProfile(t *testing.T) {
 	if string(after) != string(got) {
 		t.Fatal("naming changed discovery")
 	}
-	c.tool(t, "obsolete", "sess_configure", map[string]any{"tool_profile": "standard"})
+	c.tool(t, "obsolete", "configure", map[string]any{"tool_profile": "standard"})
 	if c.receive(t, "obsolete", time.Second)["result"].(map[string]any)["isError"] != true {
 		t.Fatal("obsolete profile switch still accepted")
 	}

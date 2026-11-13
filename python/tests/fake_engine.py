@@ -40,7 +40,7 @@ def respond(request):
                 'new_field': 'retained', 'peer': {'server': 'fixture', 'host_key': 'SHA256:fixture'}}
         if command == 'error':
             data.update(error='busy', input_state='not_sent', handle='task1')
-        if request['params']['name'] == 'sess_list':
+        if request['params']['name'] == 'list':
             data = {'instance_id': 'fixture', 'sessions': [data], 'web': {'enabled': True}}
         result = {'structuredContent': data, 'isError': command == 'error'}
         if command == 'text-fallback':

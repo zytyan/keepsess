@@ -19,7 +19,7 @@ func TestSSHJumpsNameAndTelnetTarget(t *testing.T) {
 		c.tool(t, id, tool, args)
 		return structured(t, c.receive(t, id, 3*time.Second))
 	}
-	props := definitions["sess_connect"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	props := definitions["connect"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
 	if props["ssh_jumps"] == nil || props["jumps"] != nil {
 		t.Fatal("wrong public jump parameter", props)
 	}
@@ -28,7 +28,7 @@ func TestSSHJumpsNameAndTelnetTarget(t *testing.T) {
 		if both {
 			args["ssh_jumps"] = []any{}
 		}
-		v := call("sess_connect", args)
+		v := call("connect", args)
 		if !strings.Contains(v["error"].(string), `unknown argument "jumps"`) {
 			t.Fatal(v)
 		}
@@ -42,30 +42,30 @@ func TestSSHJumpsNameAndTelnetTarget(t *testing.T) {
 	args["ssh_jumps"] = []any{jump}
 	args["read_idle_timeout_ms"] = 0
 	args["read_total_timeout_ms"] = 2000
-	v := call("sess_connect", args)
+	v := call("connect", args)
 	id := v["session"]
 	if v["connected"] != true || v["peer"] != nil {
 		t.Fatal(v)
 	}
-	v = call("sess_read_until", map[string]any{"session": id, "end_pattern": "switch> "})
+	v = call("read_until", map[string]any{"session": id, "end_pattern": "switch> "})
 	if v["reason"] != "match" {
 		t.Fatal(v)
 	}
-	v = call("sess_exec", map[string]any{"session": id, "command": "must-not-run"})
+	v = call("exec", map[string]any{"session": id, "command": "must-not-run"})
 	if !strings.Contains(v["error"].(string), "requires SSH mode=exec") {
 		t.Fatal(v)
 	}
-	v = call("sess_sendline_text", map[string]any{"session": id, "data": "show version", "end_pattern": "switch> "})
+	v = call("sendline_text", map[string]any{"session": id, "data": "show version", "end_pattern": "switch> "})
 	if v["input_state"] != "sent" || !strings.Contains(v["output"].(string), "SwitchOS") {
 		t.Fatal(v)
 	}
-	v = call("sess_reconnect", map[string]any{"session": id})
+	v = call("reconnect", map[string]any{"session": id})
 	if v["connected"] != true || v["session"] != id || v["peer"] != nil {
 		t.Fatal(v)
 	}
-	call("sess_close", map[string]any{"session": id})
+	call("close", map[string]any{"session": id})
 	args["mode"] = "exec"
-	v = call("sess_connect", args)
+	v = call("connect", args)
 	if !strings.Contains(v["error"].(string), "Telnet requires stream") {
 		t.Fatal(v)
 	}

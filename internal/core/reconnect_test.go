@@ -170,7 +170,7 @@ func TestReconnectFailureRetainsParametersAndCancellation(t *testing.T) {
 	id := connect(t, m, options(addr, "ssh", "exec"))
 	mode.Store(1)
 	v, err := m.Reconnect(context.Background(), id)
-	if err != nil || v.Connected || v.Error == "" || v.NextAction != "sess_reconnect" {
+	if err != nil || v.Connected || v.Error == "" || v.NextAction != "reconnect" {
 		t.Fatal(v, err)
 	}
 	mode.Store(0)

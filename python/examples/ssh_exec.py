@@ -5,12 +5,12 @@ from keepsess import Keepsess
 
 def main():
     with Keepsess() as ks:
-        ks.sess_configure(instance_name="Python SSH example")
-        conn = ks.sess_connect(
+        ks.configure(instance_name="Python SSH example")
+        conn = ks.connect(
             protocol="ssh", host=os.environ["SSH_HOST"], port=22,
             username=os.environ["SSH_USER"], password=os.environ["SSH_PASSWORD"],
         )
-        result = ks.sess_exec(session=conn.session, command="uname -a")
+        result = ks.exec(session=conn.session, command="uname -a")
         print(result.output, end="")
         print("exit_code:", result.exit_code, "warning:", result.warning)
 

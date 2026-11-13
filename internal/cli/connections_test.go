@@ -25,7 +25,7 @@ func TestPrivateConnectionStorageWithoutWebHistory(t *testing.T) {
 	addr, _ := testutil.SSH(t)
 	host, port, _ := net.SplitHostPort(addr)
 	n, _ := strconv.Atoi(port)
-	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "sess_connect", "arguments": map[string]any{"protocol": "ssh", "host": host, "port": n, "username": "user", "password": "private-cli-secret"}}}
+	request := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "connect", "arguments": map[string]any{"protocol": "ssh", "host": host, "port": n, "username": "user", "password": "private-cli-secret"}}}
 	input, _ := json.Marshal(request)
 	var output, errout bytes.Buffer
 	if err := Run(context.Background(), []string{"serve"}, strings.NewReader(string(input)+"\n"), &output, &errout); err != nil {

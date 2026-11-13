@@ -81,7 +81,7 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 		v := s.statusLocked()
 		s.mu.Unlock()
 		if disposed {
-			return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, DisconnectReason: v.DisconnectReason, NextAction: "sess_connect", Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
+			return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, DisconnectReason: v.DisconnectReason, NextAction: "connect", Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
 		}
 		now := time.Now()
 		idleSince := last
@@ -193,7 +193,7 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 			if s.disposed {
 				v = s.statusLocked()
 				s.mu.Unlock()
-				return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, DisconnectReason: v.DisconnectReason, NextAction: "sess_connect", Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
+				return Result{Session: s.id, Handle: s.handle, Reason: "closed", Connected: false, DisconnectReason: v.DisconnectReason, NextAction: "connect", Comment: "Connection/task was closed; retained output has been discarded. Remote outcome may be unknown."}
 			}
 			// If the producer overtook the snapshot, report that loss on the next read.
 			if !history {
@@ -215,7 +215,7 @@ func (s *Session) read(ctx context.Context, kind string, r Request, c Config) Re
 				v.Error = s.failure
 			}
 			if !s.connected {
-				v.NextAction = "sess_reconnect"
+				v.NextAction = "reconnect"
 			}
 			s.mu.Unlock()
 			if v.Output == "" {

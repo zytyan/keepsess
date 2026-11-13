@@ -12,7 +12,7 @@ class SyncMethods:
     def _invoke(self, tool: str, arguments: dict[str, Any]) -> Any:
         raise NotImplementedError
 
-    def sess_get_file(
+    def get_file(
         self, *,
         session: str,
         src: str,
@@ -28,9 +28,9 @@ class SyncMethods:
             'dst': dst,
             'overwrite': overwrite,
         }
-        return self._invoke('sess_get_file', arguments)
+        return self._invoke('get_file', arguments)
 
-    def sess_put_file(
+    def put_file(
         self, *,
         dst: str,
         session: str,
@@ -46,9 +46,9 @@ class SyncMethods:
             'backend': backend,
             'overwrite': overwrite,
         }
-        return self._invoke('sess_put_file', arguments)
+        return self._invoke('put_file', arguments)
 
-    def sess_tunnel_open(
+    def tunnel_open(
         self, *,
         session: str,
         type: Literal['local', 'remote', 'dynamic', 'remote_dynamic'],
@@ -66,9 +66,9 @@ class SyncMethods:
             'target_host': target_host,
             'target_port': target_port,
         }
-        return self._invoke('sess_tunnel_open', arguments)
+        return self._invoke('tunnel_open', arguments)
 
-    def sess_tunnel_list(
+    def tunnel_list(
         self, *,
         session: str,
     ) -> list[TunnelResult]:
@@ -76,9 +76,9 @@ class SyncMethods:
         arguments = {
             'session': session,
         }
-        return self._invoke('sess_tunnel_list', arguments)
+        return self._invoke('tunnel_list', arguments)
 
-    def sess_tunnel_close(
+    def tunnel_close(
         self, *,
         handle: str,
         session: str,
@@ -88,9 +88,9 @@ class SyncMethods:
             'handle': handle,
             'session': session,
         }
-        return self._invoke('sess_tunnel_close', arguments)
+        return self._invoke('tunnel_close', arguments)
 
-    def sess_help(
+    def help(
         self, *,
         limit: int | None = None,
         parameter: str | None = None,
@@ -104,13 +104,10 @@ class SyncMethods:
             'query': query,
             'topic': topic,
         }
-        return self._invoke('sess_help', arguments)
+        return self._invoke('help', arguments)
 
-    def sess_connect(
+    def connect(
         self, *,
-        host: str,
-        port: int,
-        protocol: Literal['ssh', 'telnet'],
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
         connect_timeout_ms: int | str | None = None,
@@ -118,6 +115,7 @@ class SyncMethods:
         end_pattern: str | None = None,
         exclude_pattern: str | None = None,
         exec_total_timeout_ms: int | str | None = None,
+        host: str | None = None,
         host_key: str | None = None,
         include_pattern: str | None = None,
         input_encode_error_action: str | None = None,
@@ -132,6 +130,9 @@ class SyncMethods:
         name: str | None = None,
         output_decode_error_action: str | None = None,
         password: str | None = None,
+        port: int | None = None,
+        profile: str | None = None,
+        protocol: Literal['ssh', 'telnet'] | None = None,
         read_idle_timeout_ms: int | str | None = None,
         read_only: bool | None = None,
         read_total_timeout_ms: int | str | None = None,
@@ -145,11 +146,8 @@ class SyncMethods:
         username: str | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ConnectResult:
-        'Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.'
+        'Choose mode BEFORE connecting: SSH servers use exec (default); switches, routers, console shells and Telnet use stream with sendline_text/read. Do not probe by executing a command or retry in another mode automatically. Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; reconnect is explicit. Telnet is plaintext.'
         arguments = {
-            'host': host,
-            'port': port,
-            'protocol': protocol,
             'backpressure_bytes': backpressure_bytes,
             'config': config,
             'connect_timeout_ms': connect_timeout_ms,
@@ -157,6 +155,7 @@ class SyncMethods:
             'end_pattern': end_pattern,
             'exclude_pattern': exclude_pattern,
             'exec_total_timeout_ms': exec_total_timeout_ms,
+            'host': host,
             'host_key': host_key,
             'include_pattern': include_pattern,
             'input_encode_error_action': input_encode_error_action,
@@ -171,6 +170,9 @@ class SyncMethods:
             'name': name,
             'output_decode_error_action': output_decode_error_action,
             'password': password,
+            'port': port,
+            'profile': profile,
+            'protocol': protocol,
             'read_idle_timeout_ms': read_idle_timeout_ms,
             'read_only': read_only,
             'read_total_timeout_ms': read_total_timeout_ms,
@@ -184,9 +186,9 @@ class SyncMethods:
             'username': username,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_connect', arguments)
+        return self._invoke('connect', arguments)
 
-    def sess_reconnect(
+    def reconnect(
         self, *,
         session: str,
     ) -> ConnectResult:
@@ -194,9 +196,9 @@ class SyncMethods:
         arguments = {
             'session': session,
         }
-        return self._invoke('sess_reconnect', arguments)
+        return self._invoke('reconnect', arguments)
 
-    def sess_rename(
+    def rename(
         self, *,
         name: str,
         session: str,
@@ -206,9 +208,9 @@ class SyncMethods:
             'name': name,
             'session': session,
         }
-        return self._invoke('sess_rename', arguments)
+        return self._invoke('rename', arguments)
 
-    def sess_task_rename(
+    def task_rename(
         self, *,
         handle: str,
         name: str,
@@ -218,9 +220,9 @@ class SyncMethods:
             'handle': handle,
             'name': name,
         }
-        return self._invoke('sess_task_rename', arguments)
+        return self._invoke('task_rename', arguments)
 
-    def sess_configure(
+    def configure(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -276,9 +278,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_configure', arguments)
+        return self._invoke('configure', arguments)
 
-    def sess_get_config(
+    def get_config(
         self, *,
         session: str,
     ) -> ConfigResult:
@@ -286,17 +288,17 @@ class SyncMethods:
         arguments = {
             'session': session,
         }
-        return self._invoke('sess_get_config', arguments)
+        return self._invoke('get_config', arguments)
 
-    def sess_list(
+    def list(
         self,
     ) -> SessionList:
-        'List retained process-local sessions, names, transport/exec state, instance_id and shared Web URL/status without consuming output. For unknown handles, inspect this list and sess_task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.'
+        'List retained process-local sessions, names, transport/exec state, instance_id, api_contract, available_profiles (names only) and shared Web URL/status without consuming output. For unknown handles, inspect this list and task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.'
         arguments = {
         }
-        return self._invoke('sess_list', arguments)
+        return self._invoke('list', arguments)
 
-    def sess_exec(
+    def exec(
         self, *,
         command: str,
         backpressure_bytes: int | str | None = None,
@@ -325,7 +327,7 @@ class SyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ExecResult:
-        'Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with sess_task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome.'
+        'Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome.'
         arguments = {
             'command': command,
             'backpressure_bytes': backpressure_bytes,
@@ -354,9 +356,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_exec', arguments)
+        return self._invoke('exec', arguments)
 
-    def sess_task_list(
+    def task_list(
         self, *,
         session: str | None = None,
     ) -> TaskList:
@@ -364,9 +366,9 @@ class SyncMethods:
         arguments = {
             'session': session,
         }
-        return self._invoke('sess_task_list', arguments)
+        return self._invoke('task_list', arguments)
 
-    def sess_task_status(
+    def task_status(
         self, *,
         handle: str,
     ) -> ExecResult:
@@ -374,9 +376,9 @@ class SyncMethods:
         arguments = {
             'handle': handle,
         }
-        return self._invoke('sess_task_status', arguments)
+        return self._invoke('task_status', arguments)
 
-    def sess_task_wait(
+    def task_wait(
         self, *,
         handle: str,
         backpressure_bytes: int | str | None = None,
@@ -418,9 +420,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_task_wait', arguments)
+        return self._invoke('task_wait', arguments)
 
-    def sess_task_signal(
+    def task_signal(
         self, *,
         handle: str,
         signal: Literal['ABRT', 'ALRM', 'FPE', 'HUP', 'ILL', 'INT', 'KILL', 'PIPE', 'QUIT', 'SEGV', 'TERM', 'USR1', 'USR2'],
@@ -430,9 +432,9 @@ class SyncMethods:
             'handle': handle,
             'signal': signal,
         }
-        return self._invoke('sess_task_signal', arguments)
+        return self._invoke('task_signal', arguments)
 
-    def sess_task_release(
+    def task_release(
         self, *,
         handle: str,
     ) -> Result:
@@ -440,9 +442,9 @@ class SyncMethods:
         arguments = {
             'handle': handle,
         }
-        return self._invoke('sess_task_release', arguments)
+        return self._invoke('task_release', arguments)
 
-    def sess_task_close_stdin(
+    def task_close_stdin(
         self, *,
         handle: str,
     ) -> Result:
@@ -450,9 +452,9 @@ class SyncMethods:
         arguments = {
             'handle': handle,
         }
-        return self._invoke('sess_task_close_stdin', arguments)
+        return self._invoke('task_close_stdin', arguments)
 
-    def sess_send_text(
+    def send_text(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -500,9 +502,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_send_text', arguments)
+        return self._invoke('send_text', arguments)
 
-    def sess_send_escaped(
+    def send_escaped(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -550,9 +552,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_send_escaped', arguments)
+        return self._invoke('send_escaped', arguments)
 
-    def sess_sendline_text(
+    def sendline_text(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -600,9 +602,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_sendline_text', arguments)
+        return self._invoke('sendline_text', arguments)
 
-    def sess_sendline_escaped(
+    def sendline_escaped(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -650,9 +652,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_sendline_escaped', arguments)
+        return self._invoke('sendline_escaped', arguments)
 
-    def sess_read_available(
+    def read_available(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -696,9 +698,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_read_available', arguments)
+        return self._invoke('read_available', arguments)
 
-    def sess_read_until(
+    def read_until(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -742,9 +744,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_read_until', arguments)
+        return self._invoke('read_until', arguments)
 
-    def sess_read_tail(
+    def read_tail(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -790,9 +792,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_read_tail', arguments)
+        return self._invoke('read_tail', arguments)
 
-    def sess_read_history(
+    def read_history(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -838,9 +840,9 @@ class SyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return self._invoke('sess_read_history', arguments)
+        return self._invoke('read_history', arguments)
 
-    def sess_close(
+    def close(
         self, *,
         session: str,
     ) -> Result:
@@ -848,22 +850,22 @@ class SyncMethods:
         arguments = {
             'session': session,
         }
-        return self._invoke('sess_close', arguments)
+        return self._invoke('close', arguments)
 
-    def sess_close_all(
+    def close_all(
         self,
     ) -> Result:
         'Close every session, discard buffers, tasks and private reconnect parameters; cancel pending connects/reconnects so closed handles cannot reappear. Remote programs may keep running. No terminal output returned.'
         arguments = {
         }
-        return self._invoke('sess_close_all', arguments)
+        return self._invoke('close_all', arguments)
 
 
 class AsyncMethods:
     async def _invoke(self, tool: str, arguments: dict[str, Any]) -> Any:
         raise NotImplementedError
 
-    async def sess_get_file(
+    async def get_file(
         self, *,
         session: str,
         src: str,
@@ -879,9 +881,9 @@ class AsyncMethods:
             'dst': dst,
             'overwrite': overwrite,
         }
-        return await self._invoke('sess_get_file', arguments)
+        return await self._invoke('get_file', arguments)
 
-    async def sess_put_file(
+    async def put_file(
         self, *,
         dst: str,
         session: str,
@@ -897,9 +899,9 @@ class AsyncMethods:
             'backend': backend,
             'overwrite': overwrite,
         }
-        return await self._invoke('sess_put_file', arguments)
+        return await self._invoke('put_file', arguments)
 
-    async def sess_tunnel_open(
+    async def tunnel_open(
         self, *,
         session: str,
         type: Literal['local', 'remote', 'dynamic', 'remote_dynamic'],
@@ -917,9 +919,9 @@ class AsyncMethods:
             'target_host': target_host,
             'target_port': target_port,
         }
-        return await self._invoke('sess_tunnel_open', arguments)
+        return await self._invoke('tunnel_open', arguments)
 
-    async def sess_tunnel_list(
+    async def tunnel_list(
         self, *,
         session: str,
     ) -> list[TunnelResult]:
@@ -927,9 +929,9 @@ class AsyncMethods:
         arguments = {
             'session': session,
         }
-        return await self._invoke('sess_tunnel_list', arguments)
+        return await self._invoke('tunnel_list', arguments)
 
-    async def sess_tunnel_close(
+    async def tunnel_close(
         self, *,
         handle: str,
         session: str,
@@ -939,9 +941,9 @@ class AsyncMethods:
             'handle': handle,
             'session': session,
         }
-        return await self._invoke('sess_tunnel_close', arguments)
+        return await self._invoke('tunnel_close', arguments)
 
-    async def sess_help(
+    async def help(
         self, *,
         limit: int | None = None,
         parameter: str | None = None,
@@ -955,13 +957,10 @@ class AsyncMethods:
             'query': query,
             'topic': topic,
         }
-        return await self._invoke('sess_help', arguments)
+        return await self._invoke('help', arguments)
 
-    async def sess_connect(
+    async def connect(
         self, *,
-        host: str,
-        port: int,
-        protocol: Literal['ssh', 'telnet'],
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
         connect_timeout_ms: int | str | None = None,
@@ -969,6 +968,7 @@ class AsyncMethods:
         end_pattern: str | None = None,
         exclude_pattern: str | None = None,
         exec_total_timeout_ms: int | str | None = None,
+        host: str | None = None,
         host_key: str | None = None,
         include_pattern: str | None = None,
         input_encode_error_action: str | None = None,
@@ -983,6 +983,9 @@ class AsyncMethods:
         name: str | None = None,
         output_decode_error_action: str | None = None,
         password: str | None = None,
+        port: int | None = None,
+        profile: str | None = None,
+        protocol: Literal['ssh', 'telnet'] | None = None,
         read_idle_timeout_ms: int | str | None = None,
         read_only: bool | None = None,
         read_total_timeout_ms: int | str | None = None,
@@ -996,11 +999,8 @@ class AsyncMethods:
         username: str | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ConnectResult:
-        'Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.'
+        'Choose mode BEFORE connecting: SSH servers use exec (default); switches, routers, console shells and Telnet use stream with sendline_text/read. Do not probe by executing a command or retry in another mode automatically. Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; reconnect is explicit. Telnet is plaintext.'
         arguments = {
-            'host': host,
-            'port': port,
-            'protocol': protocol,
             'backpressure_bytes': backpressure_bytes,
             'config': config,
             'connect_timeout_ms': connect_timeout_ms,
@@ -1008,6 +1008,7 @@ class AsyncMethods:
             'end_pattern': end_pattern,
             'exclude_pattern': exclude_pattern,
             'exec_total_timeout_ms': exec_total_timeout_ms,
+            'host': host,
             'host_key': host_key,
             'include_pattern': include_pattern,
             'input_encode_error_action': input_encode_error_action,
@@ -1022,6 +1023,9 @@ class AsyncMethods:
             'name': name,
             'output_decode_error_action': output_decode_error_action,
             'password': password,
+            'port': port,
+            'profile': profile,
+            'protocol': protocol,
             'read_idle_timeout_ms': read_idle_timeout_ms,
             'read_only': read_only,
             'read_total_timeout_ms': read_total_timeout_ms,
@@ -1035,9 +1039,9 @@ class AsyncMethods:
             'username': username,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_connect', arguments)
+        return await self._invoke('connect', arguments)
 
-    async def sess_reconnect(
+    async def reconnect(
         self, *,
         session: str,
     ) -> ConnectResult:
@@ -1045,9 +1049,9 @@ class AsyncMethods:
         arguments = {
             'session': session,
         }
-        return await self._invoke('sess_reconnect', arguments)
+        return await self._invoke('reconnect', arguments)
 
-    async def sess_rename(
+    async def rename(
         self, *,
         name: str,
         session: str,
@@ -1057,9 +1061,9 @@ class AsyncMethods:
             'name': name,
             'session': session,
         }
-        return await self._invoke('sess_rename', arguments)
+        return await self._invoke('rename', arguments)
 
-    async def sess_task_rename(
+    async def task_rename(
         self, *,
         handle: str,
         name: str,
@@ -1069,9 +1073,9 @@ class AsyncMethods:
             'handle': handle,
             'name': name,
         }
-        return await self._invoke('sess_task_rename', arguments)
+        return await self._invoke('task_rename', arguments)
 
-    async def sess_configure(
+    async def configure(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -1127,9 +1131,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_configure', arguments)
+        return await self._invoke('configure', arguments)
 
-    async def sess_get_config(
+    async def get_config(
         self, *,
         session: str,
     ) -> ConfigResult:
@@ -1137,17 +1141,17 @@ class AsyncMethods:
         arguments = {
             'session': session,
         }
-        return await self._invoke('sess_get_config', arguments)
+        return await self._invoke('get_config', arguments)
 
-    async def sess_list(
+    async def list(
         self,
     ) -> SessionList:
-        'List retained process-local sessions, names, transport/exec state, instance_id and shared Web URL/status without consuming output. For unknown handles, inspect this list and sess_task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.'
+        'List retained process-local sessions, names, transport/exec state, instance_id, api_contract, available_profiles (names only) and shared Web URL/status without consuming output. For unknown handles, inspect this list and task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.'
         arguments = {
         }
-        return await self._invoke('sess_list', arguments)
+        return await self._invoke('list', arguments)
 
-    async def sess_exec(
+    async def exec(
         self, *,
         command: str,
         backpressure_bytes: int | str | None = None,
@@ -1176,7 +1180,7 @@ class AsyncMethods:
         term_on_timeout: bool | None = None,
         write_timeout_ms: int | str | None = None,
     ) -> ExecResult:
-        'Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with sess_task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome.'
+        'Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome.'
         arguments = {
             'command': command,
             'backpressure_bytes': backpressure_bytes,
@@ -1205,9 +1209,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_exec', arguments)
+        return await self._invoke('exec', arguments)
 
-    async def sess_task_list(
+    async def task_list(
         self, *,
         session: str | None = None,
     ) -> TaskList:
@@ -1215,9 +1219,9 @@ class AsyncMethods:
         arguments = {
             'session': session,
         }
-        return await self._invoke('sess_task_list', arguments)
+        return await self._invoke('task_list', arguments)
 
-    async def sess_task_status(
+    async def task_status(
         self, *,
         handle: str,
     ) -> ExecResult:
@@ -1225,9 +1229,9 @@ class AsyncMethods:
         arguments = {
             'handle': handle,
         }
-        return await self._invoke('sess_task_status', arguments)
+        return await self._invoke('task_status', arguments)
 
-    async def sess_task_wait(
+    async def task_wait(
         self, *,
         handle: str,
         backpressure_bytes: int | str | None = None,
@@ -1269,9 +1273,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_task_wait', arguments)
+        return await self._invoke('task_wait', arguments)
 
-    async def sess_task_signal(
+    async def task_signal(
         self, *,
         handle: str,
         signal: Literal['ABRT', 'ALRM', 'FPE', 'HUP', 'ILL', 'INT', 'KILL', 'PIPE', 'QUIT', 'SEGV', 'TERM', 'USR1', 'USR2'],
@@ -1281,9 +1285,9 @@ class AsyncMethods:
             'handle': handle,
             'signal': signal,
         }
-        return await self._invoke('sess_task_signal', arguments)
+        return await self._invoke('task_signal', arguments)
 
-    async def sess_task_release(
+    async def task_release(
         self, *,
         handle: str,
     ) -> Result:
@@ -1291,9 +1295,9 @@ class AsyncMethods:
         arguments = {
             'handle': handle,
         }
-        return await self._invoke('sess_task_release', arguments)
+        return await self._invoke('task_release', arguments)
 
-    async def sess_task_close_stdin(
+    async def task_close_stdin(
         self, *,
         handle: str,
     ) -> Result:
@@ -1301,9 +1305,9 @@ class AsyncMethods:
         arguments = {
             'handle': handle,
         }
-        return await self._invoke('sess_task_close_stdin', arguments)
+        return await self._invoke('task_close_stdin', arguments)
 
-    async def sess_send_text(
+    async def send_text(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -1351,9 +1355,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_send_text', arguments)
+        return await self._invoke('send_text', arguments)
 
-    async def sess_send_escaped(
+    async def send_escaped(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -1401,9 +1405,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_send_escaped', arguments)
+        return await self._invoke('send_escaped', arguments)
 
-    async def sess_sendline_text(
+    async def sendline_text(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -1451,9 +1455,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_sendline_text', arguments)
+        return await self._invoke('sendline_text', arguments)
 
-    async def sess_sendline_escaped(
+    async def sendline_escaped(
         self, *,
         data: str,
         backpressure_bytes: int | str | None = None,
@@ -1501,9 +1505,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_sendline_escaped', arguments)
+        return await self._invoke('sendline_escaped', arguments)
 
-    async def sess_read_available(
+    async def read_available(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -1547,9 +1551,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_read_available', arguments)
+        return await self._invoke('read_available', arguments)
 
-    async def sess_read_until(
+    async def read_until(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -1593,9 +1597,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_read_until', arguments)
+        return await self._invoke('read_until', arguments)
 
-    async def sess_read_tail(
+    async def read_tail(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -1641,9 +1645,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_read_tail', arguments)
+        return await self._invoke('read_tail', arguments)
 
-    async def sess_read_history(
+    async def read_history(
         self, *,
         backpressure_bytes: int | str | None = None,
         config: dict[str, Any] | None = None,
@@ -1689,9 +1693,9 @@ class AsyncMethods:
             'term_on_timeout': term_on_timeout,
             'write_timeout_ms': write_timeout_ms,
         }
-        return await self._invoke('sess_read_history', arguments)
+        return await self._invoke('read_history', arguments)
 
-    async def sess_close(
+    async def close(
         self, *,
         session: str,
     ) -> Result:
@@ -1699,12 +1703,12 @@ class AsyncMethods:
         arguments = {
             'session': session,
         }
-        return await self._invoke('sess_close', arguments)
+        return await self._invoke('close', arguments)
 
-    async def sess_close_all(
+    async def close_all(
         self,
     ) -> Result:
         'Close every session, discard buffers, tasks and private reconnect parameters; cancel pending connects/reconnects so closed handles cannot reappear. Remote programs may keep running. No terminal output returned.'
         arguments = {
         }
-        return await self._invoke('sess_close_all', arguments)
+        return await self._invoke('close_all', arguments)

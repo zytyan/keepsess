@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +23,10 @@ const WriteLimit = 3 * time.Second
 
 type Audit interface{ Record(any) error }
 type Server struct {
-	Manager *core.Manager
-	Audit   Audit
-	WebInfo func() any
+	Manager  *core.Manager
+	Audit    Audit
+	WebInfo  func() any
+	Profiles map[string]core.Options
 }
 type message struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -54,7 +56,7 @@ func toolResult(v any, e error) any {
 		}
 		var taskLookup *core.TaskLookupError
 		if errors.As(e, &taskLookup) {
-			v = map[string]any{"error": e.Error(), "handle": taskLookup.Handle, "instance_id": taskLookup.InstanceID, "next_action": "sess_task_list"}
+			v = map[string]any{"error": e.Error(), "handle": taskLookup.Handle, "instance_id": taskLookup.InstanceID, "next_action": "task_list"}
 		}
 		var route *core.RouteError
 		if errors.As(e, &route) {
@@ -70,7 +72,7 @@ func toolResult(v any, e error) any {
 	b, _ := json.Marshal(v)
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": string(b)}}, "structuredContent": v, "isError": bad}
 }
-func (s *Server) call(ctx context.Context, p json.RawMessage) any {
+func (s *Server) call(ctx context.Context, p json.RawMessage) (response any) {
 	var args struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -82,23 +84,56 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 	if len(args.Arguments) == 0 {
 		args.Arguments = json.RawMessage(`{}`)
 	}
-	def, ok := definitions[args.Name]
-	if !ok {
-		return toolResult(nil, errors.New("unknown tool; refresh tools/list for the current API"))
-	}
 	var keys map[string]json.RawMessage
+	var requestKeys map[string]json.RawMessage
+	defer func() {
+		if out, ok := response.(map[string]any); ok {
+			if r, ok := out["structuredContent"].(core.Result); ok {
+				if s.Manager != nil {
+					r.InstanceID = s.Manager.InstanceID()
+				}
+				if r.DisconnectReason == "unknown_handle" {
+					r.AvailableProfiles = s.profileNames()
+					r.Guidance = "This instance does not retain that reference; closure, expiry, an instance change or a wrong reference are possible. Inspect list. A named profile explicitly creates a new connection; never replay earlier input."
+				}
+				response = toolResult(explainResult(r, args.Name, requestKeys), nil)
+			} else if value, ok := out["structuredContent"].(map[string]any); ok && value["error"] != nil {
+				if s.Manager != nil {
+					value["instance_id"] = s.Manager.InstanceID()
+				}
+				if strings.Contains(fmt.Sprint(value["error"]), "busy") {
+					value["next_action"] = "list"
+					value["guidance"] = "Let the active operation return before trying again; do not poll in a busy loop."
+				}
+				response = toolResult(value, nil)
+			}
+		}
+	}()
 	if e := json.Unmarshal(args.Arguments, &keys); e != nil || keys == nil {
 		return toolResult(nil, errors.New("arguments must be an object"))
 	}
+	def, ok := definitions[args.Name]
+	if !ok {
+		return toolResult(nil, unknownTool(args.Name))
+	}
+	requestKeys = make(map[string]json.RawMessage, len(keys))
+	for k, v := range keys {
+		requestKeys[k] = v
+	}
 	props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	argumentKeys := make([]string, 0, len(keys))
 	for k := range keys {
+		argumentKeys = append(argumentKeys, k)
+	}
+	sort.Strings(argumentKeys)
+	for _, k := range argumentKeys {
 		if _, ok := props[k]; !ok && !(k == "config" && props["encoding"] != nil) {
-			return toolResult(nil, fmt.Errorf("unknown argument %q for %s; use sess_help(topic=%q) for parameters", k, args.Name, args.Name))
+			return toolResult(nil, argumentError(args.Name, k, false))
 		}
 	}
 	for _, k := range def["inputSchema"].(map[string]any)["required"].([]string) {
-		if _, ok := keys[k]; !ok {
-			return toolResult(nil, fmt.Errorf("missing required argument %q", k))
+		if _, ok := keys[k]; !ok && !(args.Name == "connect" && keys["profile"] != nil) {
+			return toolResult(nil, argumentError(args.Name, k, true))
 		}
 	}
 	for _, key := range []string{"name", "instance_name", "cwd", "login", "env"} {
@@ -123,7 +158,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 			}
 		}
 	}
-	if args.Name == "sess_exec" {
+	if args.Name == "exec" {
 		if raw, present := keys["session"]; present {
 			var id string
 			if err := json.Unmarshal(raw, &id); err != nil || id == "" {
@@ -131,7 +166,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 			}
 		}
 	}
-	if strings.HasPrefix(args.Name, "sess_read_") {
+	if strings.HasPrefix(args.Name, "read_") {
 		_, hasSession := keys["session"]
 		_, hasHandle := keys["handle"]
 		if hasSession == hasHandle {
@@ -167,29 +202,29 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		args.Arguments, _ = json.Marshal(keys)
 	}
 	switch args.Name {
-	case "sess_get_file", "sess_put_file":
+	case "get_file", "put_file":
 		var r core.FileRequest
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		v, e := s.Manager.Transfer(ctx, args.Name == "sess_put_file", r)
+		v, e := s.Manager.Transfer(ctx, args.Name == "put_file", r)
 		return toolResult(v, e)
-	case "sess_tunnel_open", "sess_tunnel_list", "sess_tunnel_close":
+	case "tunnel_open", "tunnel_list", "tunnel_close":
 		var r core.TunnelRequest
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		v, e := s.Manager.Tunnel(ctx, strings.TrimPrefix(args.Name, "sess_tunnel_"), r)
+		v, e := s.Manager.Tunnel(ctx, strings.TrimPrefix(args.Name, "tunnel_"), r)
 		return toolResult(v, e)
 
-	case "sess_help":
+	case "help":
 		var r helpRequest
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
 		v, e := builtinHelp(r)
 		return toolResult(v, e)
-	case "sess_rename", "sess_task_rename":
+	case "rename", "task_rename":
 		var r struct {
 			Session string `json:"session"`
 			Handle  string `json:"handle"`
@@ -198,20 +233,24 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		if args.Name == "sess_rename" {
+		if args.Name == "rename" {
 			v, e := s.Manager.RenameSession(r.Session, r.Name)
 			return toolResult(v, e)
 		}
 		v, e := s.Manager.RenameTask(r.Handle, r.Name)
 		return toolResult(v, e)
-	case "sess_connect":
+	case "connect":
 		var o core.Options
 		if e := strict(args.Arguments, &o); e != nil {
 			return toolResult(nil, e)
 		}
+		o, e := s.profileOptions(o, keys)
+		if e != nil {
+			return toolResult(nil, e)
+		}
 		v, e := s.Manager.Connect(ctx, o)
 		return toolResult(v, e)
-	case "sess_configure":
+	case "configure":
 		var r struct {
 			Session      string           `json:"session"`
 			InstanceName *string          `json:"instance_name"`
@@ -241,24 +280,24 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		}
 		v, e := s.Manager.Configure(r.Session, r.Config)
 		return toolResult(v, e)
-	case "sess_get_config", "sess_close", "sess_reconnect":
+	case "get_config", "close", "reconnect":
 		var r struct {
 			Session string `json:"session"`
 		}
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		if args.Name == "sess_get_config" {
+		if args.Name == "get_config" {
 			v, e := s.Manager.GetConfig(r.Session)
 			return toolResult(v, e)
 		}
-		if args.Name == "sess_reconnect" {
+		if args.Name == "reconnect" {
 			v, e := s.Manager.Reconnect(ctx, r.Session)
 			return toolResult(v, e)
 		}
 		v, e := s.Manager.Close(r.Session)
 		return toolResult(v, e)
-	case "sess_task_list":
+	case "task_list":
 		var r struct {
 			Session string `json:"session,omitempty"`
 		}
@@ -267,9 +306,9 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		}
 		v, e := s.Manager.TaskList(r.Session)
 		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "tasks": v}, e)
-	case "sess_list":
-		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "instance_name": s.Manager.InstanceName(), "sessions": s.Manager.List(), "web": s.webInfo()}, nil)
-	case "sess_close_all":
+	case "list":
+		return toolResult(map[string]any{"instance_id": s.Manager.InstanceID(), "instance_name": s.Manager.InstanceName(), "sessions": s.Manager.List(), "api_contract": APIContract, "available_profiles": s.profileNames(), "web": s.webInfo()}, nil)
+	case "close_all":
 		s.Manager.CloseAll()
 		return toolResult(map[string]any{"reason": "closed", "connected": false}, nil)
 	default:
@@ -277,7 +316,7 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) any {
 		if e := strict(args.Arguments, &r); e != nil {
 			return toolResult(nil, e)
 		}
-		v, e := s.Manager.Operate(ctx, strings.TrimPrefix(args.Name, "sess_"), r)
+		v, e := s.Manager.Operate(ctx, args.Name, r)
 		return toolResult(v, e)
 	}
 }
@@ -317,16 +356,16 @@ func buildDefinitions() map[string]map[string]any {
 		defs[name] = map[string]any{"name": name, "description": desc, "inputSchema": schema(p, required...)}
 	}
 	session := func() map[string]any {
-		return map[string]any{"session": str("Stable session ID (s1) or current name alias. Always target an explicit session unless sess_exec can infer the sole retained session.")}
+		return map[string]any{"session": str("Stable session ID (s1) or current name alias. Always target an explicit session unless exec can infer the sole retained session.")}
 	}
-	for _, name := range []string{"sess_get_file", "sess_put_file"} {
+	for _, name := range []string{"get_file", "put_file"} {
 		p := session()
 		p["src"] = str("Source file path; get: remote, put: local to keepsess process")
 		p["dst"] = str("Destination file path; get may omit for an automatically created local temporary path; put requires remote path")
 		p["backend"] = map[string]any{"type": "string", "enum": []string{"auto", "sftp", "scp", "exec"}, "default": "auto", "description": "Auto probes SFTP then SCP then raw SSH exec. Never retries a started transfer. No PTY or Bash login wrapper."}
 		p["overwrite"] = map[string]any{"type": "boolean", "default": false, "description": "Permit destination overwrite. Uploads stage beside the destination; failures may leave a temporary_path. No automatic replay."}
 		required := []string{"session", "src"}
-		if name == "sess_put_file" {
+		if name == "put_file" {
 			required = append(required, "dst")
 		}
 		add(name, "Transfer one regular file over existing SSH (exec or stream), including jumps. Local paths refer to keepsess host. 110s deadline; cancellation may close shared transport. Upload is read_only guarded; publishes by rename/link, requiring remote filesystem support. SFTP no-clobber requires hardlink extension; overwrite requires posix-rename. No recursive copy or automatic resume.", p, required...)
@@ -337,12 +376,12 @@ func buildDefinitions() map[string]map[string]any {
 	p["bind_port"] = integerSchema("Listener port, default 0 allocates a port", 0, 65535)
 	p["target_host"] = str("Required for local/remote. Local targets connect from SSH server; remote targets from keepsess.")
 	p["target_port"] = integerSchema("Required for local/remote", 1, 65535)
-	add("sess_tunnel_open", "Open TCP forwarding or SOCKS5 CONNECT tunnel. Dynamic listens locally; remote_dynamic listens remotely. read_only blocks creation; existing tunnels remain. Disconnect/reconnect closes tunnels; never restored automatically. 16 listeners/session, 64 sockets/listener.", p, "session", "type")
-	add("sess_tunnel_list", "List retained tunnel handles and bound addresses; closed transports require explicit close/reopen.", session(), "session")
+	add("tunnel_open", "Open TCP forwarding or SOCKS5 CONNECT tunnel. Dynamic listens locally; remote_dynamic listens remotely. read_only blocks creation; existing tunnels remain. Disconnect/reconnect closes tunnels; never restored automatically. 16 listeners/session, 64 sockets/listener.", p, "session", "type")
+	add("tunnel_list", "List retained tunnel handles and bound addresses; closed transports require explicit close/reopen.", session(), "session")
 	p = session()
 	p["handle"] = str("Tunnel handle returned by open")
-	add("sess_tunnel_close", "Close listener and all accepted connections, releasing the tunnel handle.", p, "session", "handle")
-	connect := map[string]any{"protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}, "description": "Required final target protocol, independent of optional SSH jumps. SSH requires username and a nonempty password or keyfile (both permitted); Telnet uses explicit stream login input, never SSH credential fields."}, "host": str("Hostname or IP; IPv6 without brackets"), "port": integerSchema("Required final target TCP port; normally SSH 22 or Telnet 23, no implicit target port.", 1, 65535), "username": str("SSH target username, required for SSH. For Telnet, login text must be sent explicitly after observing the console prompt."), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("SSH private key path on the keepsess host; SSH requires password or keyfile. Not a remote path and no automatic agent/key discovery."), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Optional local known_hosts path enables verification; never automatically discovered or written. Used unless host_key or insecure=true takes precedence."), "host_key": str("Optional pinned SHA256 SSH host-key fingerprint enables verification; takes precedence over known_hosts unless insecure=true."), "insecure": map[string]any{"type": "boolean", "description": "Compatibility flag: true skips verification even when host_key/known_hosts is supplied. By default verification is skipped unless those fields are supplied; false alone does not enable it."}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec for independent commands; explicit exec interactive=true supports standalone interactive programs. Use stream for persistent terminal shells, console logins and network devices. Telnet always stream; never use sess_exec there."}, "config": configSchema(false), "name": str("Optional unique session name alias; stable sN ID remains valid. 1..64 letters/digits/._-, starts with alphanumeric; sN/taskN reserved.")}
+	add("tunnel_close", "Close listener and all accepted connections, releasing the tunnel handle.", p, "session", "handle")
+	connect := map[string]any{"profile": str("Explicit named connection recipe from ~/.keepsess.toml [profiles.NAME]. Creates a NEW session, never restores live state or replays input. Loaded at Agent startup; list/initialize._meta show available_profiles (names only). Use profile plus optional name/configuration and target password/keyfile/key_passphrase; protocol/host/port/mode/username/ssh_jumps/host verification cannot override a profile. Profiles require explicit mode, never infer from history; no automatic last profile."), "protocol": map[string]any{"type": "string", "enum": []string{"ssh", "telnet"}, "description": "Required without profile; omit with profile. Final target protocol, independent of optional SSH jumps. SSH requires username and a nonempty password or keyfile (both permitted); Telnet uses explicit stream login input, never SSH credential fields."}, "host": str("Required without profile; omit with profile. Hostname or IP; IPv6 without brackets"), "port": integerSchema("Required without profile; omit with profile. Final target TCP port; normally SSH 22 or Telnet 23, no implicit target port.", 1, 65535), "username": str("SSH target username, required for direct SSH; inherited from profile and cannot override it. For Telnet, login text must be sent explicitly after observing the console prompt."), "password": str("SSH password; authentication field redacted in audit"), "keyfile": str("SSH private key path on the keepsess host; SSH requires password or keyfile. Not a remote path and no automatic agent/key discovery."), "key_passphrase": str("SSH key passphrase; redacted in audit"), "known_hosts": str("Optional local known_hosts path enables verification; never automatically discovered or written. Used unless host_key or insecure=true takes precedence."), "host_key": str("Optional pinned SHA256 SSH host-key fingerprint enables verification; takes precedence over known_hosts unless insecure=true."), "insecure": map[string]any{"type": "boolean", "description": "Compatibility flag: true skips verification even when host_key/known_hosts is supplied. By default verification is skipped unless those fields are supplied; false alone does not enable it."}, "mode": map[string]any{"type": "string", "enum": []string{"stream", "exec"}, "description": "SSH defaults exec for independent commands; explicit exec interactive=true supports standalone interactive programs. Use stream for persistent terminal shells, console logins and network devices. Telnet always stream; never use exec there."}, "config": configSchema(false), "name": str("Optional unique session name alias; stable sN ID remains valid. 1..64 letters/digits/._-, starts with alphanumeric; sN/taskN reserved.")}
 	jump := map[string]any{}
 	for _, name := range []string{"host", "port", "username", "password", "keyfile", "key_passphrase", "known_hosts", "host_key", "insecure"} {
 		jump[name] = connect[name]
@@ -356,10 +395,18 @@ func buildDefinitions() map[string]map[string]any {
 		map[string]any{"required": []string{"keyfile"}, "properties": map[string]any{"keyfile": map[string]any{"minLength": 1}}},
 	}
 	connect["ssh_jumps"] = map[string]any{"type": "array", "maxItems": 8, "items": jumpSchema, "description": "Order example: local -> ssh_jumps[0] -> ssh_jumps[1] -> target. SSH forwarding chain for an SSH or Telnet target, first hop nearest this client, then subsequent hops, then the target host/port using protocol. Telnet targets require stream mode. Each hop authenticates and verifies its host key independently with the same precedence as the target. Port defaults 22. Entire chain shares connect_timeout_ms. No shell commands or automatic retries. Reconnect reuses the private chain."}
-	add("sess_connect", "Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; sess_reconnect is explicit. Telnet is plaintext.", connect, "protocol", "host", "port")
+	add("connect", "Choose mode BEFORE connecting: SSH servers use exec (default); switches, routers, console shells and Telnet use stream with sendline_text/read. Do not probe by executing a command or retry in another mode automatically. Create a persistent connection and short handle; no terminal output consumed. Optional ssh_jumps (old jumps rejected) are ordered SSH forwarding hops to either an SSH or Telnet target. protocol describes the target. Telnet requires stream; login input remains explicit via send/read. Telnet peer identity is not inferred from a jump. SSH exec has exit status; stream is bidirectional with no input/output attribution. Connect/reconnect return compact SSH peer server/key identity; no identity shell commands. No automatic reconnect/replay; reconnect is explicit. Telnet is plaintext.", connect)
+	profileConflicts := []any{}
+	for _, key := range []string{"protocol", "host", "port", "mode", "username", "ssh_jumps", "known_hosts", "host_key", "insecure"} {
+		profileConflicts = append(profileConflicts, map[string]any{"required": []string{key}})
+	}
+	defs["connect"]["inputSchema"].(map[string]any)["oneOf"] = []any{
+		map[string]any{"required": []string{"profile"}, "not": map[string]any{"anyOf": profileConflicts}},
+		map[string]any{"required": []string{"protocol", "host", "port"}, "not": map[string]any{"required": []string{"profile"}}},
+	}
 	// SSH credentials are conditionally required; Telnet login uses stream input.
 	// anyOf permits password and keyfile together, matching SSH authentication.
-	defs["sess_connect"]["inputSchema"].(map[string]any)["allOf"] = []any{map[string]any{
+	defs["connect"]["inputSchema"].(map[string]any)["allOf"] = []any{map[string]any{
 		"if": map[string]any{"properties": map[string]any{"protocol": map[string]any{"const": "ssh"}}, "required": []string{"protocol"}},
 		"then": map[string]any{
 			"required":   []string{"username"},
@@ -370,25 +417,25 @@ func buildDefinitions() map[string]map[string]any {
 			},
 		},
 	}}
-	add("sess_rename", "Rename a session alias without changing its stable ID, connection or running tasks. Names must be unique among retained/pending sessions. Old alias stops resolving; stable ID remains valid.", map[string]any{"session": str("Session ID or current name"), "name": str("New unique session alias: 1..64 ASCII letters/digits/._-, first character alphanumeric; sN/taskN forms reserved. Stable ID unchanged; old alias stops resolving.")}, "session", "name")
-	add("sess_task_rename", "Rename a retained task alias; stable taskN ID remains valid. Task names are process-wide unique among retained records; no output consumed.", map[string]any{"handle": str("Task ID or current name"), "name": str("New process-wide unique retained task alias: 1..64 ASCII letters/digits/._-, first character alphanumeric; sN/taskN forms reserved. Stable ID unchanged; old alias stops resolving.")}, "handle", "name")
-	add("sess_reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
+	add("rename", "Rename a session alias without changing its stable ID, connection or running tasks. Names must be unique among retained/pending sessions. Old alias stops resolving; stable ID remains valid.", map[string]any{"session": str("Session reference: stable sN ID or current name, both use this same parameter; name only assigns/renames an alias"), "name": str("New unique session alias: 1..64 ASCII letters/digits/._-, first character alphanumeric; sN/taskN forms reserved. Stable ID unchanged; old alias stops resolving.")}, "session", "name")
+	add("task_rename", "Rename a retained task alias; stable taskN ID remains valid. Task names are process-wide unique among retained records; no output consumed.", map[string]any{"handle": str("Task reference: stable taskN ID or current name, both use handle; name only assigns/renames an alias"), "name": str("New process-wide unique retained task alias: 1..64 ASCII letters/digits/._-, first character alphanumeric; sN/taskN forms reserved. Stable ID unchanged; old alias stops resolving.")}, "handle", "name")
+	add("reconnect", "Explicitly replace an existing connection using its private original connection parameters and current config. Preserve handle; discard old output. No application input, login dialog or command replay. Discards retained task handles. SSH authentication runs normally. Busy while reading/writing/configuring or exec running. Failed reconnect retains parameters for explicit retry; close releases them.", session(), "session")
 	p = session()
 	p["config"] = configSchema(false)
 	p["instance_name"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 64, "description": "Instance label: 1..64 printable Unicode characters, no surrounding whitespace. Supply alone without session settings; no remote I/O. Shown in the shared Web interface and archives; instance_id stays unchanged."}
-	add("sess_configure", "Without session: set instance_name (display label). With session alone: inspect effective config. With session and patches: atomically update defaults; omitted fields unchanged. Cannot mix instance and session changes. Current readers/writers retain snapshots; read_only changes during application writes return busy with the entire patch unchanged. Connection-only settings and read_only can be changed only here or at connect, never as operation overrides. No authentication data returned.", p)
-	defs["sess_configure"]["inputSchema"].(map[string]any)["oneOf"] = []any{
+	add("configure", "Without session: set instance_name (display label). With session alone: inspect effective config. With session and patches: atomically update defaults; omitted fields unchanged. Cannot mix instance and session changes. Current readers/writers retain snapshots; read_only changes during application writes return busy with the entire patch unchanged. Connection-only settings and read_only can be changed only here or at connect, never as operation overrides. No authentication data returned.", p)
+	defs["configure"]["inputSchema"].(map[string]any)["oneOf"] = []any{
 		map[string]any{"required": []string{"instance_name"}, "not": map[string]any{"required": []string{"session"}}},
 		map[string]any{"required": []string{"session"}, "not": map[string]any{"required": []string{"instance_name"}}},
 	}
-	add("sess_get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
-	add("sess_list", "List retained process-local sessions, names, transport/exec state, instance_id and shared Web URL/status without consuming output. For unknown handles, inspect this list and sess_task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.", map[string]any{})
-	add("sess_close", "Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
-	add("sess_close_all", "Close every session, discard buffers, tasks and private reconnect parameters; cancel pending connects/reconnects so closed handles cannot reappear. Remote programs may keep running. No terminal output returned.", map[string]any{})
-	add("sess_task_close_stdin", "Send SSH stdin EOF to an interactive exec task, leaving stdout/stderr and exit status readable. This is not a Ctrl-D byte or termination signal. read_only blocks it. Idempotent once closed; no output consumed. Bounded by write_timeout_ms; stalled/cancelled writes close shared transport and leave outcomes unknown.", map[string]any{"handle": str("Interactive exec task ID (taskN) or current name alias, from exec started with interactive=true. Not a session ID.")}, "handle")
-	add("sess_task_list", "List retained exec tasks, optionally filtered by session. Does not consume output. Handles are process-local task1, task2, ... and never reused. Finished records expire after 30 minutes and may be evicted earlier at retention limits.", session())
+	add("get_config", "All effective settings with units, descriptions and actual platform TCP queue capability; no credentials.", session(), "session")
+	add("list", "List retained process-local sessions, names, transport/exec state, instance_id, api_contract, available_profiles (names only) and shared Web URL/status without consuming output. For unknown handles, inspect this list and task_list before any further input; handles may have closed, expired or belonged to a previous process. Never replay commands to recreate missing state.", map[string]any{})
+	add("close", "Discard this connection, all task handles and all buffers. Remote programs are not guaranteed to terminate. No terminal output returned; subsequent reads fail. Does not wait for readers/writers.", session(), "session")
+	add("close_all", "Close every session, discard buffers, tasks and private reconnect parameters; cancel pending connects/reconnects so closed handles cannot reappear. Remote programs may keep running. No terminal output returned.", map[string]any{})
+	add("task_close_stdin", "Send SSH stdin EOF to an interactive exec task, leaving stdout/stderr and exit status readable. This is not a Ctrl-D byte or termination signal. read_only blocks it. Idempotent once closed; no output consumed. Bounded by write_timeout_ms; stalled/cancelled writes close shared transport and leave outcomes unknown.", map[string]any{"handle": str("Interactive exec task ID (taskN) or current name alias, from exec started with interactive=true. Not a session ID.")}, "handle")
+	add("task_list", "List retained exec tasks, optionally filtered by session. Does not consume output. Handles are process-local task1, task2, ... and never reused. Finished records expire after 30 minutes and may be evicted earlier at retention limits.", session())
 	for _, kind := range []string{"status", "wait", "signal", "release"} {
-		p := map[string]any{"handle": str("Stable exec task ID (e.g. task22) or its current name alias; never a connection session ID. Unknown handle: inspect sess_task_list, do not replay the command.")}
+		p := map[string]any{"handle": str("Stable exec task ID (e.g. task22) or its current name alias; never a connection session ID. Unknown handle: inspect task_list, do not replay the command.")}
 		required := []string{"handle"}
 		desc := ""
 		switch kind {
@@ -404,7 +451,7 @@ func buildDefinitions() map[string]map[string]any {
 		case "release":
 			desc = "Delete a finished task record and retained output. Running/unknown tasks and active operations return busy; use signal to request termination and inspect completion first. Connection close discards all associated handles without guaranteeing remote exit."
 		}
-		add("sess_task_"+kind, desc, p, required...)
+		add("task_"+kind, desc, p, required...)
 	}
 	for _, kind := range []string{"exec", "send_text", "send_escaped", "sendline_text", "sendline_escaped", "read_available", "read_until", "read_tail", "read_history"} {
 		p := session()
@@ -422,7 +469,7 @@ func buildDefinitions() map[string]map[string]any {
 			p["command"] = str("Remote shell command text, interpreted by Bash when login=true (default) or cwd/env is supplied. Supply actual shell syntax without an extra shell-quoting layer; cwd/env values are quoted internally. Each exec has independent shell state; cd/export do not persist to later tasks. Encoded command including Bash/environment wrapper must fit max_input_bytes. Never retry solely because output is empty or waiting timed out.")
 			p["interactive"] = map[string]any{"type": "boolean", "default": false, "description": "Explicitly retain task stdin before startup; send tools can then target its handle. Default false delivers stdin EOF. Cannot enable after startup. Does not change collection or timeout defaults."}
 			p["pty"] = map[string]any{"type": "boolean", "default": false, "description": "Request vt100 PTY before exec startup; requires interactive=true. May change echo, line endings and stdout/stderr separation."}
-			desc = "Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with sess_task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
+			desc = "Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
 		case "send_text", "sendline_text":
 			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
 			required = append(required, "data")
@@ -462,12 +509,12 @@ func buildDefinitions() map[string]map[string]any {
 			}
 			desc += " Exec tasks require handle only (delete session); streams require session only (delete handle). Output projection options preserve raw history/offsets, scan at most 64KiB/page, and report scan_limit/view_incomplete plus filter counters. Ordinary read/send collection timeouts never send TERM. Empty output includes an explanatory comment; it is not evidence of execution/authentication success."
 		}
-		add("sess_"+kind, desc, p, required...)
+		add(""+kind, desc, p, required...)
 		if strings.HasPrefix(kind, "read_") || strings.HasPrefix(kind, "send") {
-			defs["sess_"+kind]["inputSchema"].(map[string]any)["oneOf"] = []any{map[string]any{"required": []string{"session"}}, map[string]any{"required": []string{"handle"}}}
+			defs[""+kind]["inputSchema"].(map[string]any)["oneOf"] = []any{map[string]any{"required": []string{"session"}}, map[string]any{"required": []string{"handle"}}}
 		}
 	}
-	defs["sess_help"] = helpToolSchema()
+	defs["help"] = helpToolSchema()
 	// Present one flat parameter namespace to MCP clients for every tool.
 	for _, def := range defs {
 		input := def["inputSchema"].(map[string]any)
@@ -694,7 +741,7 @@ func (s *Server) Serve(parent context.Context, in io.Reader, out io.Writer) erro
 				default:
 					version = "2025-11-25"
 				}
-				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID(), "web": s.webInfo()}, "instructions": residentInstructions}, 0, "")
+				send(m.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "keepsess", "version": buildinfo.String()}, "_meta": map[string]any{"instance_id": s.Manager.InstanceID(), "api_contract": APIContract, "available_profiles": s.profileNames(), "web": s.webInfo()}, "instructions": residentInstructions}, 0, "")
 			case "ping":
 				send(m.ID, map[string]any{}, 0, "")
 			case "tools/list":
