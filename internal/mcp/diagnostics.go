@@ -15,7 +15,8 @@ const APIContract = "2"
 // These are corrections, not accepted aliases. Never reinterpret units or send
 // a modified request automatically. Only suggest fields supported by this tool.
 var parameterCorrections = map[string]string{
-	"exec_timeout_ms": "exec_total_timeout_ms", "exec_timeout": "exec_total_timeout_ms",
+	"exec_timeout_ms": "timeout_ms", "exec_timeout": "timeout_ms",
+	"execution_timeout": "timeout_ms",
 	"max_output_tokens": "max_output_bytes", "max_output": "max_output_bytes",
 	"task": "handle", "task_id": "handle", "session_id": "session",
 	"jumps": "ssh_jumps", "text": "data", "cmd": "command",
@@ -31,12 +32,12 @@ func argumentError(tool, key string, missing bool) error {
 	candidate := parameterCorrections[key]
 	if key == "timeout" || key == "timeout_ms" {
 		if tool == "exec" || tool == "task_wait" {
-			candidate = "exec_total_timeout_ms"
+			candidate = "timeout_ms"
 		} else if tool == "read_until" || strings.HasPrefix(tool, "send") {
 			candidate = "read_total_timeout_ms"
 		}
 	}
-	if field, ok := props[candidate].(map[string]any); ok && !missing {
+	if field, ok := props[preferredParameter(tool, candidate)].(map[string]any); ok && !missing {
 		message += fmt.Sprintf("; use %q: %s", candidate, field["description"])
 		if key == "max_output_tokens" {
 			message += " Bytes are not tokens; choose a byte limit explicitly."
@@ -81,7 +82,7 @@ func minimalExample(tool string) map[string]any {
 		out["command"] = "pwd"
 		out["session"] = "s1"
 		c := core.DefaultConfig("ssh")
-		out["exec_total_timeout_ms"] = c.ExecTotalTimeoutMS
+		out["timeout_ms"] = c.ExecTotalTimeoutMS
 		out["max_output_bytes"] = c.MaxOutputBytes
 		out["term_on_timeout"] = c.TermOnTimeout
 	case strings.HasPrefix(tool, "send"):
@@ -149,7 +150,7 @@ func explainResult(v core.Result, tool string, keys map[string]json.RawMessage) 
 			if raw != nil {
 				var value any
 				if json.Unmarshal(raw, &value) == nil {
-					v.NextArguments[key] = value
+					v.NextArguments[preferredParameter(v.NextAction, key)] = value
 				}
 			}
 		}

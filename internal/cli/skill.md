@@ -18,7 +18,7 @@ Clients may prepend `keepsess_`; use the exact discovered tool name. Refresh
   `taskN` OR the current task name. `name` only assigns/renames; never use it to select.
   Both references remain usable; old names stop resolving after rename. Reserved
   `sN`/`taskN` forms cannot be assigned as names.
-- Parameters are top-level. `exec_total_timeout_ms=120000`,
+- Parameters are top-level. `timeout_ms=120000`,
   `max_output_bytes=65536`, `term_on_timeout=true` are exec defaults.
   `task_signal(handle, signal)` selects a task; send/read uses `session` for streams
   OR `handle` for exec tasks. Byte limits are not token limits.
@@ -41,6 +41,22 @@ build identity; the 0.3 API replaces interact/read and old wait/input_id paramet
 Optional audit: `serve --log /private/path/audit.jsonl`. Authentication fields are redacted;
 commands and send data are recorded and can contain secrets. SSH host-key verification is optional and skipped by default;
 provide known_hosts or host_key explicitly when verification is required.
+
+
+Parameter aliases are a fixed accepted vocabulary, never fuzzy spelling or unit conversion.
+Discovery/help show one preferred field per meaning; field descriptions list aliases.
+- exec/task_wait: prefer timeout_ms; accept exec_timeout_ms, execution_timeout_ms, exec_total_timeout_ms.
+- connect/configure: prefer exec_timeout_ms; accept execution_timeout_ms, exec_total_timeout_ms; timeout_ms is not accepted.
+- Prefer read_timeout_ms; accept read_total_timeout_ms.
+- read_idle_timeout_ms accepts read_idle_ms; session_idle_timeout_ms accepts session_idle_ms.
+- Prefer encode_errors/decode_errors; accept encode_error/decode_error, input_encode_errors/output_decode_errors, and input_encode_error_action/output_decode_error_action respectively. Strategy values are unchanged.
+- include_pattern/exclude_pattern/end_pattern also accept include_regex/exclude_regex/end_regex.
+- command/data/session accept cmd/text/session_id; exec task handle accepts task_id (never a tunnel handle).
+Aliases apply only where the original field is accepted. Multiple names must agree:
+numeric arithmetic is compared after evaluation, strings exactly. Conflicts fail before
+any operation or output consumption. Top-level values override legacy nested config;
+normalize aliases separately within each layer. Nested config accepts only configuration
+aliases. Returned config keeps its existing field names. Python methods accept aliases too.
 
 ## Human Web terminal and persistent history
 
@@ -202,7 +218,7 @@ reconnect; explicitly pass those settings again for a new connect.
 Defaults: read total 30000ms; read idle 500ms; exec total 120000ms; connect/write 10000ms; unused session 7200000ms;
 TCP keepalive 15000ms; max input 4096 bytes; max output 65536 bytes; encoding utf-8; end_pattern
 empty (disabled). Idle read/session timeout and keepalive accept 0 to disable; total read must
-be 1..110000ms; exec_total_timeout_ms is 1..300000ms. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
+be 1..110000ms; timeout_ms is 1..300000ms. One RPC is capped at 115s. Numeric config accepts integers or simple arithmetic
 strings such as "30*60*1000", without function calls or arbitrary evaluation.
 
 ## Explicit reconnect
@@ -283,7 +299,7 @@ do not guarantee the console server broadcasts output or permits concurrent conn
 
 
 - For exec, session may be omitted: infer it only with exactly one retained session, counting disconnected and stream sessions too. No sessions: connect first. Multiple sessions: specify session explicitly; never select by connectivity, mode or recency. A disconnected sole session requires explicit reconnect. Explicit invalid sessions never fall back. Results retain the actual session. Task tools still require handle; task_list() still lists all tasks.
-- `exec(command, session?, exec_total_timeout_ms?, term_on_timeout?, ...settings?)`: **SSH mode=exec only**, with stdin EOF by default.
+- `exec(command, session?, timeout_ms?, term_on_timeout?, ...settings?)`: **SSH mode=exec only**, with stdin EOF by default.
   SSH mode=stream and all Telnet sessions immediately return a tool error without sending
   input; there is no fallback to a shell. Use sendline_text/send_escaped for
   interactive streams, never probe the same command with exec first. Uses a fresh SSH channel on the
@@ -291,11 +307,14 @@ do not guarantee the console server broadcasts output or permits concurrent conn
   exit status determine completion, never text markers. If running=true, read the existing
   operation; do not resubmit. Missing exit status is an unknown outcome with warning and no
   exit_code; transport remains usable. exec_finish means channel completion, not success.
-  Use top-level exec_total_timeout_ms and term_on_timeout for per-call completion waiting. They override session defaults and legacy nested config values without changing session config.
+  Prefer timeout_ms on exec/task_wait; exec_total_timeout_ms remains a compatibility alias.
+  Both top-level names must evaluate equally if supplied together, or fail before input.
+  connect/configure prefer exec_timeout_ms; returned config keeps exec_total_timeout_ms. timeout_ms is operation-only.
+  Use top-level timeout_ms and term_on_timeout for per-call completion waiting. They override session defaults and legacy nested config values without changing session config.
   **exec ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern**, from BOTH
-  persistent and per-call config. It waits on independent exec_total_timeout_ms (default 120000,
+  persistent and per-call config. It waits on independent timeout_ms (default 120000,
   range 1..300000), measured from collection after command startup; startup still has
-  write_timeout_ms and the whole RPC cap remains 115s. Set top-level exec_total_timeout_ms for a
+  write_timeout_ms and the whole RPC cap remains 115s. Set top-level timeout_ms for a
   different execution wait, not a read timeout. Quiet commands and prompt-like text must not
   end the exec wait. collect_output=false returns a process-local task handle (task1, task22, ...)
   after startup, without an execution wait or background runtime timer. Async tasks may run
@@ -320,7 +339,7 @@ Every task_wait starts a fresh completion-wait budget. Collection returns wait_e
 Task operations (30 tools total):
 - task_list(session?): list retained tasks; no output consumption.
 - task_status(handle): immediate state, exit information, more, latest signal; no consumption.
-- task_wait(handle, exec_total_timeout_ms?, term_on_timeout?, ...settings?): completion wait plus incremental collection; uses exec_total_timeout_ms
+- task_wait(handle, timeout_ms?, term_on_timeout?, ...settings?): completion wait plus incremental collection; uses timeout_ms
   and term_on_timeout, ignoring read timeouts/patterns. Never launches input or takes the sync exec slot.
 - task_signal(handle, signal): bounded SSH signal, e.g. TERM/INT/KILL (without SIG prefix).
   read_only blocks manual and automatic signals. request_state is sent/not_sent/unknown,
@@ -498,7 +517,7 @@ End reasons: exec_finish (exec only), match, total_timeout, idle_timeout, aborte
 output_limit, closed. Immediate reads need no reason when current data is exhausted. Total
 clock starts at read invocation; idle starts then and resets on endpoint bytes. These read
 conditions apply to read tools and stream-send collection, not exec. Its total_timeout
-is instead governed by exec_total_timeout_ms and may attempt TERM as described above. Ordinary read timeouts leave
+is instead governed by timeout_ms and may attempt TERM as described above. Ordinary read timeouts leave
 connections open. end_pattern matches DECODED unread output, including bytes received before
 this send; it does not match reason/error fields. Match consumes only through the match, leaving
 later output unread. Never infer input/output pairing or successful execution from it.

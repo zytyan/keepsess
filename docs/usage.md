@@ -275,7 +275,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | configure | session、顶层配置字段；原子更新出现的字段，其余不变；或仅传 instance_name 命名实例，不与会话配置混用 |
 | get_config | session；有效配置、单位、说明和平台能力，不包含认证秘密 |
 | list | 无参数；列出连接和 exec 状态 |
-| exec | session?、command、name?、login?、cwd?、env?、interactive?、pty?、collect_output?、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 exec_total_timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
+| exec | session?、command、name?、login?、cwd?、env?、interactive?、pty?、collect_output?、timeout_ms?、term_on_timeout?、其他顶层配置?；SSH exec，独立 timeout_ms 等待协议完成，忽略 read 超时与 end_pattern |
 | send_text | session 或 handle（二选一）、data、collect_output?、其他顶层配置?；发送文字并默认收集输出，不解析转义 |
 | send_escaped | 同上；显式解码一层转义再发送 |
 | sendline_text | 同 text，追加一次配置的 line_end |
@@ -286,7 +286,7 @@ JSON/JSONC 合并保留注释、尾逗号与其他字段；TOML 对已识别服�
 | read_history | session 或 handle（二选一）、offset?、其他顶层配置?；立即分页读取保留历史，不移动增量游标 |
 | task_list | session?；列出保留任务，不消费输出 |
 | task_status | handle；任务状态、退出信息和 stdin_open |
-| task_wait | handle、exec_total_timeout_ms?、term_on_timeout?、其他顶层配置?；等待任务完成并收集增量输出 |
+| task_wait | handle、timeout_ms?、term_on_timeout?、其他顶层配置?；等待任务完成并收集增量输出 |
 | task_signal | handle、signal；请求 SSH 信号，不保证退出 |
 | task_release | handle；释放已完成且无活动操作的任务记录 |
 | task_close_stdin | handle；向 interactive 任务发送 SSH stdin EOF，不消费输出、不关闭连接 |
@@ -314,6 +314,24 @@ help(topic="configuration", parameter="line_end") # 配置默认值/协议差异
 全部工具统一使用完整描述，不再提供 tool_profile 切换；运行时协议和配置默认值保持不变；原来已接受但对该操作无效的配置覆盖保持运行时兼容，发现列表和 help 不再推荐它们。数字配置仍支持整数及算术字符串。完整 skill 是可选流程参考，不要求常驻或每次查 help。
 
 所有工具的配置参数都直接写在顶层，例如 `configure({"session":"s1","read_only":true})`，或 `read_until({"session":"s1","read_total_timeout_ms":10000})`。工具 schema 不再暴露 `config` 对象；返回结果中的 `config` 仍用于展示当前会话配置。
+
+固定参数别名只在 MCP 绑定层归一化，不做模糊拼写、单位换算或自动重试。发现/help 每个含义只展示一个首选字段，说明列出兼容名；旧配置结果及磁盘/daemon 格式不变。
+
+| 首选展示 | 接受的其他名称 |
+|---|---|
+| exec/task_wait: `timeout_ms` | `exec_timeout_ms`、`execution_timeout_ms`、`exec_total_timeout_ms` |
+| connect/configure: `exec_timeout_ms` | `execution_timeout_ms`、`exec_total_timeout_ms` |
+| `read_timeout_ms` | `read_total_timeout_ms` |
+| `read_idle_timeout_ms` | `read_idle_ms` |
+| `session_idle_timeout_ms` | `session_idle_ms` |
+| `encode_errors` | `encode_error`、`input_encode_errors`、`input_encode_error_action` |
+| `decode_errors` | `decode_error`、`output_decode_errors`、`output_decode_error_action` |
+| `include_pattern` / `exclude_pattern` / `end_pattern` | `include_regex` / `exclude_regex` / `end_regex` |
+| `command` / `data` / `session` | `cmd` / `text` / `session_id` |
+| 任务 `handle` | `task_id`（不用于隧道 handle） |
+
+别名仅适用于原字段允许的工具；`timeout_ms` 仍仅用于 exec/task_wait。多名称同值接受，数字按有界整数表达式求值后比较，字符串精确比较；冲突或非法参数不执行操作、不消费输出。顶层与旧嵌套 config 分层归一化，顶层覆盖嵌套；嵌套 config 只支持配置字段别名。值的含义和范围不变，例如 bytes 不转换成 tokens，编解码策略值不自动映射。Python 同步/异步方法也接受这些别名。
+
 
 会话和任务命名：connect/exec 可传顶层 `name`，默认仍返回稳定 `sN` / `taskN` ID。`session` 或 `handle` 也接受当前名字作为别名；结果中的 session/handle 始终是稳定 ID，name 单独返回。使用 `rename({"session":"s1","name":"prod"})` 和 `task_rename({"handle":"task1","name":"build"})` 更新别名；旧别名立即失效，稳定 ID 仍有效。名字限 1..64 个 ASCII 字母、数字、点、下划线或短横线，首位须字母/数字，`sN/taskN` 保留。会话名与任务名分别唯一；会话连接期间也预留名字，任务名在发送 exec 请求前原子预留，重复名字不发送。名字只在当前保留记录内有效，释放后可复用；长流程优先保留稳定 ID。
 
@@ -542,14 +560,16 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 
 ## SSH exec 与连接保护
 
-**exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次顶层参数，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 exec_total_timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
+**exec 不使用 read_total_timeout_ms、read_idle_timeout_ms 或 end_pattern。** 无论这些值来自会话配置还是本次顶层参数，命令都不会因静默 500ms、读取时限短或输出碰巧匹配提示符而提前结束等待。它使用独立的 timeout_ms（默认 120000ms，1..300000ms），从命令成功启动后的收集阶段开始计时；channel 建立仍受 write_timeout_ms 约束，整个 RPC 仍有 115s 硬上限。默认完成等待 120s、可设至 300s，但单次 RPC 的 115s 预算先到时仅结束收集、保留 handle，不发送 TERM；继续 task_wait/read。此配置是完成等待读取时限，不是后台命令运行寿命限制，异步启动不建立运行计时器。
 
-`exec_total_timeout_ms` 和 `term_on_timeout` 是 `exec` / `task_wait` 的顶层参数，只影响本次调用。会话默认值仍通过 connect/configure 的顶层参数设置。旧的嵌套 config 调用仅为兼容保留，不再出现在工具 schema；同时提供时顶层值优先。
+`timeout_ms` 是 `exec` / `task_wait` 首选的完成等待参数，兼容旧顶层名称 `exec_total_timeout_ms`；两者同时提供必须求值相等，否则发送前拒绝。两个顶层名称均优先于旧嵌套 `config.exec_total_timeout_ms`。`connect` / `configure` 首选 `exec_timeout_ms`，兼容 `exec_total_timeout_ms` / `execution_timeout_ms`；返回的 `config` 仍使用 `exec_total_timeout_ms`，不接受通用 `timeout_ms`。
+
+`timeout_ms` 和 `term_on_timeout` 是 `exec` / `task_wait` 的顶层参数，只影响本次调用。会话默认值仍通过 connect/configure 的顶层 `exec_total_timeout_ms` / `term_on_timeout` 设置。旧的嵌套 config 调用仅为兼容保留，不再出现在工具 schema；同时提供时顶层值优先。
 
 例如，下面的 exec 最多等待协议完成 60 秒，不改变会话默认设置：
 
 ```json
-{"session":"s1","command":"sleep 2; uname -a","exec_total_timeout_ms":60000,"term_on_timeout":false}
+{"session":"s1","command":"sleep 2; uname -a","timeout_ms":60000,"term_on_timeout":false}
 ```
 
 `collect_output=true`（默认）在同一连接内只允许一个同步 exec 调用，竞争立即返回 busy/not_sent，不排队。同步调用返回时释放名额，包括超时、取消和 output_limit；旧程序仍运行也不阻止下一次同步调用。`collect_output=false` 启动后返回 `handle: "task22"` 与发送回执，不等完成，不启动后台运行计时器；异步任务彼此可并行，也可与同步任务并行。资源上限与服务器 channel 限制仍可能拒绝新任务。
@@ -570,7 +590,7 @@ read_available 立即返回当前未读数据；read_until 从未读游标开始
 exec({"session":"s1","command":"long-job","collect_output":false})
 task_status({"handle":"task22"})
 read_available({"handle":"task22"})
-task_wait({"handle":"task22","exec_total_timeout_ms":10000,"term_on_timeout":false})
+task_wait({"handle":"task22","timeout_ms":10000,"term_on_timeout":false})
 task_signal({"handle":"task22","signal":"TERM"})
 task_wait({"handle":"task22"})
 task_release({"handle":"task22"})

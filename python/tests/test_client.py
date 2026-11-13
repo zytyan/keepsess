@@ -39,6 +39,12 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(client.meta.web.url, 'http://localhost/')
             self.assertEqual(client.list().sessions[0].peer.server, 'fixture')
 
+    def test_explicit_aliases_are_forwarded_without_replay(self):
+        with self.client() as client:
+            result = client.exec(cmd='echo', execution_timeout_ms=20, decode_errors='to_escape_bytes')
+            self.assertEqual(json.loads(result.output), {
+                'cmd': 'echo', 'execution_timeout_ms': 20, 'decode_errors': 'to_escape_bytes'})
+
     def test_error_preserves_receipt_and_handle(self):
         client = self.client()
         with self.assertRaises(ToolError) as caught:

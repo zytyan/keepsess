@@ -68,7 +68,7 @@ func TestFlatConnectConfigureSendReadAndJumpThroughMCP(t *testing.T) {
 	}
 	call("configure", map[string]any{"session": id, "read_only": false})
 	for _, tool := range []string{"send_text", "send_escaped", "sendline_text", "sendline_escaped"} {
-		v = call(tool, map[string]any{"session": id, "data": "display version", "line_end": "\\r", "collect_output": false, "max_input_bytes": 4096})
+		v = call(tool, map[string]any{"session": id, "text": "display version", "line_end": "\\r", "collect_output": false, "max_input_bytes": 4096})
 		if v["input_state"] != "sent" {
 			t.Fatal(v)
 		}

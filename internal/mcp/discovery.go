@@ -3,8 +3,6 @@ package mcp
 import (
 	"encoding/json"
 	"strings"
-
-	"github.com/zytyan/keepsess/internal/core"
 )
 
 // Detailed definitions remain the runtime compatibility contract and help source.
@@ -16,7 +14,7 @@ var toolOrder = []string{"get_file", "put_file", "tunnel_open", "tunnel_list", "
 const residentInstructions = `keepsess API contract 2. Tools are connect/exec/read_available/etc., without sess_; clients may add keepsess_. All 30 schemas include complete parameter details; help is optional. Parameters are top-level.
 Choose before connect: SSH servers -> mode=exec (default), noninteractive Bash login shell; network devices/console shells/Telnet -> mode=stream, sendline_text then read. Never auto-switch mode/replay. interactive=true retains exec stdin; pty=true requires interactive. task_close_stdin sends SSH EOF.
 References: session accepts sN OR current session name; handle accepts taskN OR current task name. name only assigns/renames, never selects. Renaming cannot use sN/taskN patterns. Stream send/read uses session; exec task send/read uses handle; never both. exec can omit session only with exactly one retained session, including disconnected/stream. Unknown reference -> list/task_list, check instance_id; no guessing or replay. connect(profile="NAME") explicitly creates a NEW connection from configured profiles; no automatic last/restore.
-Core defaults: exec(command,exec_total_timeout_ms=120000,max_output_bytes=65536,term_on_timeout=true); task_signal(handle,signal); sendline_text(session|handle,data,collect_output=true). Byte limits are not token limits. send_escaped decodes one visible-escape layer without adding Enter; sendline adds line_end once.
+Core defaults: exec(command,timeout_ms=120000,max_output_bytes=65536,term_on_timeout=true); task_signal(handle,signal); sendline_text(session|handle,data,collect_output=true). Byte limits are not token limits. send_escaped decodes one visible-escape layer without adding Enter; sendline adds line_end once.
 output_limit/scan_limit -> continue same reference using next_action/next_arguments; never rerun input. busy -> let active operation return, no polling exec. start/end are raw offsets, more means unread retained bytes; dropped_bytes is irreversible history loss. RPC budget expiry keeps handle without TERM; continue wait/read. Only configured exec completion timeout may attempt TERM. Missing exit status is unknown outcome.
 Never replay on silence/timeouts; never infer execution/authentication success/failure from empty output. sent/written_bytes confirm local writing only. read_only is set only by connect/configure. After first successful connect use configure(instance_name="work label"). initialize._meta/list expose instance_id, api_contract, available_profiles and Web status. Long workflows: help(topic=tool_or_topic,parameter=optional_field) or query.`
 
@@ -54,18 +52,10 @@ func cloneMap(value map[string]any) map[string]any {
 // escaping constraints exactly when a model needs them to construct a call.
 func buildPublicDefinitions(full map[string]map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any, len(full))
-	configKeys := core.ConfigDescriptions()
 	for name, original := range full {
 		def := cloneMap(original)
 		input := def["inputSchema"].(map[string]any)
-		props := input["properties"].(map[string]any)
-		for key, field := range props {
-			if _, config := configKeys[key]; config && !applicableConfig(name, key) {
-				delete(props, key)
-				continue
-			}
-			props[key] = documentedField(key, field.(map[string]any))
-		}
+		input["properties"] = preferredProperties(name, input["properties"].(map[string]any))
 		out[name] = def
 	}
 	return out

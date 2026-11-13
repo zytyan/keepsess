@@ -34,12 +34,12 @@ func TestActionableArgumentErrorsDoNotStartTasks(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"exec", map[string]any{"command": "secret command", "exec_timeout_ms": 12}, "exec_total_timeout_ms"},
+		{"exec", map[string]any{"command": "secret command", "execution_timeout": 12}, "timeout_ms"},
 		{"exec", map[string]any{"command": "secret command", "max_output_tokens": 12}, "Bytes are not tokens"},
 		{"task_signal", map[string]any{"task": "task1", "signal": "TERM"}, "handle"},
 		{"task_signal", map[string]any{"handle": "task1"}, "signal"},
 		{"connect", map[string]any{}, "protocol"},
-		{"sendline_text", map[string]any{"session": "s1", "text": "secret password"}, "data"},
+		{"sendline_text", map[string]any{"session": "s1", "text_data": "secret password"}, "data"},
 	} {
 		v := directCall(t, s, tc.tool, tc.args)
 		message, _ := v["error"].(string)

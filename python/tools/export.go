@@ -38,6 +38,25 @@ func main() {
 		}
 		props["config"] = map[string]any{"type": "object", "description": "Legacy nested configuration; prefer top-level arguments. Explicit top-level values win."}
 	}
+	for _, raw := range tools {
+		tool := raw.(map[string]any)
+		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		for alias, canonical := range mcp.AcceptedParameterAliases(tool["name"].(string)) {
+			if field, ok := props[canonical]; ok && props[alias] == nil {
+				props[alias] = field
+				encoded, _ := json.Marshal(tool["inputSchema"].(map[string]any)["required"])
+				var required []string
+				_ = json.Unmarshal(encoded, &required)
+				kept := []string{}
+				for _, key := range required {
+					if key != canonical {
+						kept = append(kept, key)
+					}
+				}
+				tool["inputSchema"].(map[string]any)["required"] = kept
+			}
+		}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(tools); err != nil {
 		panic(err)
 	}

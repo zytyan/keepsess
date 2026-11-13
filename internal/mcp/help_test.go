@@ -122,7 +122,7 @@ func TestHelpReadOnlyStandaloneAndDiscoveryIsolation(t *testing.T) {
 		}
 	}
 	props := publicDefinitions["exec"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
-	if props["read_total_timeout_ms"] != nil || props["exec_total_timeout_ms"] == nil || props["login"].(map[string]any)["default"] != true {
+	if props["read_total_timeout_ms"] != nil || props["timeout_ms"] == nil || props["login"].(map[string]any)["default"] != true {
 		t.Fatal("exec discovery semantics lost", props)
 	}
 }

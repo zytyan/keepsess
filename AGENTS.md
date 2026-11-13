@@ -5,7 +5,7 @@
 - SSH 复用 golang.org/x/crypto/ssh。用户最新要求：Telnet 使用内部实现，禁止重新引入要求更高 Go 补丁版本的 Telnet 库。
 - Go 1.22（固定目标补丁版本 1.22.1），纯 Go、CGO_ENABLED=0；依赖不得要求高于 Go 1.22。
 - 交叉编译 linux/amd64、linux/arm64、windows/amd64。
-- 进程内持久 SSH/Telnet 连接；无需重启恢复。exec 仅适用于 SSH mode=exec，默认非交互，interactive=true 显式保留 stdin、pty=true 必须搭配 interactive，stream 直接报错且不发送输入；标准 SSH 优先 exec，以 SSH exit-status/exit-signal 判断完成，合并 stdout/stderr，禁止结束标记猜测。exec 使用独立 exec_total_timeout_ms（默认 120000ms，1..300000ms），忽略 read_total_timeout_ms/read_idle_timeout_ms/end_pattern；term_on_timeout 默认 true，完成等待超时尝试一次 TERM，不保证退出；false 仅结束等待。普通 read 超时、取消收集和输出上限不发送信号。后续 read 使用 handle 和独立 read 配置。
+- 进程内持久 SSH/Telnet 连接；无需重启恢复。exec 仅适用于 SSH mode=exec，默认非交互，interactive=true 显式保留 stdin、pty=true 必须搭配 interactive，stream 直接报错且不发送输入；标准 SSH 优先 exec，以 SSH exit-status/exit-signal 判断完成，合并 stdout/stderr，禁止结束标记猜测。exec/task_wait 首选顶层 timeout_ms，兼容 exec_total_timeout_ms；两个顶层名称同值接受、异值发送前拒绝，均覆盖旧嵌套配置。connect/configure 首选 exec_timeout_ms，兼容 exec_total_timeout_ms/execution_timeout_ms；返回 config 保留 exec_total_timeout_ms，不接受 timeout_ms。exec 使用独立完成等待时限（默认 120000ms，1..300000ms），忽略 read_total_timeout_ms/read_idle_timeout_ms/end_pattern；term_on_timeout 默认 true，完成等待超时尝试一次 TERM，不保证退出；false 仅结束等待。普通 read 超时、取消收集和输出上限不发送信号。后续 read 使用 handle 和独立 read 配置。
 - API 采用 30 工具（含 help、rename/task_rename）：配置、exec、四种 send/sendline、四种 read、连接管理、task_list/status/wait/signal/release/close_stdin、get_file/put_file 和 tunnel_open/list/close。读取 total=30000ms、idle=500ms，end_pattern 默认禁用，任一条件返回；配置可按调用覆盖且不污染全局。任何调用不得无限等待。
 - 独立端点静默保护、连接/握手/写入超时、RPC 上限、stdio 并发调度、有界队列及有界历史，防止半开连接和队头阻塞。整个调用小于两分钟，read_total_timeout_ms 最大 110000；正常读超时不关闭连接。exec 不设无输出静默保护；无活动调用会话按 session_idle_timeout_ms 回收（默认 2h，0 禁用），不能因分析/审批无输出在 110s 自动关闭。
 - 默认增量输出；all/tail 可读取保留的历史，并明确报告截断/丢失；缓慢端点必须返回反压信息，禁止无限输入堆积。
@@ -67,5 +67,5 @@
 
 - 连接管理：成功 connect/reconnect 按 instance/session 保存私有连接资料，成功重连更新时间，失败不覆盖；目录 0700、文件 0600，目标及全部跳板密码明文保存，排除私钥内容/口令。资料与普通事件/终端历史分离，关闭 Web 注册或 daemon 不可用仍尝试保存；有界异步写入，故障不阻塞远端且明确报告。浏览器连接管理跨活动/归档以用户名/地址/端口/协议聚合，不显示session；密码变化自动更新并私有保留历史（含跳板），连续相同值不重复记录。底层兼容实例/session资料，变化前快照独立存于connections/versions；默认只返回密码存在性/历史数量，勾选后经同源 POST 获取当前及历史密码，取消/切换/关闭清除页面明文，不进入 localStorage。Telnet 仅人工补录目标用户名/密码，明确未验证，不发送输入、不修改运行时/重连参数，成功重连保留补录。旧实例不反推密码；资料禁止发布。
 
-- 工具 API 契约 2：公开工具名删除 sess_，不增加旧名前缀别名；客户端可添加 keepsess_。initialize._meta/list 展示 api_contract，常驻短指引与完整发现自解释。参数错误只给纠正和示例，不接受猜测拼写或自动换算 tokens/bytes；busy/output_limit 给出有界、无重放的下一步提示，历史续读保持 offset/投影语义。
+- 工具 API 契约 2：公开工具名删除 sess_，不增加旧名前缀别名；客户端可添加 keepsess_。initialize._meta/list 展示 api_contract，常驻短指引与完整发现自解释。参数只接受 internal/mcp 固定别名表，发现每个含义仅展示首选字段并注明别名；多名称同值接受、异值操作前拒绝，数字表达式求值比较、字符串精确比较，顶层覆盖旧嵌套。参数错误只给纠正和示例，不接受猜测拼写或自动换算 tokens/bytes；busy/output_limit 给出有界、无重放的下一步提示，历史续读保持 offset/投影语义。
 - 命名连接 profile 来自 ~/.keepsess.toml 的 [profiles.NAME]，启动读取，最多64个；显式 connect(profile=...) 只建新连接、不恢复/重放，不提供 last。配方必填 protocol/host/port/mode，禁止按调用修改目的地/路由/信任；可覆盖目标认证及配置。与历史连接资料分离；不存私钥内容/口令，Unix配置0600，密码明文不得发布。

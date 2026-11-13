@@ -93,7 +93,7 @@ while True:
         raise TimeoutError(f"等待预算耗尽，任务可能继续运行：{task.handle}")
     page = ks.task_wait(
         handle=task.handle,
-        exec_total_timeout_ms=min(110_000, remaining_ms),
+        timeout_ms=min(110_000, remaining_ms),
         term_on_timeout=False,
     )
     print(page.output, end="")
@@ -170,3 +170,5 @@ PYTHONPATH=python KEEPSESS_TEST_BINARY=/tmp/keepsess-sdk \
 `GO=/path/to/go` 可为生成脚本指定 Go 路径。生成的 API 已纳入源码，普通安装和导入无需运行生成器。SDK 提供全部 30 个同名方法；MCP tools/list 同样统一展示全部 30 个工具，不存在隐藏工具或发现分组。
 
 工具改名后，`close(session="s1")` 只关闭该会话，`close()` 无参数仍关闭整个 SDK 客户端；上下文管理器退出采用后者。
+
+参数名与兼容别名：MCP 发现只展示首选字段，Python 显式方法同时保留兼容写法。例如 `exec(cmd="pwd", execution_timeout_ms=10000)` 与 `exec(command="pwd", timeout_ms=10000)` 等价。`read_timeout_ms` 兼容 `read_total_timeout_ms`，`encode_errors` / `decode_errors` 兼容原编解码错误策略字段；返回的 config 仍使用原字段名。同层多个名称必须同值，冲突由引擎在操作前拒绝，不自动重试或转换单位。

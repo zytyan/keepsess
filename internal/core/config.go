@@ -219,6 +219,11 @@ func applyConfig(c Config, patch ConfigPatch, override bool) (Config, error) {
 	}
 	return c, nil
 }
+
+// ConfigInteger parses the bounded integer/arithmetic syntax used by configuration.
+// Bindings use it to compare explicit numeric aliases without converting units.
+func ConfigInteger(raw json.RawMessage) (int64, error) { return integer(raw) }
+
 func integer(raw json.RawMessage) (int64, error) {
 	str := string(raw)
 	if strings.HasPrefix(str, `"`) {

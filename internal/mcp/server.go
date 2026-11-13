@@ -116,11 +116,14 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) (response any) {
 	if !ok {
 		return toolResult(nil, unknownTool(args.Name))
 	}
+	props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if err := normalizeAliases(args.Name, props, keys, false); err != nil {
+		return toolResult(nil, err)
+	}
 	requestKeys = make(map[string]json.RawMessage, len(keys))
 	for k, v := range keys {
 		requestKeys[k] = v
 	}
-	props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
 	argumentKeys := make([]string, 0, len(keys))
 	for k := range keys {
 		argumentKeys = append(argumentKeys, k)
@@ -192,6 +195,10 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) (response any) {
 				return toolResult(nil, errors.New("legacy config must be an object; supply configuration parameters at the top level"))
 			}
 		}
+		if err := normalizeAliases(args.Name, props, patch, true); err != nil {
+			return toolResult(nil, err)
+		}
+		requestKeys["config"], _ = json.Marshal(patch)
 		for k := range core.ConfigDescriptions() {
 			if raw, ok := keys[k]; ok {
 				patch[k] = raw
@@ -199,8 +206,8 @@ func (s *Server) call(ctx context.Context, p json.RawMessage) (response any) {
 			}
 		}
 		keys["config"], _ = json.Marshal(patch)
-		args.Arguments, _ = json.Marshal(keys)
 	}
+	args.Arguments, _ = json.Marshal(keys)
 	switch args.Name {
 	case "get_file", "put_file":
 		var r core.FileRequest
@@ -443,7 +450,7 @@ func buildDefinitions() map[string]map[string]any {
 			desc = "Immediately inspect task state, exit_code/exit_signal/warning, unread output (more), interactive/pty/stdin_open, and latest signal request. Does not consume output. Missing exit status is unknown outcome even if state=finished."
 		case "wait":
 			p["config"] = configSchema(true)
-			desc = "Wait for this task's completion and consume incremental output. Uses top-level exec_total_timeout_ms and term_on_timeout (override session defaults and legacy config values), ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Configured completion timeout attempts TERM by default and retains handle; RPC budget expiry does not signal. Cancellation/output_limit do not signal. Every call gets a fresh completion budget; results include wait_elapsed_ms, started_at, task_elapsed_ms and timeout_source (exec_wait/rpc_budget/caller_deadline). One reader per task."
+			desc = "Wait for this task's completion and consume incremental output. Uses top-level timeout_ms and term_on_timeout (override session defaults and legacy config values), ignoring read timeouts/patterns. Does not launch/replay input or occupy the synchronous exec slot. Configured completion timeout attempts TERM by default and retains handle; RPC budget expiry does not signal. Cancellation/output_limit do not signal. Every call gets a fresh completion budget; results include wait_elapsed_ms, started_at, task_elapsed_ms and timeout_source (exec_wait/rpc_budget/caller_deadline). One reader per task."
 		case "signal":
 			p["signal"] = map[string]any{"type": "string", "enum": []string{"ABRT", "ALRM", "FPE", "HUP", "ILL", "INT", "KILL", "PIPE", "QUIT", "SEGV", "TERM", "USR1", "USR2"}, "description": "SSH signal name without SIG prefix. sent confirms only the request write, not delivery or program exit. read_only blocks signals."}
 			required = append(required, "signal")
@@ -469,7 +476,7 @@ func buildDefinitions() map[string]map[string]any {
 			p["command"] = str("Remote shell command text, interpreted by Bash when login=true (default) or cwd/env is supplied. Supply actual shell syntax without an extra shell-quoting layer; cwd/env values are quoted internally. Each exec has independent shell state; cd/export do not persist to later tasks. Encoded command including Bash/environment wrapper must fit max_input_bytes. Never retry solely because output is empty or waiting timed out.")
 			p["interactive"] = map[string]any{"type": "boolean", "default": false, "description": "Explicitly retain task stdin before startup; send tools can then target its handle. Default false delivers stdin EOF. Cannot enable after startup. Does not change collection or timeout defaults."}
 			p["pty"] = map[string]any{"type": "boolean", "default": false, "description": "Request vt100 PTY before exec startup; requires interactive=true. May change echo, line endings and stdout/stderr separation."}
-			desc = "Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level exec_total_timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent exec_total_timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
+			desc = "Noninteractive Bash login shell by default (login=true); missing Bash fails without fallback. cwd/env override profiles for this task only. Session may be omitted only when exactly one session is retained; disconnected sessions require explicit reconnect. Results identify the actual session. SSH mode=exec only; default stdin EOF. Explicit interactive=true retains stdin, optionally pty=true for terminal programs such as GDB. Use handle-based send/read, and task_close_stdin for EOF. Persistent stream shells/console logins and all Telnet still use stream send/read; exec rejects those connections. SSH/Telnet stream sessions are rejected immediately without sending input. Top-level timeout_ms and term_on_timeout override session defaults and legacy config values. Wait for protocol completion using independent timeout_ms (default 120000ms, maximum 300000ms). Ignores read_total_timeout_ms, read_idle_timeout_ms and end_pattern. Output limits, cancellation and transport errors can return early. term_on_timeout defaults true: on completion wait timeout attempt TERM once, then return handle regardless of whether the program exited. The 115s RPC budget can expire before that configured timeout: return handle without TERM; continue with task_wait/read instead of starting again. Cancellation/output limits do not signal. All early returns release the synchronous slot. collect_output=false returns a task handle without a runtime timer and permits parallel commands; synchronous calls exclude only other synchronous calls on this session (busy/not_sent, no queue). Sync completion with all output returned omits handle; history remains in task_list. There is no exec silence watchdog. Missing exit status means unknown outcome."
 		case "send_text", "sendline_text":
 			p["data"] = str("Literal text encoded with session encoding; no escape decoding. sendline appends configured line_end exactly once, even if data already ends with it. Empty data allowed.")
 			required = append(required, "data")
@@ -497,7 +504,7 @@ func buildDefinitions() map[string]map[string]any {
 		if kind == "exec" || strings.HasPrefix(kind, "send") {
 			collection := "Default true: after writing collect with read_until. False returns only a send receipt. Per-call settings never change session defaults. strip_ansi/include_pattern/exclude_pattern project output without altering raw history; scanning is bounded at 64KiB and may return scan_limit."
 			if kind == "exec" {
-				collection = "Default true: wait for SSH completion with exec_total_timeout_ms, independent of read settings/patterns. False returns a task handle and startup receipt; no execution wait or background timeout. Per-call config never changes session settings."
+				collection = "Default true: wait for SSH completion with timeout_ms, independent of read settings/patterns. False returns a task handle and startup receipt; no execution wait or background timeout. Per-call config never changes session settings."
 			}
 			p["collect_output"] = map[string]any{"type": "boolean", "default": true, "description": collection}
 		}
@@ -532,6 +539,16 @@ func buildDefinitions() map[string]map[string]any {
 			}
 			input["required"] = required
 		}
+	}
+	for _, name := range []string{"exec", "task_wait"} {
+		props := defs[name]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		field := cloneMap(props["exec_total_timeout_ms"].(map[string]any))
+		field["default"] = core.DefaultConfig("ssh").ExecTotalTimeoutMS
+		field["description"] = "Preferred completion wait for this call; omission inherits the session's exec_total_timeout_ms. Default 120000ms, range 1..300000ms. Integer or arithmetic string (<=128 characters, integer + - * / and parentheses, exact division; no eval/calls). Independent of read timeouts/end_pattern; not a background runtime limit. collect_output=false creates no runtime timer. Only this configured wait timeout may attempt one TERM when term_on_timeout=true (default), without guaranteeing exit. The 115s RPC budget or caller deadline can return a handle earlier without TERM; continue task_wait/read, never relaunch. Overrides legacy nested config without changing session defaults. Compatibility alias: exec_total_timeout_ms; if both top-level names are supplied they must evaluate to the same value, otherwise reject before sending input."
+		props["timeout_ms"] = field
+		legacy := cloneMap(props["exec_total_timeout_ms"].(map[string]any))
+		legacy["description"] = legacy["description"].(string) + " Compatibility name for timeout_ms on exec/task_wait; prefer timeout_ms. If both top-level names are supplied, values must evaluate equally or the call is rejected before input."
+		props["exec_total_timeout_ms"] = legacy
 	}
 	return defs
 }
