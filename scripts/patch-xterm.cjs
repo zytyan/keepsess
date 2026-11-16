@@ -3,6 +3,13 @@
 const fs=require('node:fs'),path=require('node:path');
 const file=path.join(__dirname,'../internal/web/assets/vendor/xterm.js');
 const changes=[
+ ['fill(e,t=!1){if(t)for(let t=0;t<this.length;', 'fill(e,t=!1){if(!t)this._keepsessReceiveTime=void 0;if(t)for(let t=0;t<this.length;'],
+ ['lineFeed(){return this._dirtyRowTracker.markDirty', 'lineFeed(){this._activeBuffer.lines.get(this._activeBuffer.ybase+this._activeBuffer.y)._keepsessReceiveTime=this._keepsessReceiveTime||"";return this._dirtyRowTracker.markDirty'],
+ // Reception metadata follows buffer lines through scrolling and reflow.
+ ['if(i&&this._activeBuffer.x){const e=f.getWidth', 'f._keepsessReceiveTime=this._keepsessReceiveTime||"";if(i&&this._activeBuffer.x){const e=f.getWidth'],
+ ['copyCellsFrom(e,t,i,s,r){const n=e._data;', 'copyCellsFrom(e,t,i,s,r){if(s)this._keepsessReceiveTime=e._keepsessReceiveTime;const n=e._data;'],
+ ['copyFrom(e){this.length!==e.length?', 'copyFrom(e){this._keepsessReceiveTime=e._keepsessReceiveTime;this.length!==e.length?'],
+ ['clone(){const e=new h(0);e._data=', 'clone(){const e=new h(0);e._keepsessReceiveTime=this._keepsessReceiveTime;e._data='],
  // DOM glyphs and cell metrics must share browser font substitution/minimum sizing.
  ['try{this._measureStrategy=this.register(new d(this._optionsService))}catch{this._measureStrategy=this.register(new l(e,t,this._optionsService))}','/* keepsess DOM metrics */this._measureStrategy=this.register(new l(e,t,this._optionsService));'],
  ['this.register(this._renderService.onRenderedViewportChange((e=>this._onRender.fire(e))))','this.register(this._renderService.onRender((e=>this._onRender.fire(e))))'],

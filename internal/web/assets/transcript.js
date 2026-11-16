@@ -182,3 +182,29 @@ class SourceTranscript {
  async latest(){this.windowed=false;if(terminalQuery)await terminalQuery.refresh(true);this.term.scrollToBottom();}
  dispose(){if(this.closed)return;this.clearCommandFlash();this.closed=true;cancelAnimationFrame(this.frame);for(const e of this.events)e.dispose();for(const r of this.rows){r.marker?.dispose();r.end?.dispose();}this.rows=[];this.rendered=[];this.states.clear();this.commands.clear();if(typeof transcript!=='undefined'&&transcript===this)document.getElementById('source-gutter').replaceChildren();}
 }
+
+// Keep the actual stream parser and its buffer lines; never project terminal data.
+class StreamTimes {
+ constructor(term){
+  this.term=term;this.frame=0;this.closed=false;
+  this.events=[term.onRender(()=>this.paint()),term.onScroll(()=>this.paint()),term.onResize(()=>this.paint())];
+  term.register({dispose:()=>{this.closed=true;cancelAnimationFrame(this.frame);for(const e of this.events)e.dispose();}});
+ }
+ paint(){if(this.closed||this.frame)return;this.frame=requestAnimationFrame(()=>{this.frame=0;this.paintNow();});}
+ paintNow(){
+  if(this.closed||streamView?.term!==this.term)return;
+  const host=document.getElementById('source-gutter'),expanded=preferences.gutterExpanded,term=this.term;
+  host.classList.add('time-only');host.classList.toggle('expanded',expanded);host.setAttribute('aria-expanded',String(expanded));host.setAttribute('aria-label',expanded?'收起接收时间':'展开接收时间');document.getElementById('gutter-toggle').setAttribute('aria-expanded',String(expanded));
+  const screen=term.element?.querySelector('.xterm-screen');if(!screen)return;
+  const b=term.buffer.active,lines=term._core._bufferService.buffer.lines,h=screen.getBoundingClientRect().height/term.rows;
+  const fragment=document.createDocumentFragment(),canvas=document.createElement('canvas'),dpr=window.devicePixelRatio||1;
+  canvas.className='source-canvas';canvas.width=Math.ceil(8*dpr);canvas.height=Math.ceil(h*term.rows*dpr);canvas.style.height=h*term.rows+'px';fragment.append(canvas);
+  const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);ctx.fillStyle=taskColor('stream');
+  for(let y=b.viewportY;y<Math.min(b.length,b.viewportY+term.rows);y++){
+   const line=b.getLine(y),time=outputTime(lines.get(y)?._keepsessReceiveTime);if(!time&&!line?.translateToString(true))continue;
+   const top=(y-b.viewportY)*h;ctx.fillRect(1,top,5,h);
+   if(expanded){const item=document.createElement('div');item.className='source-row';item.style.top=top+'px';item.style.height=h+'px';const clock=document.createElement('span');clock.className='source-time';clock.textContent=outputClock(time);item.append(clock);item.title=(time?new Date(time).toString():'时间未知')+'\n时间为 keepsess 接收时间';fragment.append(item);}
+  }
+  host.replaceChildren(fragment);
+ }
+}

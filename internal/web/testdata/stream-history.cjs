@@ -18,6 +18,15 @@ const assert=require('node:assert/strict');
   const times=[];
   for(const [protocol,id,other]of [['ssh','s1','s2'],['telnet','s2','s1']]){
    await select(id);await page.waitForFunction(protocol=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString(true)||'').some(s=>s.includes(protocol+'-history-3999')),protocol);
+   // Stream gutters use recorded reception times without touching the buffer.
+   await page.evaluate(()=>{terminal.scrollToBottom();if(!preferences.gutterExpanded)toggleGutter();});
+   await page.waitForFunction(()=>document.querySelector('#source-gutter.time-only .source-time'));
+   assert.equal(await page.locator('#gutter-toggle').textContent(),'接收时间');
+   assert.equal(await page.locator('#source-gutter .source-label').count(),0);
+   assert(await page.evaluate(()=>[...document.querySelectorAll('#source-gutter .source-time')].some(e=>/^\d\d:\d\d:\d\d\.\d{3}$/.test(e.textContent))));
+   const gutterBefore=await page.evaluate(()=>({cols:terminal.cols,y:terminal.buffer.active.viewportY,text:terminal.buffer.active.getLine(terminal.buffer.active.viewportY)?.translateToString()}));
+   await page.evaluate(()=>{toggleGutter();toggleGutter();});
+   assert.deepEqual(await page.evaluate(()=>({cols:terminal.cols,y:terminal.buffer.active.viewportY,text:terminal.buffer.active.getLine(terminal.buffer.active.viewportY)?.translateToString()})),gutterBefore);
    await page.locator('#mode').click();await page.waitForFunction(()=>unlocked);
    await bytes(protocol,[0xe4,0xb8]);await page.waitForFunction(()=>[...taskDecoders.values()].some(d=>d.pendingBytes===1));
    const old=await page.evaluate(()=>{window.savedTerm=terminal;terminal.scrollToLine(300);return {cursor,top:terminal.buffer.active.viewportY};});old.requestIndex=requests.length;

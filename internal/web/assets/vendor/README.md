@@ -54,3 +54,5 @@ is needed. WebGL is preferred; initialization failure or context loss disposes
 the renderer and falls back to DOM without replaying output/input. Search is
 literal, bounded to the current loaded scrollback and 1000 decorated matches.
 Keyword colors use xterm decorations in WebGL and the existing DOM fallback.
+
+Stream reception times are attached to printed buffer lines by the vendored print handler, and copied with line copies/reflow. `StreamTimes` supplies each recorded event timestamp while its write is parsed; missing timestamps stay unknown. This metadata is UI-only and never changes terminal cells. Reapply with `node scripts/patch-xterm.cjs`.

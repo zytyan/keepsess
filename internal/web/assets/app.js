@@ -13,12 +13,15 @@ function resetInputLockRequest(){inputLockPending=false;clearTimeout(inputLockTi
 const taskDecoders=new Map(),historyViews=new TranscriptCache();
 function historyViewKey(){return JSON.stringify([serverID,instance,selected]);}
 function advanceCursor(seq){cursor=Math.max(cursor,seq);if(streamView)streamView.cursor=Math.max(streamView.cursor,cursor);}
-function writeStreamChunk(view,text){view.pending=new Promise(resolve=>view.term.write(text,resolve));return view.pending;}
+function writeStreamChunk(view,text,time=''){
+ const write=()=>new Promise(resolve=>{view.term._core._inputHandler._keepsessReceiveTime=outputTime(time);view.term.write(text,()=>{view.times.paint();resolve();});});
+ view.pending=view.pending.then(write,write);return view.pending;
+}
 function stashStreamView(){
  const view=streamView;if(!view||view.key!==historyViewKey())return;
  // Decoded bytes may still be buffered by a cold replay. Queue them on the
  // retained parser before recording its cursor, even when switching mid-write.
- if(replayChunks.length){writeStreamChunk(view,replayChunks.join(''));replayChunks=[];replaySize=0;}
+ if(replayChunks.length){for(const chunk of replayChunks)writeStreamChunk(view,chunk.text,chunk.time);replayChunks=[];replaySize=0;}
  view.cursor=Math.max(view.cursor,cursor);view.decoders=new Map(taskDecoders);
  view.viewport={follow:atTail(),line:terminal.buffer.active.viewportY};
  unlocked=false;inputQueue='';clearTimeout(inputTimer);
@@ -86,8 +89,12 @@ function updateControls() {
  const task=tasks.get(handle);const stdinAvailable=meta?.mode==='stream'||!!(task?.status.interactive&&task.status.stdin_open&&task.status.state==='running'&&!task.disposed);
  if (terminal) terminal.options.disableStdin = !inputPage() || !unlocked || !writable || replaying || !stdinAvailable;
  if(!unlocked||!writable||replaying||!stdinAvailable)localEcho?.clear();
- $('source-gutter').hidden=!continuous();
- $('gutter-toggle').hidden=!continuous();syncSearchForm(false);
+ const showTimes=meta?.mode==='stream';
+ $('source-gutter').hidden=!continuous()&&!showTimes;
+ $('source-gutter').classList.toggle('time-only',showTimes);
+ $('gutter-toggle').textContent=showTimes?'接收时间':'来源与时间';
+ $('gutter-toggle').title=showTimes?'展开接收时间':'展开输出来源与时间';
+ $('gutter-toggle').hidden=!continuous()&&!showTimes;syncSearchForm(false);
  $('history-toggle').disabled=meta?.mode!=='exec';
 
  if(humanPage&&meta?.mode==='exec'&&!webCaps.includes('web_shell.v1'))status('该 Agent 不支持独立人类终端；需在会话可关闭时升级 Agent。');
@@ -162,7 +169,7 @@ function restoreStreamView(view){
  $('terminal').replaceChildren(view.nodes);taskDecoders.clear();for(const [key,entry]of view.decoders)taskDecoders.set(key,entry);
  terminalSearch=view.search;terminalQuery=new TerminalQuery(terminal,terminalSearch);terminal.keepsessQuery=terminalQuery;
  cursor=view.cursor;terminal.options.disableStdin=true;terminal.keepsessReplaying=true;
- bindTerminalScrollEvents(terminal);
+ bindTerminalScrollEvents(terminal);view.times.paint();
 }
 function createTerminal() {
  localEcho?.dispose();localEcho=null;terminalEvents.abort();
@@ -183,17 +190,26 @@ function createTerminal() {
   clearTimeout(inputTimer); inputTimer=setTimeout(flushInput,10);
  };
  attachTerminalInput(terminal,queueInput);
- if(sessions.get(selected)?.mode==='stream')streamView={kind:'stream',key:historyViewKey(),term:terminal,echo:localEcho,search:terminalSearch,cursor:0,pending:Promise.resolve()};
+ if(sessions.get(selected)?.mode==='stream')streamView={kind:'stream',key:historyViewKey(),term:terminal,echo:localEcho,search:terminalSearch,cursor:0,pending:Promise.resolve(),times:new StreamTimes(terminal)};
 
  updateControls();
 }
-function termWrite(text,gen){
- if(replaying){if(text&&gen===generation){replayChunks.push(text);replaySize+=text.length;if(replaySize>=REPLAY_WRITE_SIZE)return flushReplay(gen);}return Promise.resolve();}
- return writeTerminalNow(text,gen);
+function termWrite(text,gen,time=''){
+ if(replaying){if(text&&gen===generation){replayChunks.push({text,time});replaySize+=text.length;if(replaySize>=REPLAY_WRITE_SIZE)return flushReplay(gen);}return Promise.resolve();}
+ return writeTerminalNow(text,gen,time);
 }
-async function flushReplay(gen){const text=replayChunks.join('');replayChunks=[];replaySize=0;await writeTerminalNow(text,gen);if(gen===generation){replayProcessed+=text.length;$('loading').textContent='正在回放历史… 已回放约 '+(replayProcessed/10000).toFixed(1)+' 万字符';}}
+async function flushReplay(gen){
+ const chunks=replayChunks,size=replaySize;replayChunks=[];replaySize=0;
+ if(streamView){
+  // Queue the whole bounded batch before yielding so a switch retains every
+  // decoded byte covered by its cursor, along with its original event time.
+  const view=streamView;for(const chunk of chunks)writeStreamChunk(view,chunk.text,chunk.time);
+  await view.pending;
+ }else await writeTerminalNow(chunks.map(c=>c.text).join(''),gen);
+ if(gen===generation){replayProcessed+=size;$('loading').textContent='正在回放历史… 已回放约 '+(replayProcessed/10000).toFixed(1)+' 万字符';}
+}
 function finishReplay(){replaying=false;terminal.keepsessReplaying=false;for(const h of terminalHighlights)if(h.term===terminal)h.invalidate();if(replayNotes){note(replayNotes);replayNotes='';}}
-function writeTerminalNow(text,gen){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);if(streamView?.term===owned)writeStreamChunk(streamView,text).then(()=>finish(true));else owned.write(text,()=>finish(true));});}
+function writeTerminalNow(text,gen,time=''){return new Promise(resolve=>{if(!text||gen!==generation||!terminal)return resolve();const owned=terminal,follow=atTail(owned),version=scrollVersion;let completed=false;const finish=(rendered=false)=>{if(completed)return;completed=true;renderWaiters.delete(cancel);if(rendered&&gen===generation&&owned===terminal&&follow&&version===scrollVersion)owned.scrollToBottom();resolve();};const cancel=()=>finish();renderWaiters.add(cancel);if(streamView?.term===owned)writeStreamChunk(streamView,text,time).then(()=>finish(true));else owned.write(text,()=>finish(true));});}
 function trackDecoderTime(entry,raw,time){
  let pending=entry.pendingBytes||0;
  const encoding=entry.encoding||'utf-8';
@@ -228,7 +244,7 @@ async function apply(e, gen, live=false) {
     entry={decoder:d,epoch:e.epoch,encoding:e.encoding};taskDecoders.set(key,entry);
    }
    const firstTime=entry.pendingTime||e.time;trackDecoderTime(entry,raw,e.time);const decoded=entry.decoder.decode(raw,{stream:true});
-   if(transcript)transcript.append(decoded,{...e,first_time:firstTime});else {if(streamView)advanceCursor(e.seq);await termWrite(prefix+decoded,gen);}
+   if(transcript)transcript.append(decoded,{...e,first_time:firstTime});else {if(streamView)advanceCursor(e.seq);await termWrite(prefix+decoded,gen,firstTime);}
   } else if (e.kind === 'command') { if(transcript)await transcript.append(`$ ${e.command}\r\n`,e,'command');else await termWrite(`\r\n$ ${e.command}\r\n`,gen); }
   else if (e.kind === 'input' && e.data) { const raw=outputBytes(e.data); let text;try{text=new TextDecoder(e.encoding||'utf-8').decode(raw)}catch(_){text='[二进制输入]'};note(`${e.time} ${e.handle||e.session} 输入片段 ${JSON.stringify(text)} · ${JSON.stringify(e.receipt||{})}`); }
   if (e.disposed || e.kind==='task'&&(e.status.state==='finished'||e.status.state==='unknown')) {

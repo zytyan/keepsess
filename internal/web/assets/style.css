@@ -101,3 +101,8 @@ footer,footer button,.bottom,#follow-tail,#receipt-details,.terminal-bar{font-si
 [data-theme="light"] .command-jump-flash span{background:rgba(146,91,220,.28);box-shadow:inset 0 0 0 1px rgba(125,75,195,.30)}
 @keyframes command-jump-fade{0%,15%{opacity:1}100%{opacity:0}}
 @media(prefers-reduced-motion:reduce){.command-jump-flash{animation:none}}
+
+/* Stream details contain reception time only, including the separate input page. */
+.human-page #source-gutter.time-only:not([hidden]){display:block}
+#source-gutter.time-only.expanded{width:128px;min-width:128px}
+#source-gutter.time-only.expanded:not([hidden])+#terminal .xterm{margin-left:120px}

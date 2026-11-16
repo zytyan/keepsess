@@ -10,7 +10,7 @@ function renderSourceOptions(){
 let workspaceSnapshot=null;
 function syncWorkspace(){
  const previous=workspaceSnapshot;workspaceSnapshot=structuredClone(preferences);
- if(previous&&Object.keys(preferences).every(k=>k==='gutterExpanded'||JSON.stringify(previous[k])===JSON.stringify(preferences[k]))){transcript?.paintNow();return;}
+ if(previous&&Object.keys(preferences).every(k=>k==='gutterExpanded'||JSON.stringify(previous[k])===JSON.stringify(preferences[k]))){transcript?.paintNow();streamView?.times.paintNow();return;}
  document.body.classList.toggle('sidebar-collapsed',!preferences.sidebar);
  $('history-drawer').hidden=humanPage||!preferences.history;
  $('sidebar-toggle').setAttribute('aria-expanded',String(preferences.sidebar));
@@ -26,7 +26,7 @@ function syncWorkspace(){
  if(preferences.appearance&&JSON.stringify(appearance)!==JSON.stringify(preferences.appearance)){applyAppearance(preferences.appearance);if($('appearance-dialog').open){appearanceOriginal=cloneAppearance(appearance);renderAppearanceForm(appearance);}}
  renderSourceOptions();for(const el of $('filter-streams').querySelectorAll('input'))el.checked=preferences.filter.streams.includes(el.value);
  $('filter-exclude').value=preferences.filter.exclude;$('filter-human').checked=preferences.filter.human;
- syncSearchForm();if(previous?.uiFontSize!==preferences.uiFontSize)terminalQuery?.renderResults();transcript?.prune();if(!previous||['search','filter','scrollback'].some(k=>JSON.stringify(previous[k])!==JSON.stringify(preferences[k])))terminalQuery?.changed();transcript?.paint();
+ syncSearchForm();if(previous?.uiFontSize!==preferences.uiFontSize)terminalQuery?.renderResults();transcript?.prune();if(!previous||['search','filter','scrollback'].some(k=>JSON.stringify(previous[k])!==JSON.stringify(preferences[k])))terminalQuery?.changed();transcript?.paint();streamView?.times.paint();
 }
 function persist(patch){try{savePreferences(patch);return true;}catch(e){status(e.message);$('highlight-status').textContent=e.message;return false;}}
 window.addEventListener('preferenceschange',syncWorkspace);
