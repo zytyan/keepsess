@@ -19,6 +19,7 @@ function syncWorkspace(){
  $('ui-font-size').value=preferences.uiFontSize;$('ui-font-size-value').value=preferences.uiFontSize+'px';
  $('scrollback').value=preferences.scrollback;scrollback=preferences.scrollback;
  $('font-size').value=preferences.fontSize;$('font-size-value').value=preferences.fontSize+'px';
+ $('backspace-mode').value=preferences.backspaceMode;
  $('echo-preference').checked=$('echo').checked=preferences.echo;if(!preferences.echo)localEcho?.clear();
  for(const h of terminalHighlights){if(h.term.options.scrollback!==preferences.scrollback)h.term.options.scrollback=preferences.scrollback;if(h.term.options.fontSize!==preferences.fontSize){h.term.options.fontSize=preferences.fontSize;}}
  if(previous&&previous.scrollback!==preferences.scrollback)transcript?.reanchor();
@@ -42,6 +43,7 @@ $('font-size').onchange=()=>{clearTimeout(fontSizeTimer);persist({fontSize:Numbe
 let uiFontSizeTimer=null;
 $('ui-font-size').oninput=()=>{const value=Number($('ui-font-size').value);$('ui-font-size-value').value=value+'px';clearTimeout(uiFontSizeTimer);uiFontSizeTimer=setTimeout(()=>persist({uiFontSize:value}),120);};
 $('ui-font-size').onchange=()=>{clearTimeout(uiFontSizeTimer);persist({uiFontSize:Number($('ui-font-size').value)});};
+$('backspace-mode').onchange=()=>persist({backspaceMode:$('backspace-mode').value});
 $('echo-preference').onchange=()=>persist({echo:$('echo-preference').checked});
 $('follow-tail').onclick=()=>{if(transcript)transcript.latest();else terminal?.scrollToBottom();};
 for(const tab of document.querySelectorAll('[data-settings]'))tab.onclick=()=>{for(const t of document.querySelectorAll('[data-settings]')){const active=t===tab;t.classList.toggle('active',active);t.setAttribute('aria-current',String(active));}for(const section of document.querySelectorAll('[data-settings-page]'))section.hidden=section.dataset.settingsPage!==tab.dataset.settings;};

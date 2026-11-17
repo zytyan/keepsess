@@ -76,17 +76,20 @@ const verifyTypography = require('./typography.cjs');
   await require('./stream-input.cjs')(page);
   const popup=page.context().waitForEvent('page');await page.locator('#open-terminal').click();const observer=page;page=await popup;await page.waitForFunction(()=>typeof replaying!=='undefined'&&!replaying&&typeof socket!=='undefined'&&socket?.readyState===1);
   await page.locator('#mode').click();await page.waitForFunction(()=>unlocked);
-  await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('show version');await page.keyboard.press('Enter');
+  await page.locator('#terminal .xterm-helper-textarea').focus();await page.keyboard.type('show version');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>!operationPending&&!inputQueue.length);
   assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join('')),'show version\r');
   // This minimal SSH simulator has no PTY line discipline; LF explicitly
   // completes its line reader after verifying raw Enter was sent as CR.
   await page.keyboard.press('Control+j');
   await page.waitForFunction(()=>Array.from({length:terminal.buffer.active.length},(_,i)=>terminal.buffer.active.getLine(i)?.translateToString()).join('\n').includes('SwitchOS 1.0'));
+  await page.waitForFunction(()=>document.querySelector('.local-echo-preview').textContent==='');
   assert.equal(await page.locator('.local-echo-preview').textContent(),'');
   const sentText=await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join(''));assert.equal(sentText,'show version\r\n');
   await page.keyboard.insertText('中文');await page.keyboard.press('Control+j');await page.waitForFunction(()=>document.getElementById('receipts').textContent.includes('中文'));await page.waitForFunction(()=>!operationPending&&!inputQueue.length);assert.equal(await page.evaluate(()=>window.sent.filter(m=>m.type==='input').map(m=>m.data).join('')),'show version\r\n中文\n');
+  await page.evaluate(()=>savePreferences({backspaceMode:'bs'}));
   await require('./ime.cjs')(page);
+  await require('./backspace.cjs')(page);
   await page.evaluate(async()=>{
    const check=(ok,label)=>{if(!ok)throw Error(label);};
    localEcho.clear();terminal.scrollToBottom();

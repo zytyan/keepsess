@@ -45,7 +45,12 @@ function attachTerminalInput(term,send){
   if(event.target===textarea&&event.isTrusted&&!composing&&!event.isComposing&&event.keyCode!==229)committed=null;
  },options);
  const key=term.onKey(({key,domEvent})=>{
-  if(domEvent.isTrusted&&!composing&&!domEvent.isComposing&&domEvent.keyCode!==229){keyText=key;send(key);}
+  if(domEvent.isTrusted&&!composing&&!domEvent.isComposing&&domEvent.keyCode!==229){
+   keyText=key;
+   // Map only a physical, unmodified Backspace. Paste and IME stay literal.
+   const plainBackspace=domEvent.key==='Backspace'&&!domEvent.ctrlKey&&!domEvent.altKey&&!domEvent.metaKey&&!domEvent.shiftKey;
+   send(plainBackspace&&preferences.backspaceMode==='bs'?'\x08':plainBackspace&&preferences.backspaceMode==='del'?'\x7f':key);
+  }
  });
  term.element.addEventListener('keyup',event=>{if(event.target===textarea)keyText='';},options);
  term.element.addEventListener('paste',event=>{
